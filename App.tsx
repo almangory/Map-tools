@@ -158,6 +158,7 @@ const App: React.FC = () => {
   const t = translations[lang];
   
   const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter'>('converter');
+  const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -992,6 +993,7 @@ const App: React.FC = () => {
              ))}
           </div>
           <div className="flex flex-col gap-4 mt-auto">
+             <button onClick={() => setShowManual(true)} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
              <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{lang.toUpperCase()}</span></button>
              <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
           </div>
@@ -1854,6 +1856,194 @@ const App: React.FC = () => {
             }} 
          />
          {loading && (<div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center"><div className="text-center p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl"><Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" /><p className="text-white font-black text-lg">{statusMessage}</p></div></div>)}
+         
+         {showManual && (
+             <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12 overflow-y-auto print:absolute print:inset-0 print:z-[2000] print:bg-white print:p-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                 {/* Print-friendly container */}
+                 <div className="bg-gradient-to-br from-[#0c2b3a] to-[#041620] border border-accent/40 rounded-[3rem] w-full max-w-4xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden print:w-full print:max-w-none print:h-full print:max-h-none print:bg-white print:border-none print:shadow-none print:text-black">
+                     
+                     {/* Modal Header */}
+                     <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 print:hidden bg-black/20">
+                         <div className="flex items-center gap-3">
+                             <FileText className="w-6 h-6 text-accent" />
+                             <h2 className="text-lg font-black text-white">{lang === 'ar' ? 'دليل المستخدم الشامل للبرنامج' : 'Universal Map Converter User Guide'}</h2>
+                         </div>
+                         <div className="flex items-center gap-2">
+                             <button 
+                                 onClick={() => window.print()}
+                                 className="px-4 py-2.5 bg-accent hover:brightness-110 active:scale-95 text-primary rounded-xl font-black text-[11px] transition-all flex items-center gap-1.5 shadow-lg"
+                             >
+                                 <Download className="w-4 h-4" />
+                                 <span>{lang === 'ar' ? 'طباعة / حفظ كـ PDF' : 'Print / Save as PDF'}</span>
+                             </button>
+                             <button 
+                                 onClick={() => setShowManual(false)}
+                                 className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
+                             >
+                                 <X className="w-5 h-5" />
+                             </button>
+                         </div>
+                     </div>
+
+                     {/* Modal Body / Content */}
+                     <div className="flex-1 overflow-y-auto p-10 space-y-8 custom-scrollbar print:p-0 print:overflow-visible">
+                         <div className="text-center pb-6 border-b border-white/10">
+                             <h1 className="text-2xl font-black text-accent mb-2 print:text-black print:text-xl">{lang === 'ar' ? 'دليل تشغيل المحول الشامل للخرائط والمساحة' : 'Universal Map & GIS Converter User Manual'}</h1>
+                             <p className="text-[11px] text-white/50 font-bold uppercase tracking-widest print:text-black/50">
+                                 {lang === 'ar' ? 'دليل خطوة بخطوة للتحويل والتقسيم وتخطيط الشوارع وتحليل أطوال الشبكات' : 'Step-by-Step Guide for Converting, Splitting, Planning, and Network Length Analysis'}
+                             </p>
+                         </div>
+
+                         {/* Sections list */}
+                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:grid-cols-1 print:gap-4">
+                             {/* Section 1: المحول الشامل */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><RefreshCw className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '1. المحول الشامل (Converter)' : '1. Coordinate Converter'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'يهدف هذا القسم لتحويل الإحداثيات والبيانات لملفات Excel, CSV, DXF إلى KML/KMZ مباشرة.' : 'Convert points/lines from Excel, CSV, DXF to standard map presentation formats (KML/KMZ).'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>ارفع الملف بالنقر أو السحب لمنطقة الرفع.</li>
+                                             <li>اختر نظام الإحداثيات المصدر (مثل UTM Zone 37N-40N أو عين العبد).</li>
+                                             <li>عّين أسماء الأعمدة في ملفك (الاسم، السيني X، الصادي Y).</li>
+                                             <li>حمل ملف KML بجودة عرض ممتازة على Google Earth.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Upload Excel/CSV/DXF coordinates easily.</li>
+                                             <li>Select Source CRS (UTM Zones 37N-40N, Ain El Abd, etc.).</li>
+                                             <li>Map attributes (Identifier Name, Easting X, Northing Y).</li>
+                                             <li>Download perfect full-fidelity KML/KMZ file.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 2: مخطط الشوارع */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><MapPinned className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '2. مخطط الشوارع (Street Planner)' : '2. Street Planner'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'استخراج تلقائي دقيق لكافة خطوط ومسارات الشوارع الحقيقية من الخرائط بضغطة زر.' : 'Instantly extract real geographic street layouts and names from a selected region on the map.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>انقر على زر "رسم الحدود" وارسم نطاق منطقتك على الخريطة.</li>
+                                             <li>رتب وحدد تصنيفات الشوارع المطلوبة (رئيسية، ثانوية، سكنية).</li>
+                                             <li>فعّل خيار استدلال الأسماء للحصول على أسماء الشوارع تلقائياً.</li>
+                                             <li>تصفح مسارات الشبكة وحملها كملف KML/KMZ.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Draw boundary polygon or load one dynamically.</li>
+                                             <li>Choose requested street hierarchies to filter.</li>
+                                             <li>Enable name-inferring to fetch true street names.</li>
+                                             <li>Download structured street mains as KML layers.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 3: محلل الأطوال */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><BarChart3 className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '3. محلل الأطوال (Length Analyzer)' : '3. Pipe Length Analyzer'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'لوحة تحليلات ذكية لخطوط المياه والصرف الصحي، مجهزة بإحصائيات وأدوات تصدير.' : 'Fully automated intelligence panel for analysing water (W_MAINLINE) and sewer (WW_MAINLINE) networks.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>مخصص لقراءة أشكال الكابلات والأنابيب في ملفات KMZ/KML.</li>
+                                             <li>يعرض الأطوال الإجمالية، التقسيم بالمواد (Ductile, HDPE) وبالأقطار.</li>
+                                             <li>تصفح مخططات وعدد القطاعات الإنشائية للخطوط.</li>
+                                             <li>أزرار تصدير مخصصة لكل طبقة وتصدير تقرير PPTX لعقد الاجتماعات.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Analyze files featuring water or wastewater pipeline networks.</li>
+                                             <li>Extract breakdown metrics based on materials & pipe diameters.</li>
+                                             <li>Obtain exact section counts and average lengths per pipeline segment.</li>
+                                             <li>Generate and export tailored PPTX executive slide reports natively.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 4: مقسم KML ومحول المضلعات */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Split className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '4. الأدوات المساعدة وحل المشكلات' : '4. Geospatial Tools & Resiliency'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'المقسم مخصص لتجزئة الملفات الضخمة، والمحول لمضلعات لتربيط خطوط المشاريع.' : 'Advanced splitter for processing large datasets and polygon converter for project tracing.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>تقسيم ملفات KML إما رقمياً أو برسم مضلع جغرافي لقص المنطقة المطلوبة.</li>
+                                             <li>محول المضلعات يجمع الخطوط المبعثرة لمضلع واحد أو ينشئ Boundary فوراً.</li>
+                                             <li>نظام معالجة قوي لتنظيف أخطاء XML في الكيلومترات (KMZ/KML) المتضررة.</li>
+                                             <li>تنبيهات فورية وإرشادات ذكية لتصحيح المدخلات.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Split heavy geographical datasets numerically or via drawing polygon constraints.</li>
+                                             <li>Convert dynamic trace paths to closed polygons or create bounding hulls.</li>
+                                             <li>Includes intelligent XML parsing recovery to fix error-prone KML codes.</li>
+                                             <li>Quickly resolve issues and check network geometries interactively.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+                         </div>
+
+                         {/* Instruction Note with Print Help */}
+                         <div className="p-6 bg-[#0e3f53]/50 rounded-2xl border border-accent/25 space-y-2 print:bg-slate-50 print:border-slate-400 print:border print:text-slate-900 leading-relaxed">
+                             <h4 className="font-black text-xs text-accent print:text-black">{lang === 'ar' ? '💡 لحفظ هذا الدليل بنجاح كملف PDF عالي الجودة وبطريقة رسمية:' : '💡 To save this manual as a high-fidelity vector PDF file:'}</h4>
+                             <p className="text-[10px] leading-relaxed text-white/80 print:text-slate-800">
+                                 {lang === 'ar' ? (
+                                     <>
+                                         1. أولاً، تأكد من فتح هذا التطبيق في نافذة مستقلة وجديدة (عن طريق النقر على زر السهم أو الفتح في متصفح جديد).<br />
+                                         2. انقر على زر <b>تحميل بصيغة PDF</b> في الأعلى.<br />
+                                         3. في نافذة الطباعة المنبثقة، اختر الوجهة كـ <b>"حفظ بتنسيق PDF" (Save as PDF)</b>.<br />
+                                         4. تأكد من تفعيل "خلفية الرسوم" (Background graphics) في خيارات الطباعة الإضافية ليظهر التصميم الملائم والدقيق.
+                                     </>
+                                 ) : (
+                                     <>
+                                         1. Maximize the application page or open in a direct tab (using the pop-out browser option).<br />
+                                         2. Click the <b>Print / Save as PDF</b> button at the top corner.<br />
+                                         3. In the printing dialog window, set the destination layout to <b>Save as PDF</b>.<br />
+                                         4. Ensure you enable <b>Background graphics</b> in the print settings for maximum layout fidelity.
+                                     </>
+                                 )}
+                             </p>
+                         </div>
+                     </div>
+
+                     {/* Modal Footer */}
+                     <div className="p-6 border-t border-white/5 bg-black/30 flex justify-end gap-3 shrink-0 print:hidden bg-black/40">
+                         <button 
+                             onClick={() => setShowManual(false)}
+                             className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-black transition-all"
+                         >
+                             {lang === 'ar' ? 'إغلاق الدليل' : 'Close Manual'}
+                         </button>
+                     </div>
+                 </div>
+             </div>
+         )}
       </main>
     </div>
   );
