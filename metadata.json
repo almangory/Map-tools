@@ -1,0 +1,6 @@
+{
+  "name": "2027 المحول الشامل للخرائط النسخة المطورة",
+  "description": "A professional GIS tool to convert Engineering data (Excel, CSV, DXF) to Google Earth KML. Features accurate coordinate transformation (EPSG) and AI-assisted column mapping.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
