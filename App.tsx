@@ -1778,18 +1778,46 @@ const App: React.FC = () => {
                           </label>
 
                           {plannerSplitLines && (
-                              <div className="px-4 pb-2 animate-in slide-in-from-top">
-                                  <div className="flex items-center justify-between mb-2">
-                                      <span className="text-[9px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى (م):' : 'Max Length (m):'}</span>
-                                      <span className="text-xs font-black text-accent">{plannerMaxLen}m</span>
+                              <div className="px-4 pb-2 space-y-3 animate-in slide-in-from-top">
+                                  <div className="flex items-center justify-between mb-1">
+                                      <span className="text-[9px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى (10 - 1000 متر):' : 'Max Length (10 - 1000 m):'}</span>
+                                      <div className="flex items-center gap-1 bg-[#0e3f53] px-2.5 py-0.5 rounded-lg border border-white/10 shadow-inner">
+                                        <input
+                                          type="number"
+                                          min="10"
+                                          max="10000"
+                                          step="10"
+                                          value={plannerMaxLen}
+                                          onChange={(e) => setPlannerMaxLen(Math.max(10, parseInt(e.target.value) || 10))}
+                                          className="w-14 bg-transparent text-xs font-black text-accent outline-none text-center select-text"
+                                        />
+                                        <span className="text-[10px] font-bold text-accent">{lang === 'ar' ? 'م' : 'm'}</span>
+                                      </div>
                                   </div>
                                   <input 
                                       type="range" 
-                                      min="50" max="2000" step="50" 
-                                      value={plannerMaxLen} 
+                                      min="10" max="1000" step="10" 
+                                      value={Math.min(plannerMaxLen, 1000)} 
                                       onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))} 
-                                      className="w-full accent-accent h-1 bg-white/10 rounded-full" 
+                                      className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer" 
                                   />
+                                  <div className="flex flex-wrap gap-1 pt-0.5">
+                                    {[10, 20, 50, 100, 200, 500, 1000].map((val) => (
+                                      <button
+                                        key={val}
+                                        type="button"
+                                        onClick={() => setPlannerMaxLen(val)}
+                                        className={cn(
+                                          "px-2 py-0.5 rounded-lg text-[9px] font-bold transition-all border",
+                                          plannerMaxLen === val 
+                                            ? "bg-accent text-primary border-accent shadow-md font-black scale-105" 
+                                            : "bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white"
+                                        )}
+                                      >
+                                        {val} {lang === 'ar' ? 'م' : 'm'}
+                                      </button>
+                                    ))}
+                                  </div>
                               </div>
                           )}
                       </div>
@@ -2485,12 +2513,48 @@ const App: React.FC = () => {
                           </button>
                         </label>
                         {splitLines && (
-                          <div className="px-4 pb-2 animate-in slide-in-from-top">
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى للطول (م):' : 'Max Length (m):'}</span>
-                              <span className="text-xs font-black text-accent">{maxLen}m</span>
+                          <div className="px-4 pb-2 space-y-3 animate-in slide-in-from-top">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى للطول (10 - 1000 متر):' : 'Max Length (10 - 1000 m):'}</span>
+                              <div className="flex items-center gap-1.5 bg-[#0e3f53] px-3 py-1 rounded-xl border border-white/10 shadow-inner">
+                                <input
+                                  type="number"
+                                  min="10"
+                                  max="10000"
+                                  step="10"
+                                  value={maxLen}
+                                  onChange={(e) => setMaxLen(Math.max(10, parseInt(e.target.value) || 10))}
+                                  className="w-16 bg-transparent text-xs font-black text-accent outline-none text-center select-text"
+                                />
+                                <span className="text-[10px] font-bold text-accent">{lang === 'ar' ? 'متر' : 'm'}</span>
+                              </div>
                             </div>
-                            <input type="range" min="100" max="5000" step="100" value={maxLen} onChange={(e) => setMaxLen(parseInt(e.target.value))} className="w-full accent-accent h-1 bg-white/10 rounded-full" />
+                            <input 
+                              type="range" 
+                              min="10" 
+                              max="1000" 
+                              step="10" 
+                              value={Math.min(maxLen, 1000)} 
+                              onChange={(e) => setMaxLen(parseInt(e.target.value))} 
+                              className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer" 
+                            />
+                            <div className="flex flex-wrap gap-1.5 pt-1">
+                              {[10, 20, 50, 100, 200, 500, 1000].map((val) => (
+                                <button
+                                  key={val}
+                                  type="button"
+                                  onClick={() => setMaxLen(val)}
+                                  className={cn(
+                                    "px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all border",
+                                    maxLen === val 
+                                      ? "bg-accent text-primary border-accent shadow-md font-black scale-105" 
+                                      : "bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white"
+                                  )}
+                                >
+                                  {val} {lang === 'ar' ? 'متر' : 'm'}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
