@@ -27,7 +27,7 @@ import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from 
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
-import { getCanonicalColorMap } from './services/colorUtils';
+import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
 import { FileComparator } from './components/FileComparator';
@@ -676,10 +676,15 @@ const App: React.FC = () => {
   }, [globalPoints, plannedStreets, activeTab, mergeThreshold]);
 
 
-  const { materialDistribution, diameterDistribution } = useMemo(() => {
+  const { executionStatusDistribution, diameterDistribution } = useMemo(() => {
     const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
     const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString' && !isBlackLine(pt));
-    const matGroups: Record<string, number> = {};
+    const statusTotals: Record<string, number> = {
+      'executed_water': 0,
+      'executed_sewer': 0,
+      'in_progress': 0,
+      'remaining': 0,
+    };
     const diaGroups: Record<string, number> = {};
 
     pointsToAnalyze.forEach(pt => {
@@ -688,37 +693,38 @@ const App: React.FC = () => {
             len = calculatePathLength(pt.path);
         }
 
-        let material = 'Unknown';
         let diameter = 'Unknown';
 
         if (pt.attributes) {
-            // Check for material keys
-            const matKey = Object.keys(pt.attributes).find(k => ['MATERIAL', 'المادة', 'material'].includes(k.toLowerCase()));
-            if (matKey && pt.attributes[matKey]) material = String(pt.attributes[matKey]);
-
             // Check for diameter keys
             const diaKey = Object.keys(pt.attributes).find(k => ['INNERDIAMETER', 'DIAMETER', 'القطر', 'diameter'].includes(k.toLowerCase()));
             if (diaKey && pt.attributes[diaKey]) diameter = String(pt.attributes[diaKey]);
         }
 
         if (len > 0) {
-            matGroups[material] = (matGroups[material] || 0) + len;
+            const statusCat = matchStatusByColor(pt.color || '#dcb13c');
+            statusTotals[statusCat.key] = (statusTotals[statusCat.key] || 0) + len;
             diaGroups[diameter] = (diaGroups[diameter] || 0) + len;
         }
     });
 
-    const matData = Object.entries(matGroups)
-      .filter(([k, v]) => v > 0)
-      .map(([name, value]) => ({ name, value: Number((value / 1000).toFixed(2)) })) // Convert to km
-      .sort((a, b) => b.value - a.value);
+    const statusData = STATUS_CATEGORIES.map(cat => {
+      const meters = statusTotals[cat.key] || 0;
+      return {
+        name: lang === 'ar' ? cat.nameAr : cat.nameEn,
+        value: Number((meters / 1000).toFixed(2)),
+        color: cat.color,
+        key: cat.key,
+      };
+    }).filter(item => item.value > 0);
 
     const diaData = Object.entries(diaGroups)
       .filter(([k, v]) => v > 0)
       .map(([name, value]) => ({ name, value: Number((value / 1000).toFixed(2)) })) // Convert to km
       .sort((a, b) => b.value - a.value);
 
-    return { materialDistribution: matData, diameterDistribution: diaData };
-  }, [globalPoints, plannedStreets, activeTab, activeFile]);
+    return { executionStatusDistribution: statusData, diameterDistribution: diaData };
+  }, [globalPoints, plannedStreets, activeTab, activeFile, lang]);
 
   const analysisData = useMemo(() => {
     const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
@@ -745,13 +751,18 @@ const App: React.FC = () => {
       totalAllLength += len;
     });
 
-    return Object.entries(groups).map(([color, stats]) => ({
-      color,
-      totalLength: stats.totalLength,
-      count: stats.count,
-      percentage: totalAllLength > 0 ? (stats.totalLength / totalAllLength) * 100 : 0
-    })).sort((a, b) => b.totalLength - a.totalLength);
-  }, [globalPoints, plannedStreets, activeTab, canonicalColorMap, activeFile]);
+    return Object.entries(groups).map(([color, stats]) => {
+      const statusCat = matchStatusByColor(color);
+      return {
+        color,
+        statusName: lang === 'ar' ? statusCat.nameAr : statusCat.nameEn,
+        statusColor: statusCat.color,
+        totalLength: stats.totalLength,
+        count: stats.count,
+        percentage: totalAllLength > 0 ? (stats.totalLength / totalAllLength) * 100 : 0
+      };
+    }).sort((a, b) => b.totalLength - a.totalLength);
+  }, [globalPoints, plannedStreets, activeTab, canonicalColorMap, activeFile, lang]);
 
   const placemarksSummary = useMemo(() => {
     const pointsToAnalyze = (!activeFile ? plannedStreets : globalPoints).filter(pt => !isBlackLine(pt));
@@ -2308,19 +2319,19 @@ const App: React.FC = () => {
                                 <div className="flex items-center gap-2 border-b border-white/5 pb-2">
                                     <BarChart3 className="w-4 h-4 text-accent" />
                                     <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
-                                        {lang === 'ar' ? 'توزيع الأطوال (كم) حسب المادة والقطر' : 'Length Distribution (km) by Material & Diameter'}
+                                        {lang === 'ar' ? 'توزيع الأطوال (كم) حسب حالة التنفيذ والقطر' : 'Length Distribution (km) by Execution Status & Diameter'}
                                     </h3>
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div className="space-y-3">
-                                        <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب المادة' : 'By Material'}</h4>
+                                        <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب حالة التنفيذ' : 'By Execution Status'}</h4>
                                         <div className="h-[200px] w-full">
-                                            {materialDistribution.length > 0 ? (
+                                            {executionStatusDistribution.length > 0 ? (
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <RechartsPieChart>
-                                                        <Pie data={materialDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({name, percent}) => `${name} (${(percent * 100).toFixed(0)}%)`}>
-                                                            {materialDistribution.map((entry, index) => (
-                                                                <Cell key={`cell-${index}`} fill={PALETTE[index % PALETTE.length]} />
+                                                        <Pie data={executionStatusDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({name, percent}) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                                                            {executionStatusDistribution.map((entry, index) => (
+                                                                <Cell key={`cell-${index}`} fill={entry.color} />
                                                             ))}
                                                         </Pie>
                                                         <RechartsTooltip contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} />
@@ -2329,7 +2340,7 @@ const App: React.FC = () => {
                                             ) : (
                                                 <div className="w-full h-full flex flex-col items-center justify-center text-white/20 text-xs font-black">
                                                     <PieChart className="w-8 h-8 mb-2 opacity-20" />
-                                                    {lang === 'ar' ? 'لا يوجد بيانات مواد' : 'No material data'}
+                                                    {lang === 'ar' ? 'لا يوجد بيانات تنفيذ' : 'No execution status data'}
                                                 </div>
                                             )}
                                         </div>
@@ -2706,6 +2717,18 @@ const App: React.FC = () => {
                                             <div className="flex items-center gap-3">
                                               <div className="w-3 h-3 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.2)]" style={{ backgroundColor: item.color }} />
                                               <span className="text-[11px] font-black text-white/80 tracking-widest">{item.color}</span>
+                                              {item.statusName && (
+                                                <span
+                                                  className="text-[9px] font-black px-2.5 py-0.5 rounded-md border"
+                                                  style={{
+                                                    backgroundColor: `${item.statusColor}20`,
+                                                    borderColor: `${item.statusColor}60`,
+                                                    color: item.statusColor === '#FFEA00' ? '#FFEA00' : item.statusColor
+                                                  }}
+                                                >
+                                                  {item.statusName}
+                                                </span>
+                                              )}
                                               <span className="text-[9px] font-black text-accent bg-accent/10 px-2 py-0.5 rounded-md">#{item.count} {lang === 'ar' ? 'عناصر' : 'items'}</span>
                                             </div>
                                             <div className="flex items-baseline gap-1">

@@ -55,3 +55,44 @@ export const getCanonicalColorMap = (colors: string[], threshold: number = 45): 
 
   return map;
 };
+
+export interface StatusCategory {
+  key: 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining';
+  nameAr: string;
+  nameEn: string;
+  color: string;
+}
+
+export const STATUS_CATEGORIES: StatusCategory[] = [
+  { key: 'executed_water', nameAr: 'منفذ - مياه', nameEn: 'Executed - Water', color: '#01579B' },
+  { key: 'executed_sewer', nameAr: 'منفذ - صرف', nameEn: 'Executed - Sewer', color: '#097138' },
+  { key: 'in_progress', nameAr: 'جاري العمل', nameEn: 'Work in Progress', color: '#FFEA00' },
+  { key: 'remaining', nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: '#A52714' },
+];
+
+export const matchStatusByColor = (colorHex: string): StatusCategory => {
+  const cleanHex = (colorHex || '#DCB13C').trim().toUpperCase();
+  const rgb = hexToRgb(cleanHex);
+  if (!rgb) return STATUS_CATEGORIES[3];
+
+  let minDistance = Infinity;
+  let bestMatch = STATUS_CATEGORIES[3];
+
+  for (const cat of STATUS_CATEGORIES) {
+    const catRgb = hexToRgb(cat.color);
+    if (catRgb) {
+      const dist = Math.sqrt(
+        Math.pow(rgb.r - catRgb.r, 2) +
+        Math.pow(rgb.g - catRgb.g, 2) +
+        Math.pow(rgb.b - catRgb.b, 2)
+      );
+      if (dist < minDistance) {
+        minDistance = dist;
+        bestMatch = cat;
+      }
+    }
+  }
+
+  return bestMatch;
+};
+
