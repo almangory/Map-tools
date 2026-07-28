@@ -12,7 +12,7 @@ import {
   ChevronRight, ListOrdered, Locate, Zap, Navigation, FolderOpen, Package,
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter,
-  Database, Droplet, AlertTriangle
+  Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -32,6 +32,7 @@ import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
 import { FileComparator } from './components/FileComparator';
 import { MapClassifier } from './components/MapClassifier';
+import { InstallPwaModal } from './components/InstallPwaModal';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
 
@@ -221,9 +222,31 @@ const GeocodingModeSelector: React.FC<{
   </div>
 );
 
+const SETTINGS_KEY = 'geo_app_user_preferences_v1';
+
+const loadSavedPreference = <T,>(key: string, defaultValue: T): T => {
+  try {
+    const item = localStorage.getItem(`${SETTINGS_KEY}_${key}`);
+    if (item !== null) {
+      return JSON.parse(item) as T;
+    }
+  } catch (e) {
+    console.error('Failed to load preference:', key, e);
+  }
+  return defaultValue;
+};
+
+const savePreference = <T,>(key: string, value: T) => {
+  try {
+    localStorage.setItem(`${SETTINGS_KEY}_${key}`, JSON.stringify(value));
+  } catch (e) {
+    console.error('Failed to save preference:', key, e);
+  }
+};
+
 const App: React.FC = () => {
-  const [lang, setLang] = useState<Language>('ar');
-  const [theme, setTheme] = useState<'default' | 'nwc'>('default');
+  const [lang, setLang] = useState<Language>(() => loadSavedPreference('lang', 'ar'));
+  const [theme, setTheme] = useState<'default' | 'nwc'>(() => loadSavedPreference('theme', 'default'));
   const t = translations[lang];
   
   const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator'>('converter');
@@ -241,20 +264,57 @@ const App: React.FC = () => {
   const [classifierRefZones, setClassifierRefZones] = useState<GeoPoint[]>([]);
   const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
   
-  const [mergeThreshold, setMergeThreshold] = useState<number>(45);
+  const [mergeThreshold, setMergeThreshold] = useState<number>(() => loadSavedPreference('mergeThreshold', 45));
   const [overlapResults, setOverlapResults] = useState<OverlapResult[] | null>(null);
-  const [geocodingMode, setGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
+  const [geocodingMode, setGeocodingMode] = useState<'accurate' | 'fast'>(() => loadSavedPreference('geocodingMode', 'accurate'));
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>('satellite');
+  const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>(() => loadSavedPreference('globalBaseMap', 'satellite'));
+
+  // PWA Mobile App Installation state
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const isStandaloneMode = window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as any).standalone === true ||
+        document.referrer.includes('android-app://');
+      setIsStandalone(isStandaloneMode);
+    };
+
+    checkStandalone();
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    };
+
+    const handleAppInstalled = () => {
+      setIsStandalone(true);
+      setShowInstallBanner(false);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
 
   const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
   const [splitCount, setSplitCount] = useState<number>(2);
-  const [exportStyle, setExportStyle] = useState<'single' | 'zip'>('single');
+  const [exportStyle, setExportStyle] = useState<'single' | 'zip'>(() => loadSavedPreference('exportStyle', 'single'));
   const [splitLines, setSplitLines] = useState(false);
   const [splitIntersections, setSplitIntersections] = useState(false);
   const [separateMulti, setSeparateMulti] = useState(false);
-  const [maxLen, setMaxLen] = useState(1000);
+  const [maxLen, setMaxLen] = useState(() => loadSavedPreference('maxLen', 1000));
 
   // Multi-Polygon Split State
   const [splitPolygons, setSplitPolygons] = useState<SplitPolygon[]>([]);
@@ -266,25 +326,67 @@ const App: React.FC = () => {
   const [plannerSeparate, setPlannerSeparate] = useState(false);
   const [plannerSplitLines, setPlannerSplitLines] = useState(false);
   const [plannerSplitIntersections, setPlannerSplitIntersections] = useState(false);
-  const [plannerMaxLen, setPlannerMaxLen] = useState(500);
+  const [plannerMaxLen, setPlannerMaxLen] = useState(() => loadSavedPreference('plannerMaxLen', 500));
   const [plannerClip, setPlannerClip] = useState(true);
   const [plannerBuffer, setPlannerBuffer] = useState(0);
   
   // Street Classification Filters
   const [streetTypeFilters, setStreetTypeFilters] = useState<string[]>(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'residential', 'service']);
 
-  const [sourceEPSG, setSourceEPSG] = useState<string>('EPSG:32638');
+  const [sourceEPSG, setSourceEPSG] = useState<string>(() => loadSavedPreference('sourceEPSG', 'EPSG:32638'));
   const [swapXY, setSwapXY] = useState<boolean>(false);
   const [mapping, setMapping] = useState<ColumnMapping>({ 
     xColumn: '', yColumn: '', idColumn: '', linkColumn: '', attr1Column: '', attr2Column: '' 
   });
   const [selectedHeaders, setSelectedHeaders] = useState<string[]>([]);
-  const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'column'>('layer');
+  const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'column'>(() => loadSavedPreference('groupingMode', 'layer'));
   const [groupByColumnSelect, setGroupByColumnSelect] = useState<string>('');
-  const [converterExportAsZip, setConverterExportAsZip] = useState<boolean>(false);
-  const [optimizeForMyMaps, setOptimizeForMyMaps] = useState<boolean>(false);
-  const [keepOriginalDescription, setKeepOriginalDescription] = useState<boolean>(false);
-  const [removeImagesOnly, setRemoveImagesOnly] = useState<boolean>(false);
+  const [converterExportAsZip, setConverterExportAsZip] = useState<boolean>(() => loadSavedPreference('converterExportAsZip', false));
+  const [optimizeForMyMaps, setOptimizeForMyMaps] = useState<boolean>(() => loadSavedPreference('optimizeForMyMaps', false));
+  const [keepOriginalDescription, setKeepOriginalDescription] = useState<boolean>(() => loadSavedPreference('keepOriginalDescription', false));
+  const [removeImagesOnly, setRemoveImagesOnly] = useState<boolean>(() => loadSavedPreference('removeImagesOnly', false));
+
+  // Auto-persist user preferences to localStorage
+  useEffect(() => { savePreference('lang', lang); }, [lang]);
+  useEffect(() => { savePreference('theme', theme); }, [theme]);
+  useEffect(() => { savePreference('geocodingMode', geocodingMode); }, [geocodingMode]);
+  useEffect(() => { savePreference('globalBaseMap', globalBaseMap); }, [globalBaseMap]);
+  useEffect(() => { savePreference('sourceEPSG', sourceEPSG); }, [sourceEPSG]);
+  useEffect(() => { savePreference('exportStyle', exportStyle); }, [exportStyle]);
+  useEffect(() => { savePreference('converterExportAsZip', converterExportAsZip); }, [converterExportAsZip]);
+  useEffect(() => { savePreference('optimizeForMyMaps', optimizeForMyMaps); }, [optimizeForMyMaps]);
+  useEffect(() => { savePreference('keepOriginalDescription', keepOriginalDescription); }, [keepOriginalDescription]);
+  useEffect(() => { savePreference('removeImagesOnly', removeImagesOnly); }, [removeImagesOnly]);
+  useEffect(() => { savePreference('maxLen', maxLen); }, [maxLen]);
+  useEffect(() => { savePreference('plannerMaxLen', plannerMaxLen); }, [plannerMaxLen]);
+  useEffect(() => { savePreference('mergeThreshold', mergeThreshold); }, [mergeThreshold]);
+  useEffect(() => { savePreference('groupingMode', groupingMode); }, [groupingMode]);
+
+  const handleResetPreferences = () => {
+    try {
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith(SETTINGS_KEY)) {
+          localStorage.removeItem(key);
+        }
+      });
+      setLang('ar');
+      setTheme('default');
+      setGeocodingMode('accurate');
+      setGlobalBaseMap('satellite');
+      setSourceEPSG('EPSG:32638');
+      setExportStyle('single');
+      setConverterExportAsZip(false);
+      setOptimizeForMyMaps(false);
+      setKeepOriginalDescription(false);
+      setRemoveImagesOnly(false);
+      setMaxLen(1000);
+      setPlannerMaxLen(500);
+      setMergeThreshold(45);
+      setGroupingMode('layer');
+    } catch (e) {
+      console.error('Failed to reset settings:', e);
+    }
+  };
 
   const boundaryInputRef = useRef<HTMLInputElement>(null);
 
@@ -1314,8 +1416,41 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen w-screen bg-[#0a2633] font-sans overflow-hidden" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-      <nav className="bg-primary border-e border-slate-800 flex flex-col items-center py-8 w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500">
+    <div className="flex flex-col h-screen w-screen bg-[#0a2633] font-sans overflow-hidden" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+      {/* Floating PWA Install Banner */}
+      {showInstallBanner && !isStandalone && (
+        <div className="bg-gradient-to-r from-accent via-amber-400 to-accent text-primary px-4 py-2 flex items-center justify-between text-xs font-black shadow-xl z-[1000] border-b border-white/20 shrink-0 animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-primary shrink-0">
+              <Smartphone className="w-4 h-4 animate-bounce" />
+            </div>
+            <span className="truncate max-w-md sm:max-w-none">
+              {lang === 'ar' 
+                ? '📱 ثبّت تطبيق GeoGIS Pro الآن على جوالك للعمل بسرعة شاشة كاملة بدون متصفح!' 
+                : '📱 Install GeoGIS Pro app on your phone for ultra-fast full-screen performance!'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setShowInstallModal(true)}
+              className="px-3.5 py-1.5 bg-primary text-accent hover:bg-black rounded-lg text-[11px] font-black transition-all shadow flex items-center gap-1 active:scale-95"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>{lang === 'ar' ? 'تثبيت الآن' : 'Install Now'}</span>
+            </button>
+            <button
+              onClick={() => setShowInstallBanner(false)}
+              className="p-1 text-primary/70 hover:text-primary transition-all rounded-md"
+              title={lang === 'ar' ? 'إغلاق الإشعار' : 'Dismiss'}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-1 h-full w-full overflow-hidden">
+        <nav className="bg-primary border-e border-slate-800 flex flex-col items-center py-8 w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500">
           <div className="flex-1 flex flex-col gap-6 w-full px-2">
              {[
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
@@ -1334,6 +1469,13 @@ const App: React.FC = () => {
              ))}
           </div>
           <div className="flex flex-col gap-4 mt-auto">
+             <button onClick={() => setShowInstallModal(true)} className="p-3 text-accent hover:brightness-125 transition-all flex flex-col items-center gap-1 group relative" title={lang === 'ar' ? 'تثبيت التطبيق على الجوال' : 'Install Mobile App'}>
+                <div className="relative">
+                  <Smartphone className="w-5 h-5 text-accent animate-pulse" />
+                  {!isStandalone && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent animate-ping" />}
+                </div>
+                <span className="text-[8px] font-black text-accent">{lang === 'ar' ? 'تثبيت' : 'APP'}</span>
+             </button>
              <button onClick={() => setShowManual(true)} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
              <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{lang.toUpperCase()}</span></button>
              <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
@@ -1345,12 +1487,25 @@ const App: React.FC = () => {
       <aside className="bg-primary border-e border-slate-800 w-[420px] flex flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden">
            <div className="p-10 pb-4 shrink-0">
                 <div className="flex items-center justify-between">
-                   <div><h1 className="text-2xl font-black text-white tracking-tight leading-tight">{t.appTitle}</h1><p className="text-[10px] text-accent font-black uppercase mt-1 tracking-widest">{theme === 'nwc' ? t.themeNWC : t.subTitle}</p></div>
-                   {theme === 'nwc' && (
-                     <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-lg animate-pulse">
-                       <span className="text-primary font-black text-[11px] tracking-tight">NWC</span>
-                     </div>
-                   )}
+                   <div>
+                     <h1 className="text-2xl font-black text-white tracking-tight leading-tight">{t.appTitle}</h1>
+                     <p className="text-[10px] text-accent font-black uppercase mt-1 tracking-widest">{theme === 'nwc' ? t.themeNWC : t.subTitle}</p>
+                   </div>
+                   <div className="flex items-center gap-2">
+                     <button 
+                       onClick={() => setShowInstallModal(true)} 
+                       className="px-2.5 py-1.5 bg-accent/20 hover:bg-accent/30 border border-accent/40 text-accent rounded-xl text-[10px] font-black transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
+                       title={lang === 'ar' ? 'تثبيت التطبيق على الجوال' : 'Install Mobile App'}
+                     >
+                       <Smartphone className="w-3.5 h-3.5" />
+                       <span>{lang === 'ar' ? 'تثبيت التطبيق' : 'Install App'}</span>
+                     </button>
+                     {theme === 'nwc' && (
+                       <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-lg animate-pulse">
+                         <span className="text-primary font-black text-[11px] tracking-tight">NWC</span>
+                       </div>
+                     )}
+                   </div>
                 </div>
            </div>
            
@@ -2624,12 +2779,255 @@ const App: React.FC = () => {
                      <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
                          <div className="flex items-center gap-3">
                              <Settings2 className="w-6 h-6 text-accent" />
-                             <h2 className="text-xl font-black text-white">{lang === 'ar' ? 'إعدادات التطبيق' : 'App Settings'}</h2>
+                             <div>
+                                <h2 className="text-xl font-black text-white">{lang === 'ar' ? 'إعدادات التطبيق والتفضيلات' : 'App Settings & Preferences'}</h2>
+                                <p className="text-[10px] text-accent/80 font-bold flex items-center gap-1.5 mt-0.5">
+                                  <Check className="w-3.5 h-3.5 text-accent" />
+                                  <span>{lang === 'ar' ? 'تُحفظ التفضيلات تلقائياً في المتصفح (localStorage)' : 'Preferences automatically saved in browser (localStorage)'}</span>
+                                </p>
+                              </div>
                          </div>
                          <button onClick={() => setShowSettingsModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-red-500/20 hover:text-red-400 transition-all"><X className="w-5 h-5" /></button>
                      </div>
                      <div className="p-8 overflow-y-auto space-y-8 flex-1">
                          <div className="space-y-4">
+                          {/* 0. PWA Mobile App Section */}
+                          <div className="space-y-3 bg-gradient-to-r from-accent/15 via-amber-500/10 to-accent/15 p-5 rounded-2xl border border-accent/30 shadow-lg">
+                             <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3 text-accent">
+                                   <div className="w-10 h-10 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
+                                      <Smartphone className="w-5 h-5 text-accent animate-bounce" />
+                                   </div>
+                                   <div>
+                                      <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'تثبيت تطبيق الجوال (Mobile App)' : 'Install Mobile Application'}</h3>
+                                      <p className="text-[10px] text-white/70 font-bold mt-0.5">{lang === 'ar' ? 'تشغيل GeoGIS Pro كتطبيق جوال كامل الشاشة بدون متصفح' : 'Run GeoGIS Pro as a native full-screen app'}</p>
+                                   </div>
+                                </div>
+                                <button
+                                   type="button"
+                                   onClick={() => {
+                                      setShowSettingsModal(false);
+                                      setShowInstallModal(true);
+                                   }}
+                                   className="px-4 py-2 bg-accent hover:brightness-110 text-primary font-black text-xs rounded-xl transition-all shadow-md flex items-center gap-1.5 active:scale-95 shrink-0"
+                                >
+                                   <Smartphone className="w-4 h-4" />
+                                   <span>{isStandalone ? (lang === 'ar' ? 'حالة التثبيت' : 'App Status') : (lang === 'ar' ? 'تثبيت الآن' : 'Install App')}</span>
+                                </button>
+                             </div>
+                          </div>
+
+                          {/* 1. Language & Theme */}
+                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
+                             <div className="flex items-center gap-2 text-accent">
+                                <Languages className="w-4 h-4" />
+                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'اللغة والمظهر (Language & Theme)' : 'Language & Interface Theme'}</h3>
+                             </div>
+                             <div className="grid grid-cols-2 gap-3 pt-1">
+                                <div className="space-y-1.5">
+                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'لغة الواجهة:' : 'Interface Language:'}</label>
+                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setLang('ar')} 
+                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", lang === 'ar' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        العربية
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setLang('en')} 
+                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", lang === 'en' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        English
+                                      </button>
+                                   </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'المظهر:' : 'Theme:'}</label>
+                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setTheme('default')} 
+                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", theme === 'default' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'الافتراضي' : 'Default'}
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setTheme('nwc')} 
+                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", theme === 'nwc' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'شركة المياه NWC' : 'NWC Theme'}
+                                      </button>
+                                   </div>
+                                </div>
+                             </div>
+                          </div>
+
+                          {/* 2. Geocoding & Coordinate System */}
+                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
+                             <div className="flex items-center gap-2 text-accent">
+                                <Target className="w-4 h-4" />
+                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'نظام الإحداثيات ودقة الجيودكودينغ' : 'CRS & Geocoding Precision'}</h3>
+                             </div>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                                <div className="space-y-1.5">
+                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'نظام الإحداثيات الافتراضي (Default CRS):' : 'Default Coordinate System (CRS):'}</label>
+                                   <select
+                                      value={sourceEPSG}
+                                      onChange={(e) => setSourceEPSG(e.target.value)}
+                                      className="w-full bg-black/40 border border-white/10 text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-accent"
+                                   >
+                                      {COMMON_EPSG.map(epsg => (
+                                         <option key={epsg.code} value={epsg.code} className="bg-[#0b2d3d] text-white">
+                                            {epsg.code} - {epsg.name}
+                                         </option>
+                                      ))}
+                                   </select>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'نمط الجيودكودينغ واستدلال الشوارع:' : 'Geocoding Accuracy Mode:'}</label>
+                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setGeocodingMode('accurate')} 
+                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", geocodingMode === 'accurate' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? '🎯 دقيق جداً' : '🎯 Accurate'}
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setGeocodingMode('fast')} 
+                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", geocodingMode === 'fast' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? '⚡ سريع جداً' : '⚡ Fast'}
+                                      </button>
+                                   </div>
+                                </div>
+                             </div>
+                          </div>
+
+                          {/* 3. Default Export Options */}
+                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
+                             <div className="flex items-center gap-2 text-accent">
+                                <Archive className="w-4 h-4" />
+                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'تفضيلات وصيغ التصدير' : 'Export & Packaging Preferences'}</h3>
+                             </div>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                                <div className="space-y-1.5">
+                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'طريقة التجميع الافتراضية:' : 'Default Grouping Mode:'}</label>
+                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setGroupingMode('layer')} 
+                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'layer' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'حسب الطبقة' : 'By Layer'}
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setGroupingMode('column')} 
+                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'column' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'حسب العمود' : 'By Column'}
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setGroupingMode('none')} 
+                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'none' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'بدون تجميع' : 'None'}
+                                      </button>
+                                   </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'صيغة التصدير الافتراضية (المقسم):' : 'Splitter Default Export Style:'}</label>
+                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setExportStyle('single')} 
+                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", exportStyle === 'single' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'ملف KML موحد' : 'Single KML'}
+                                      </button>
+                                      <button 
+                                        type="button" 
+                                        onClick={() => setExportStyle('zip')} 
+                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", exportStyle === 'zip' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                      >
+                                        {lang === 'ar' ? 'أرشيف ZIP مضغوط' : 'ZIP Archive'}
+                                      </button>
+                                   </div>
+                                </div>
+                             </div>
+
+                             <div className="space-y-2 pt-2 border-t border-white/5">
+                                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white/80 hover:text-white transition-colors">
+                                   <input 
+                                     type="checkbox" 
+                                     checked={optimizeForMyMaps} 
+                                     onChange={(e) => setOptimizeForMyMaps(e.target.checked)} 
+                                     className="rounded bg-black/40 border-white/20 text-accent focus:ring-accent"
+                                   />
+                                   <span>{lang === 'ar' ? 'تفعيل التوافق الكامل مع خرائط جوجل (Google My Maps)' : 'Optimize for Google My Maps compatibility'}</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white/80 hover:text-white transition-colors">
+                                   <input 
+                                     type="checkbox" 
+                                     checked={keepOriginalDescription} 
+                                     onChange={(e) => setKeepOriginalDescription(e.target.checked)} 
+                                     className="rounded bg-black/40 border-white/20 text-accent focus:ring-accent"
+                                   />
+                                   <span>{lang === 'ar' ? 'الاحتفاظ بنص الوصف (Description) الأصلي في ملفات KML' : 'Keep original description content in output KML'}</span>
+                                </label>
+                             </div>
+                          </div>
+
+                          {/* 4. Default Line Split Lengths */}
+                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
+                             <div className="flex items-center gap-2 text-accent">
+                                <Ruler className="w-4 h-4" />
+                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'أطوال تقسيم الخطوط الافتراضية' : 'Default Line Split Distances'}</h3>
+                             </div>
+                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                                <div className="space-y-1.5">
+                                   <div className="flex justify-between items-center text-[10px] font-bold text-white/60">
+                                      <span>{lang === 'ar' ? 'مقسم KML (الحد الأقصى للطول):' : 'KML Splitter Max Length:'}</span>
+                                      <span className="text-accent font-black">{maxLen}m</span>
+                                   </div>
+                                   <input 
+                                     type="range" 
+                                     min="10" 
+                                     max="1000" 
+                                     step="10" 
+                                     value={Math.min(maxLen, 1000)} 
+                                     onChange={(e) => setMaxLen(parseInt(e.target.value))} 
+                                     className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
+                                   />
+                                </div>
+
+                                <div className="space-y-1.5">
+                                   <div className="flex justify-between items-center text-[10px] font-bold text-white/60">
+                                      <span>{lang === 'ar' ? 'مخطط الشوارع (الحد الأقصى للطول):' : 'Street Planner Max Length:'}</span>
+                                      <span className="text-accent font-black">{plannerMaxLen}m</span>
+                                   </div>
+                                   <input 
+                                     type="range" 
+                                     min="10" 
+                                     max="1000" 
+                                     step="10" 
+                                     value={Math.min(plannerMaxLen, 1000)} 
+                                     onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))} 
+                                     className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
+                                   />
+                                </div>
+                             </div>
+                          </div>
+
                             <h3 className="text-sm font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'نوع خريطة الأساس' : 'Base Map Type'}</h3>
                             <div className="grid grid-cols-2 gap-3">
                                 {[
@@ -2651,10 +3049,29 @@ const App: React.FC = () => {
                                 ))}
                             </div>
                          </div>
-                     </div>
-                 </div>
-             </div>
-         )}
+                      </div>
+
+                      <div className="p-6 border-t border-white/5 bg-black/20 flex items-center justify-between shrink-0">
+                          <button
+                             type="button"
+                             onClick={handleResetPreferences}
+                             className="px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5"
+                          >
+                             <RotateCcw className="w-3.5 h-3.5" />
+                             <span>{lang === 'ar' ? 'إعادة ضبط التفضيلات' : 'Reset Preferences'}</span>
+                          </button>
+
+                          <button 
+                             type="button" 
+                             onClick={() => setShowSettingsModal(false)} 
+                             className="px-6 py-2.5 bg-accent hover:brightness-110 text-primary font-black text-xs rounded-xl transition-all shadow-lg"
+                          >
+                             {lang === 'ar' ? 'حفظ وإغلاق' : 'Save & Close'}
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          )}
 
          {showOverlapModal && overlapResults && (
              <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
@@ -2925,7 +3342,16 @@ const App: React.FC = () => {
                  </div>
              </div>
          )}
+         <InstallPwaModal
+            isOpen={showInstallModal}
+            onClose={() => setShowInstallModal(false)}
+            lang={lang}
+            deferredPrompt={deferredPrompt}
+            setDeferredPrompt={setDeferredPrompt}
+            isStandalone={isStandalone}
+         />
       </main>
+      </div>
     </div>
   );
 };
