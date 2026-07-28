@@ -222,6 +222,19 @@ export const calculatePathLength = (path: {x: number, y: number}[]): number => {
     return total;
 };
 
+const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutMs = 3000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return res;
+    } catch (err) {
+        clearTimeout(id);
+        return null;
+    }
+};
+
 const geocodeCache = new Map<string, { street: string; district: string }>();
 
 export const getReverseGeocode = async (lat: number, lon: number): Promise<{street: string, district: string}> => {
@@ -236,11 +249,11 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
     let street = "";
     let district = "";
 
-    // 1. Try ArcGIS as primary (very robust for Saudi Arabia streets with standard CORS support)
+    // 1. Try ArcGIS as primary (very robust for Saudi Arabia & Middle East with full CORS support)
     try {
         const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${lon},${lat}&langCode=ar`;
-        const arcgisRes = await fetch(arcgisUrl);
-        if (arcgisRes.ok) {
+        const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, 2500);
+        if (arcgisRes && arcgisRes.ok) {
             const arcgisData = await arcgisRes.json();
             if (arcgisData.address) {
                 const addr = arcgisData.address;
@@ -260,8 +273,8 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
     if (!street || street.length <= 2 || street.includes("Unnamed") || street === "غير متوفر") {
         try {
             const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=ar`;
-            const nomRes = await fetch(nomUrl);
-            if (nomRes.ok) {
+            const nomRes = await fetchWithTimeout(nomUrl, {}, 2000);
+            if (nomRes && nomRes.ok) {
                 const nomData = await nomRes.json();
                 street = nomData.address?.road || nomData.address?.pedestrian || nomData.address?.path || nomData.address?.footway || nomData.address?.residential || nomData.address?.street || nomData.address?.highway || nomData.address?.suburb || street;
                 if (!district) {
@@ -288,23 +301,17 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
         ];
-        // Correct Overpass QL syntax: "out tags 1;" instead of "out tags limit 1;"
-        const query = `[out:json][timeout:5];way(around:100,${lat},${lon})["highway"]["name"];out tags 1;`;
+        const query = `[out:json][timeout:3];way(around:100,${lat},${lon})["highway"]["name"];out tags 1;`;
         
         for (const endpoint of endpoints) {
             try {
-                // Try GET first as GET requests include Access-Control-Allow-Origin on Overpass mirrors
-                const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
-                let overpassRes = await fetch(getUrl);
-                if (!overpassRes.ok) {
-                    // Try POST as secondary
-                    overpassRes = await fetch(endpoint, {
-                        method: 'POST',
-                        body: query
-                    });
-                }
-                if (overpassRes.ok) {
-                    const overpassData = await overpassRes.json();
+                const res = await fetchWithTimeout(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `data=${encodeURIComponent(query)}`
+                }, 2500);
+                if (res && res.ok) {
+                    const overpassData = await res.json();
                     if (overpassData.elements && overpassData.elements.length > 0) {
                         street = overpassData.elements[0].tags?.['name:ar'] || overpassData.elements[0].tags?.name || "";
                     }
@@ -350,20 +357,16 @@ export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], s
 
     for (const endpoint of endpoints) {
         try {
-            // Try GET request first for better CORS compatibility across hosting providers like Vercel
-            const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
-            let response = await fetch(getUrl);
-            if (!response.ok) {
-                response = await fetch(endpoint, { 
-                    method: 'POST', 
-                    body: query
-                });
-            }
-            if (response.ok) {
+            let response = await fetchWithTimeout(endpoint, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `data=${encodeURIComponent(query)}`
+            }, 12000);
+            if (response && response.ok) {
                 data = await response.json();
                 break;
             } else {
-                lastError = new Error(`Server ${endpoint} returned ${response.status}`);
+                lastError = new Error(`Server ${endpoint} failed or returned error status`);
             }
         } catch (err) {
             lastError = err;

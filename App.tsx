@@ -674,22 +674,25 @@ const App: React.FC = () => {
         const total = globalPoints.length;
         const updated = [...globalPoints];
         let successCount = 0;
+        const batchSize = 8;
         
-        for (let i = 0; i < total; i++) {
+        for (let i = 0; i < total; i += batchSize) {
             setStatusMessage(lang === 'ar' 
-              ? `جاري عنونة البيانات: (${i + 1} من ${total})` 
-              : `Geocoding data: (${i + 1} of ${total})`
+              ? `جاري عنونة البيانات: (${Math.min(i + batchSize, total)} من ${total})` 
+              : `Geocoding data: (${Math.min(i + batchSize, total)} of ${total})`
             );
-            const pt = updated[i];
-            
-            if (!pt.street || pt.street === "شارع غير معروف") {
-                const geoData = await getReverseGeocode(pt.y, pt.x);
-                  await new Promise(resolve => setTimeout(resolve, 300));
-                updated[i] = { ...pt, street: geoData.street, district: geoData.district };
-                successCount++;
-                if (total > 5) await new Promise(r => setTimeout(r, 850));
-            }
-            if (i % 5 === 0 || i === total - 1) setGlobalPoints([...updated]);
+            const chunk = updated.slice(i, i + batchSize);
+            await Promise.all(chunk.map(async (pt, chunkIdx) => {
+                const idx = i + chunkIdx;
+                if (!pt.street || pt.street === "شارع غير معروف") {
+                    try {
+                        const geoData = await getReverseGeocode(pt.y, pt.x);
+                        updated[idx] = { ...pt, street: geoData.street, district: geoData.district };
+                        if (geoData.street && geoData.street !== "غير متوفر") successCount++;
+                    } catch (err) {}
+                }
+            }));
+            setGlobalPoints([...updated]);
         }
         
         setStatusMessage(lang === 'ar' 
@@ -709,47 +712,49 @@ const App: React.FC = () => {
     if (pointsToExport.length === 0) return;
 
     setLoading(true);
-    const results = [];
+    const results: any[] = [];
     const total = pointsToExport.length;
+    const batchSize = 8;
 
-    for (let i = 0; i < total; i++) {
-        const pt = pointsToExport[i];
-        
-        let street = pt.street;
-        let district = pt.district;
+    for (let i = 0; i < total; i += batchSize) {
+        setStatusMessage(lang === 'ar' 
+            ? `جاري جلب أسماء الشوارع: (${Math.min(i + batchSize, total)} من ${total})` 
+            : `Fetching Street Names: (${Math.min(i + batchSize, total)} of ${total})`
+        );
+        const chunk = pointsToExport.slice(i, i + batchSize);
+        const chunkResults = await Promise.all(chunk.map(async (pt) => {
+            let street = pt.street;
+            let district = pt.district;
 
-        if (!street || !district) {
-          setStatusMessage(lang === 'ar' 
-            ? `جاري جلب أسماء الشوارع: (${i + 1} من ${total})` 
-            : `Fetching Street Names: (${i + 1} of ${total})`
-          );
-          const geoData = await getReverseGeocode(pt.y, pt.x);
-                  await new Promise(resolve => setTimeout(resolve, 300));
-          street = geoData.street;
-          district = geoData.district;
-        }
-        
-        const lat = pt.y;
-        const lon = pt.x;
-        const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
-        let elementLength = pt.originalLength || 0;
-        if (elementLength === 0 && pt.path) elementLength = calculatePathLength(pt.path);
+            if (!street || !district) {
+              try {
+                const geoData = await getReverseGeocode(pt.y, pt.x);
+                street = geoData.street;
+                district = geoData.district;
+              } catch (err) {}
+            }
+            
+            const lat = pt.y;
+            const lon = pt.x;
+            const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
+            let elementLength = pt.originalLength || 0;
+            if (elementLength === 0 && pt.path) elementLength = calculatePathLength(pt.path);
 
-        results.push({
-            [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
-            [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
-            [lang === 'ar' ? 'الشارع' : 'Street']: street,
-            [lang === 'ar' ? 'الحي' : 'District']: district,
-            [lang === 'ar' ? 'النوع' : 'Type']: pt.type || 'Point',
-            [lang === 'ar' ? 'الطبقة' : 'Layer']: pt.layer || 'Default',
-            [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
-            [lang === 'ar' ? 'خط العرض (Y)' : 'Latitude (Y)']: lat,
-            [lang === 'ar' ? 'خط الطول (X)' : 'Longitude (X)']: lon,
-            [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
-            [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
-        });
-
-        if (!pt.street && total > 5) await new Promise(r => setTimeout(r, 800));
+            return {
+                [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
+                [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
+                [lang === 'ar' ? 'الشارع' : 'Street']: street || 'غير متوفر',
+                [lang === 'ar' ? 'الحي' : 'District']: district || 'غير متوفر',
+                [lang === 'ar' ? 'النوع' : 'Type']: pt.type || 'Point',
+                [lang === 'ar' ? 'الطبقة' : 'Layer']: pt.layer || 'Default',
+                [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
+                [lang === 'ar' ? 'خط العرض (Y)' : 'Latitude (Y)']: lat,
+                [lang === 'ar' ? 'خط الطول (X)' : 'Longitude (X)']: lon,
+                [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
+                [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
+            };
+        }));
+        results.push(...chunkResults);
     }
 
     const workbook = XLSX.utils.book_new();
@@ -1017,36 +1022,40 @@ const App: React.FC = () => {
     if (hasStreetHeader) {
       setLoading(true);
       const total = points.length;
-      for (let i = 0; i < total; i++) {
-          const pt = points[i];
-          let street = pt.street;
-          if (!street) {
-              setStatusMessage(lang === 'ar' 
-                  ? `جاري جلب أسماء الشوارع: (${i + 1} من ${total})` 
-                  : `Fetching Street Names: (${i + 1} of ${total})`
-              );
-              try {
-                  const geoData = await getReverseGeocode(pt.y, pt.x);
-                  street = geoData.street;
-                  pt.street = street;
-                  pt.district = geoData.district;
-              } catch (err) {
-                  street = "";
-              }
-          }
-          if (!pt.attributes) pt.attributes = {};
-          const matchStreet = headers.find(h => h.toLowerCase() === 'street');
-          const matchArabic = headers.find(h => h === 'الشارع');
-          const matchStreetName = headers.find(h => h.toLowerCase() === 'streetname');
+      const batchSize = 8;
 
-          if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-          if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-          if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-          
-          const matchDistrict = headers.find(h => h.toLowerCase() === 'district');
-          const matchArabicDistrict = headers.find(h => h === 'الحي');
-          if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-          if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+      for (let i = 0; i < total; i += batchSize) {
+          setStatusMessage(lang === 'ar' 
+              ? `جاري جلب أسماء الشوارع: (${Math.min(i + batchSize, total)} من ${total})` 
+              : `Fetching Street Names: (${Math.min(i + batchSize, total)} of ${total})`
+          );
+          const chunk = points.slice(i, i + batchSize);
+          await Promise.all(chunk.map(async (pt) => {
+              let street = pt.street;
+              if (!street) {
+                  try {
+                      const geoData = await getReverseGeocode(pt.y, pt.x);
+                      street = geoData.street;
+                      pt.street = street;
+                      pt.district = geoData.district;
+                  } catch (err) {
+                      street = "";
+                  }
+              }
+              if (!pt.attributes) pt.attributes = {};
+              const matchStreet = headers.find(h => h.toLowerCase() === 'street');
+              const matchArabic = headers.find(h => h === 'الشارع');
+              const matchStreetName = headers.find(h => h.toLowerCase() === 'streetname');
+
+              if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+              if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+              if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+              
+              const matchDistrict = headers.find(h => h.toLowerCase() === 'district');
+              const matchArabicDistrict = headers.find(h => h === 'الحي');
+              if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+              if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          }));
       }
       setLoading(false);
       setStatusMessage(null);
