@@ -604,7 +604,7 @@ export const detectSpatialOverlap = (points: GeoPoint[]): OverlapResult[] => {
   }
 
   for (const [pairKey, overlapLen] of lineOverlapPairs.entries()) {
-    if (overlapLen > 5) {
+    if (overlapLen > 0.1) {
       const [id1, id2] = pairKey.split('|');
       overlaps.push({
         id1: id1,
@@ -670,3 +670,375 @@ export const detectSpatialOverlap = (points: GeoPoint[]): OverlapResult[] => {
 
   return overlaps;
 };
+
+// Helper functions for spatial distance calculations
+export const getPointDistanceMeters = (p1: {x: number, y: number}, p2: {x: number, y: number}): number => {
+  if (Math.abs(p1.y) <= 90 && Math.abs(p2.y) <= 90 && Math.abs(p1.x) <= 180 && Math.abs(p2.x) <= 180) {
+    return getDistanceMeters(p1.y, p1.x, p2.y, p2.x);
+  }
+  return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+};
+
+export const getPointToSegDistMeters = (
+  p: {x: number, y: number},
+  s1: {x: number, y: number},
+  s2: {x: number, y: number}
+): number => {
+  if (Math.abs(p.y) <= 90 && Math.abs(s1.y) <= 90) {
+    return pointToSegmentDistanceMeters(p.y, p.x, s1.y, s1.x, s2.y, s2.x);
+  }
+  const dx = s2.x - s1.x;
+  const dy = s2.y - s1.y;
+  if (dx === 0 && dy === 0) return Math.hypot(p.x - s1.x, p.y - s1.y);
+  const t = Math.max(0, Math.min(1, ((p.x - s1.x) * dx + (p.y - s1.y) * dy) / (dx * dx + dy * dy)));
+  const projX = s1.x + t * dx;
+  const projY = s1.y + t * dy;
+  return Math.hypot(p.x - projX, p.y - projY);
+};
+
+export const isBlackLine = (pt: GeoPoint): boolean => {
+  if (pt.isDuplicateOverlay) return true;
+  if (!pt.color) return false;
+  const c = pt.color.trim().toLowerCase();
+  return c === '#000000' || c === '#000' || c === 'black' || c === 'rgb(0,0,0)' || c === '#000000ff';
+};
+
+export const isLineOverlay = (l1: GeoPoint, l2: GeoPoint, maxMeters = 1.0): boolean => {
+  if (!l1.path || !l2.path || l1.path.length < 2 || l2.path.length < 2) return false;
+
+  // Strict tolerance limit for direct line-on-line overlays (خط فوق خط):
+  // Lines running parallel beside each other (lines side-by-side, e.g. 1.5m to 5m apart) must NOT be flagged as duplicates.
+  const strictMaxMeters = Math.min(maxMeters, 1.0);
+
+  // Helper to compute minimum distance from a point P to a polyline path
+  const pointToPolylineDist = (p: {x: number, y: number}, path: {x: number, y: number}[]): number => {
+    let minDist = Infinity;
+    for (let i = 0; i < path.length - 1; i++) {
+      const d = getPointToSegDistMeters(p, path[i], path[i + 1]);
+      if (d < minDist) minDist = d;
+    }
+    return minDist;
+  };
+
+  // Sample points uniformly along polyline path
+  const samplePointsOnPath = (path: {x: number, y: number}[], targetSamples = 20): {x: number, y: number}[] => {
+    const pts: {x: number, y: number}[] = [];
+    if (path.length === 0) return pts;
+
+    // Add all actual vertices
+    for (const p of path) pts.push(p);
+
+    // Compute total path length
+    let totalLen = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      totalLen += getPointDistanceMeters(path[i], path[i+1]);
+    }
+
+    if (totalLen > 0) {
+      const step = Math.max(0.5, totalLen / targetSamples);
+      for (let i = 0; i < path.length - 1; i++) {
+        const p1 = path[i];
+        const p2 = path[i+1];
+        const segLen = getPointDistanceMeters(p1, p2);
+
+        if (segLen <= 0) continue;
+
+        let d = step;
+        while (d < segLen) {
+          const t = d / segLen;
+          pts.push({
+            x: p1.x + t * (p2.x - p1.x),
+            y: p1.y + t * (p2.y - p1.y)
+          });
+          d += step;
+        }
+      }
+    }
+    return pts;
+  };
+
+  const samples1 = samplePointsOnPath(l1.path, 20);
+  const samples2 = samplePointsOnPath(l2.path, 20);
+
+  if (samples1.length === 0 || samples2.length === 0) return false;
+
+  // Count sample points of l1 close to l2 and track average distance
+  let near1 = 0;
+  let totalDist1 = 0;
+  for (const s of samples1) {
+    const dist = pointToPolylineDist(s, l2.path);
+    totalDist1 += dist;
+    if (dist <= strictMaxMeters) {
+      near1++;
+    }
+  }
+
+  // Count sample points of l2 close to l1 and track average distance
+  let near2 = 0;
+  let totalDist2 = 0;
+  for (const s of samples2) {
+    const dist = pointToPolylineDist(s, l1.path);
+    totalDist2 += dist;
+    if (dist <= strictMaxMeters) {
+      near2++;
+    }
+  }
+
+  const avgDist1 = totalDist1 / samples1.length;
+  const avgDist2 = totalDist2 / samples2.length;
+
+  // If average distance exceeds tolerance, lines are adjacent (جوار بعض) not direct line-on-line overlays (فوق بعض)
+  if (avgDist1 > strictMaxMeters || avgDist2 > strictMaxMeters) return false;
+
+  const ratio1 = near1 / samples1.length;
+  const ratio2 = near2 / samples2.length;
+
+  return (ratio1 >= 0.7 && ratio2 >= 0.7) || (ratio1 >= 0.85 && ratio2 >= 0.4) || (ratio2 >= 0.85 && ratio1 >= 0.4);
+};
+
+// ==========================================
+// 1. التطابق (Duplicates / Line-on-Line Overlays): خط فوق خط
+// ==========================================
+export const detectExactDuplicates = (points: GeoPoint[], maxMeters = 0.5): OverlapResult[] => {
+  const overlaps: OverlapResult[] = [];
+  
+  // A. Detect Point / Polygon duplicate overlaps
+  for (let i = 0; i < points.length; i++) {
+    const pt1 = points[i];
+
+    for (let j = i + 1; j < points.length; j++) {
+      const pt2 = points[j];
+      if (pt1.type !== pt2.type) continue;
+
+      if (pt1.type === 'Point' || !pt1.type) {
+        if (getPointDistanceMeters(pt1, pt2) <= maxMeters) {
+          overlaps.push({ id1: pt1.id, id2: pt2.id, type: 'Point' });
+        }
+      } else if (pt1.type === 'Polygon' && pt1.path && pt2.path) {
+        if (isLineOverlay(pt1, pt2, maxMeters)) {
+          overlaps.push({ id1: pt1.id, id2: pt2.id, type: 'Polygon' });
+        }
+      }
+    }
+  }
+
+  // B. Detect LineString direct overlays (خط فوق خط)
+  const lines = points.filter(p => p.type === 'LineString' && p.path && p.path.length > 1);
+
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      const l1 = lines[i];
+      const l2 = lines[j];
+
+      if (isLineOverlay(l1, l2, maxMeters)) {
+        overlaps.push({
+          id1: l1.id,
+          id2: l2.id,
+          type: 'LineString'
+        });
+      }
+    }
+  }
+
+  return overlaps;
+};
+
+// ==========================================
+// 2. التداخل (Line Intersections / Junctions): منطقة التقاء الخطوط
+// ==========================================
+export const detectLineIntersections = (points: GeoPoint[]): OverlapResult[] => {
+  const overlaps: OverlapResult[] = [];
+  const lines = points.filter(p => p.type === 'LineString' && p.path && p.path.length > 1);
+  const EPSILON = 1e-9;
+  
+  const getIntersection = (p1: {x:number, y:number}, p2: {x:number, y:number}, p3: {x:number, y:number}, p4: {x:number, y:number}) => {
+    const denom = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
+    if (Math.abs(denom) < EPSILON) return null;
+
+    const ua = ((p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x)) / denom;
+    const ub = ((p2.x - p1.x) * (p1.y - p3.y) - (p2.y - p1.y) * (p1.x - p3.x)) / denom;
+
+    if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
+      const ix = p1.x + ua * (p2.x - p1.x);
+      const iy = p1.y + ua * (p2.y - p1.y);
+      
+      const isEndpoint = 
+          ((Math.abs(ix - p1.x) < EPSILON && Math.abs(iy - p1.y) < EPSILON) || (Math.abs(ix - p2.x) < EPSILON && Math.abs(iy - p2.y) < EPSILON)) &&
+          ((Math.abs(ix - p3.x) < EPSILON && Math.abs(iy - p3.y) < EPSILON) || (Math.abs(ix - p4.x) < EPSILON && Math.abs(iy - p4.y) < EPSILON));
+      
+      if (isEndpoint) return null;
+
+      return { x: ix, y: iy };
+    }
+    return null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      const l1 = lines[i];
+      const l2 = lines[j];
+
+      // Skip duplicate line overlays (handled in detectExactDuplicates)
+      if (isLineOverlay(l1, l2, 5.0)) continue;
+
+      let found = false;
+      for (let m = 0; m < l1.path!.length - 1 && !found; m++) {
+        for (let n = 0; n < l2.path!.length - 1 && !found; n++) {
+          const pt = getIntersection(l1.path![m], l1.path![m+1], l2.path![n], l2.path![n+1]);
+          if (pt) {
+            overlaps.push({
+              id1: l1.id,
+              id2: l2.id,
+              type: 'LineString',
+              isIntersection: true,
+              intersectionPoint: pt
+            });
+            found = true;
+          }
+        }
+      }
+    }
+  }
+
+  return overlaps;
+};
+
+// ==========================================
+// 3. معالجة التطابق (حذف العناصر المتطابقة)
+// ==========================================
+export const resolveExactDuplicates = (points: GeoPoint[], maxMeters = 5.0): { cleanedPoints: GeoPoint[]; removedCount: number } => {
+  const cleanedPoints: GeoPoint[] = [];
+  let removedCount = 0;
+
+  for (const pt of points) {
+    let isDup = false;
+
+    for (const existing of cleanedPoints) {
+      if (pt.type !== existing.type && (pt.type === 'LineString' || existing.type === 'LineString')) {
+        continue;
+      }
+
+      if (pt.type === 'Point' || !pt.type) {
+        if (getPointDistanceMeters(pt, existing) <= maxMeters) {
+          isDup = true;
+          break;
+        }
+      } else if ((pt.type === 'Polygon' || pt.type === 'LineString') && pt.path && existing.path) {
+        if (isLineOverlay(pt, existing, maxMeters)) {
+          isDup = true;
+          break;
+        }
+      }
+    }
+
+    if (isDup) {
+      removedCount++;
+    } else {
+      cleanedPoints.push(pt);
+    }
+  }
+
+  return { cleanedPoints, removedCount };
+};
+
+// ==========================================
+// 4. معالجة التداخل (تقصير طول الخط فقط عند منطقة التقاء الخطوط بدون حذف العنصر)
+// ==========================================
+export const trimLinesAtIntersections = (points: GeoPoint[]): { cleanedPoints: GeoPoint[]; trimmedCount: number } => {
+  const intersections = detectLineIntersections(points);
+  
+  if (intersections.length === 0) {
+    return { cleanedPoints: points, trimmedCount: 0 };
+  }
+
+  // Map of line ID -> array of intersection points
+  const lineIntersectionsMap = new Map<string, {x: number, y: number}[]>();
+
+  for (const item of intersections) {
+    if (item.intersectionPoint) {
+      const id1 = String(item.id1);
+      const id2 = String(item.id2);
+
+      if (!lineIntersectionsMap.has(id1)) lineIntersectionsMap.set(id1, []);
+      lineIntersectionsMap.get(id1)!.push(item.intersectionPoint);
+
+      if (!lineIntersectionsMap.has(id2)) lineIntersectionsMap.set(id2, []);
+      lineIntersectionsMap.get(id2)!.push(item.intersectionPoint);
+    }
+  }
+
+  let trimmedCount = 0;
+
+  // Process EVERY point (1:1 mapping - no elements are EVER deleted)
+  const cleanedPoints = points.map(pt => {
+    if (pt.type !== 'LineString' || !pt.path || pt.path.length < 2) {
+      return pt;
+    }
+
+    const ptId = String(pt.id);
+    const inters = lineIntersectionsMap.get(ptId);
+
+    if (!inters || inters.length === 0) {
+      // Unrelated line: 100% untouched
+      return pt;
+    }
+
+    // Line has intersection with another line
+    let currentPath = [...pt.path];
+    let isModified = false;
+
+    for (const ip of inters) {
+      let segIndex = -1;
+      let minSegDist = Infinity;
+
+      for (let i = 0; i < currentPath.length - 1; i++) {
+        const dist = getPointToSegDistMeters(ip, currentPath[i], currentPath[i+1]);
+        if (dist < minSegDist) {
+          minSegDist = dist;
+          segIndex = i;
+        }
+      }
+
+      if (segIndex !== -1 && minSegDist <= 10) {
+        const pA = currentPath[segIndex];
+        const pB = currentPath[segIndex + 1];
+
+        const distAP = getPointDistanceMeters(pA, ip);
+        const distPB = getPointDistanceMeters(ip, pB);
+
+        const isNearStart = (segIndex === 0 && distAP <= 25);
+        const isNearEnd = (segIndex === currentPath.length - 2 && distPB <= 25);
+
+        if (isNearEnd && distPB > 0.1 && distAP > 0.1) {
+          // Trim end overshoot to stop cleanly at junction ip
+          currentPath[segIndex + 1] = { x: ip.x, y: ip.y };
+          isModified = true;
+        } else if (isNearStart && distAP > 0.1 && distPB > 0.1) {
+          // Trim start overshoot to start cleanly at junction ip
+          currentPath[segIndex] = { x: ip.x, y: ip.y };
+          isModified = true;
+        } else if (distAP > 0.5 && distPB > 0.5) {
+          // Insert junction vertex ip into line path
+          currentPath.splice(segIndex + 1, 0, { x: ip.x, y: ip.y });
+          isModified = true;
+        }
+      }
+    }
+
+    if (isModified) {
+      trimmedCount++;
+      return { ...pt, path: currentPath };
+    }
+
+    return pt;
+  });
+
+  return { cleanedPoints, trimmedCount };
+};
+
+export const resolveSpatialOverlaps = (points: GeoPoint[]): { cleanedPoints: GeoPoint[]; removedCount: number; trimmedCount: number } => {
+  const { cleanedPoints: deduplicated, removedCount } = resolveExactDuplicates(points);
+  const { cleanedPoints, trimmedCount } = trimLinesAtIntersections(deduplicated);
+  return { cleanedPoints, removedCount, trimmedCount };
+};
+

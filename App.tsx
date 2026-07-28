@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  Upload, Download, Check, Split, Trash2, Activity, 
-  Presentation, FolderInput, Menu, X, PanelTop, 
+import {
+  Upload, Download, Check, Split, Trash2, Activity,
+  Presentation, FolderInput, Menu, X, PanelTop,
   SlidersHorizontal, Loader2, Map as MapIcon, Globe,
   BarChart3, Ruler, MapPin, Layers, RefreshCw,
   FileSpreadsheet, ToggleLeft, ToggleRight, CheckSquare, Square,
@@ -11,7 +11,7 @@ import {
   BoxSelect, PlusSquare, Scissors, Languages, Palette, Mail,
   ChevronRight, ListOrdered, Locate, Zap, Navigation, FolderOpen, Package,
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
-  Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter,
+  Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
@@ -23,9 +23,9 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon } from './types';
 import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML } from './services/parserService';
-import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs'; 
+import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
-import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, OverlapResult } from './services/geometryService';
+import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
 import { getCanonicalColorMap } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
@@ -159,12 +159,12 @@ const SAMPLE_GDB_POINTS: GeoPoint[] = [
 ];
 
 export const defaultFields = [
-  'INNERDIAMETER', 
-  'SHAPE_Length', 
-  'Permit No', 
-  'segment id', 
-  'ZONE', 
-  'Drilling type', 
+  'INNERDIAMETER',
+  'SHAPE_Length',
+  'Permit No',
+  'segment id',
+  'ZONE',
+  'Drilling type',
   'Stage',
   'SHAPE',
   'Street',
@@ -192,8 +192,8 @@ const GeocodingModeSelector: React.FC<{
         onClick={() => setMode('accurate')}
         className={cn(
           "py-2.5 px-3 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5",
-          mode === 'accurate' 
-            ? "bg-accent text-primary shadow-lg" 
+          mode === 'accurate'
+            ? "bg-accent text-primary shadow-lg"
             : "text-white/60 hover:text-white hover:bg-white/5"
         )}
       >
@@ -205,8 +205,8 @@ const GeocodingModeSelector: React.FC<{
         onClick={() => setMode('fast')}
         className={cn(
           "py-2.5 px-3 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5",
-          mode === 'fast' 
-            ? "bg-blue-500 text-white shadow-lg" 
+          mode === 'fast'
+            ? "bg-blue-500 text-white shadow-lg"
             : "text-white/60 hover:text-white hover:bg-white/5"
         )}
       >
@@ -248,7 +248,7 @@ const App: React.FC = () => {
   const [lang, setLang] = useState<Language>(() => loadSavedPreference('lang', 'ar'));
   const [theme, setTheme] = useState<'default' | 'nwc'>(() => loadSavedPreference('theme', 'default'));
   const t = translations[lang];
-  
+
   const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator'>('converter');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -263,11 +263,13 @@ const App: React.FC = () => {
   const [dataId, setDataId] = useState<string>('');
   const [classifierRefZones, setClassifierRefZones] = useState<GeoPoint[]>([]);
   const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
-  
+
   const [mergeThreshold, setMergeThreshold] = useState<number>(() => loadSavedPreference('mergeThreshold', 45));
+  const [duplicateTolerance, setDuplicateTolerance] = useState<number>(() => loadSavedPreference('duplicateTolerance', 0.5));
   const [overlapResults, setOverlapResults] = useState<OverlapResult[] | null>(null);
   const [geocodingMode, setGeocodingMode] = useState<'accurate' | 'fast'>(() => loadSavedPreference('geocodingMode', 'accurate'));
   const [showOverlapModal, setShowOverlapModal] = useState(false);
+  const [overlapModalType, setOverlapModalType] = useState<'duplicates' | 'intersections'>('duplicates');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>(() => loadSavedPreference('globalBaseMap', 'satellite'));
 
@@ -308,6 +310,202 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const getPointsToCheck = (): GeoPoint[] => {
+    if (activeTab === 'street-planner' && plannedStreets.length > 0) {
+      const combined = [...globalPoints];
+      for (const p of plannedStreets) {
+        if (!combined.some(item => String(item.id) === String(p.id))) {
+          combined.push(p);
+        }
+      }
+      return combined;
+    }
+    return globalPoints.length > 0 ? globalPoints : plannedStreets;
+  };
+
+  // ==========================================
+  // 1. التطابق (Duplicate Lines - خط فوق خط)
+  // ==========================================
+  const handleCheckDuplicates = () => {
+    const pointsToCheck = getPointsToCheck();
+    const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
+    setOverlapResults(dups);
+    setOverlapModalType('duplicates');
+    setShowOverlapModal(true);
+    if (dups.length === 0) {
+      setStatusMessage(
+        lang === 'ar'
+          ? `لم يتم العثور على أي عناصر متطابقة (خط فوق خط) ضمن مسافة ${duplicateTolerance}m.`
+          : `No exact duplicate lines found within ${duplicateTolerance}m.`
+      );
+      setTimeout(() => setStatusMessage(''), 3000);
+    }
+  };
+
+  const handleColorDuplicatesBlack = () => {
+    const pointsToCheck = getPointsToCheck();
+    const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
+
+    if (dups.length === 0) {
+      setStatusMessage(
+        lang === 'ar'
+          ? `لم يتم العثور على خطوط متطابقة لتلوينها بالأسود ضمن مسافة ${duplicateTolerance}m.`
+          : `No duplicate lines found to color black within ${duplicateTolerance}m.`
+      );
+      setTimeout(() => setStatusMessage(''), 3000);
+      return;
+    }
+
+    const dupIds = new Set<string>();
+    dups.forEach(d => {
+      dupIds.add(String(d.id1));
+      dupIds.add(String(d.id2));
+    });
+
+    let coloredCount = 0;
+    const updateList = (list: GeoPoint[]) => list.map(pt => {
+      if (dupIds.has(String(pt.id))) {
+        coloredCount++;
+        return { ...pt, color: '#000000' };
+      }
+      return pt;
+    });
+
+    setGlobalPoints(prev => updateList(prev));
+    setPlannedStreets(prev => updateList(prev));
+
+    setOverlapResults(dups);
+    setOverlapModalType('duplicates');
+    setShowOverlapModal(true);
+    setDataId(`colored-black-${Date.now()}`);
+
+    setStatusMessage(
+      lang === 'ar'
+        ? `تم تلوين ${coloredCount} خط متطابق (خط فوق خط) باللون الأسود ⬛ بنجاح!`
+        : `Successfully colored ${coloredCount} duplicate lines in black ⬛!`
+    );
+    setTimeout(() => setStatusMessage(''), 5000);
+  };
+
+  const handleResolveDuplicates = () => {
+    let totalRemoved = 0;
+    let nextGlobal = [...globalPoints];
+    let nextPlanned = [...plannedStreets];
+
+    if (nextGlobal.length > 0) {
+      const { cleanedPoints, removedCount } = resolveExactDuplicates(nextGlobal, duplicateTolerance);
+      totalRemoved += removedCount;
+      nextGlobal = cleanedPoints;
+    }
+
+    if (nextPlanned.length > 0) {
+      const { cleanedPoints: cleanedStreets, removedCount: count2 } = resolveExactDuplicates(nextPlanned, duplicateTolerance);
+      totalRemoved += count2;
+      nextPlanned = cleanedStreets;
+    }
+
+    setGlobalPoints(nextGlobal);
+    setPlannedStreets(nextPlanned);
+
+    if (activeFile) {
+      setActiveFile(prev => prev ? { ...prev, data: nextGlobal } : null);
+    }
+
+    setDataId(`resolved-dups-${Date.now()}`);
+
+    const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
+    const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
+    setOverlapResults(remainingDups);
+    setOverlapModalType('duplicates');
+
+    setStatusMessage(
+      lang === 'ar'
+        ? `تم حذف ${totalRemoved} عنصر مكرر ومتطابق تماماً بنجاح!`
+        : `Successfully deleted ${totalRemoved} exact duplicate elements!`
+    );
+    setTimeout(() => setStatusMessage(''), 5000);
+  };
+
+  // ==========================================
+  // 2. التقاطعات (Line Intersections - نقاط التلاقي والعبور)
+  // ==========================================
+  const handleCheckIntersections = () => {
+    const pointsToCheck = getPointsToCheck();
+    const intersections = detectLineIntersections(pointsToCheck);
+    setOverlapResults(intersections);
+    setOverlapModalType('intersections');
+    setShowOverlapModal(true);
+    if (intersections.length === 0) {
+      setStatusMessage(
+        lang === 'ar'
+          ? 'لم يتم العثور على أي تقاطعات أو نقاط عبور بين الخطوط.'
+          : 'No intersecting lines found.'
+      );
+      setTimeout(() => setStatusMessage(''), 3000);
+    }
+  };
+
+  const handleTrimIntersections = () => {
+    let totalTrimmed = 0;
+    let nextGlobal = [...globalPoints];
+    let nextPlanned = [...plannedStreets];
+
+    if (nextGlobal.length > 0) {
+      const { cleanedPoints, trimmedCount } = trimLinesAtIntersections(nextGlobal);
+      totalTrimmed += trimmedCount;
+      nextGlobal = cleanedPoints;
+    }
+
+    if (nextPlanned.length > 0) {
+      const { cleanedPoints: cleanedStreets, trimmedCount: count2 } = trimLinesAtIntersections(nextPlanned);
+      totalTrimmed += count2;
+      nextPlanned = cleanedStreets;
+    }
+
+    setGlobalPoints(nextGlobal);
+    setPlannedStreets(nextPlanned);
+
+    if (activeFile) {
+      setActiveFile(prev => prev ? { ...prev, data: nextGlobal } : null);
+    }
+
+    setDataId(`trimmed-inters-${Date.now()}`);
+
+    const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
+    const remainingIntersections = detectLineIntersections(checkTarget);
+    setOverlapResults(remainingIntersections);
+    setOverlapModalType('intersections');
+
+    setStatusMessage(
+      lang === 'ar'
+        ? `تم تقليم ${totalTrimmed} خط عند نقاط التقاطع بنجاح!`
+        : `Successfully trimmed ${totalTrimmed} lines at intersections!`
+    );
+    setTimeout(() => setStatusMessage(''), 5000);
+  };
+
+  const handleDeleteDuplicateItem = (targetId: string | number) => {
+    const filterFn = (p: GeoPoint) => String(p.id) !== String(targetId);
+
+    const nextGlobal = globalPoints.filter(filterFn);
+    const nextPlanned = plannedStreets.filter(filterFn);
+
+    setGlobalPoints(nextGlobal);
+    setPlannedStreets(nextPlanned);
+
+    if (activeFile) {
+      setActiveFile(fPrev => fPrev ? { ...fPrev, data: nextGlobal } : null);
+    }
+
+    setDataId(`deleted-${Date.now()}`);
+    const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
+    if (overlapModalType === 'duplicates') {
+      setOverlapResults(detectExactDuplicates(checkTarget, duplicateTolerance));
+    } else {
+      setOverlapResults(detectLineIntersections(checkTarget));
+    }
+  };
+
   const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
   const [splitCount, setSplitCount] = useState<number>(2);
   const [exportStyle, setExportStyle] = useState<'single' | 'zip'>(() => loadSavedPreference('exportStyle', 'single'));
@@ -322,21 +520,21 @@ const App: React.FC = () => {
   const [selectedArea, setSelectedArea] = useState<{x: number, y: number}[] | null>(null);
   const [plannedStreets, setPlannedStreets] = useState<GeoPoint[]>([]);
   const [boundaryPolygon, setBoundaryPolygon] = useState<GeoPoint | null>(null);
-  
+
   const [plannerSeparate, setPlannerSeparate] = useState(false);
   const [plannerSplitLines, setPlannerSplitLines] = useState(false);
   const [plannerSplitIntersections, setPlannerSplitIntersections] = useState(false);
   const [plannerMaxLen, setPlannerMaxLen] = useState(() => loadSavedPreference('plannerMaxLen', 500));
   const [plannerClip, setPlannerClip] = useState(true);
   const [plannerBuffer, setPlannerBuffer] = useState(0);
-  
+
   // Street Classification Filters
   const [streetTypeFilters, setStreetTypeFilters] = useState<string[]>(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'residential', 'service']);
 
   const [sourceEPSG, setSourceEPSG] = useState<string>(() => loadSavedPreference('sourceEPSG', 'EPSG:32638'));
   const [swapXY, setSwapXY] = useState<boolean>(false);
-  const [mapping, setMapping] = useState<ColumnMapping>({ 
-    xColumn: '', yColumn: '', idColumn: '', linkColumn: '', attr1Column: '', attr2Column: '' 
+  const [mapping, setMapping] = useState<ColumnMapping>({
+    xColumn: '', yColumn: '', idColumn: '', linkColumn: '', attr1Column: '', attr2Column: ''
   });
   const [selectedHeaders, setSelectedHeaders] = useState<string[]>([]);
   const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'column'>(() => loadSavedPreference('groupingMode', 'layer'));
@@ -400,12 +598,12 @@ const App: React.FC = () => {
           return normH.includes(normDf) || normDf.includes(normH);
         });
       });
-      
+
       // Also add the default fields themselves so they are always in selectedHeaders
       // even if they don't exist in the file's headers
       const allSelected = Array.from(new Set([...initialSelection, ...defaultFields]));
       setSelectedHeaders(initialSelection.length > 0 ? allSelected : Array.from(new Set([...activeFile.headers, ...defaultFields])));
-      
+
       if (activeFile.headers.length > 0) {
         setGroupByColumnSelect(activeFile.headers[0]);
       }
@@ -424,7 +622,7 @@ const App: React.FC = () => {
   }, [theme]);
 
   const toggleStreetType = (type: string) => {
-    setStreetTypeFilters(prev => 
+    setStreetTypeFilters(prev =>
       prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
     );
   };
@@ -435,7 +633,7 @@ const App: React.FC = () => {
       if (boundaryPolygon) pts.push(boundaryPolygon);
       return pts;
     }
-    
+
     if (activeTab === 'splitter' && splitMode === 'spatial') {
       const polyPts: GeoPoint[] = splitPolygons.map(p => ({
         id: p.name,
@@ -456,7 +654,7 @@ const App: React.FC = () => {
     if (activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')) {
       return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
     }
-    
+
     return globalPoints;
   }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones]);
 
@@ -470,77 +668,78 @@ const App: React.FC = () => {
   }, [globalPoints]);
 
   const canonicalColorMap = useMemo(() => {
-    const pointsToProcess = activeTab === 'street-planner' ? [...globalPoints, ...plannedStreets] : globalPoints;
+    const rawPoints = activeTab === 'street-planner' ? [...globalPoints, ...plannedStreets] : globalPoints;
+    const pointsToProcess = rawPoints.filter(p => !isBlackLine(p));
     if (pointsToProcess.length === 0) return {};
     const colors = Array.from(new Set<string>(pointsToProcess.map(p => (p.color || '#dcb13c').toUpperCase())));
     return getCanonicalColorMap(colors, mergeThreshold);
   }, [globalPoints, plannedStreets, activeTab, mergeThreshold]);
 
-  
+
   const { materialDistribution, diameterDistribution } = useMemo(() => {
     const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
-    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString');
+    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString' && !isBlackLine(pt));
     const matGroups: Record<string, number> = {};
     const diaGroups: Record<string, number> = {};
-    
+
     pointsToAnalyze.forEach(pt => {
         let len = pt.originalLength || 0;
         if (len === 0 && pt.type === 'LineString' && pt.path) {
             len = calculatePathLength(pt.path);
         }
-        
+
         let material = 'Unknown';
         let diameter = 'Unknown';
-        
+
         if (pt.attributes) {
             // Check for material keys
             const matKey = Object.keys(pt.attributes).find(k => ['MATERIAL', 'المادة', 'material'].includes(k.toLowerCase()));
             if (matKey && pt.attributes[matKey]) material = String(pt.attributes[matKey]);
-            
+
             // Check for diameter keys
             const diaKey = Object.keys(pt.attributes).find(k => ['INNERDIAMETER', 'DIAMETER', 'القطر', 'diameter'].includes(k.toLowerCase()));
             if (diaKey && pt.attributes[diaKey]) diameter = String(pt.attributes[diaKey]);
         }
-        
+
         if (len > 0) {
             matGroups[material] = (matGroups[material] || 0) + len;
             diaGroups[diameter] = (diaGroups[diameter] || 0) + len;
         }
     });
-    
+
     const matData = Object.entries(matGroups)
       .filter(([k, v]) => v > 0)
       .map(([name, value]) => ({ name, value: Number((value / 1000).toFixed(2)) })) // Convert to km
       .sort((a, b) => b.value - a.value);
-      
+
     const diaData = Object.entries(diaGroups)
       .filter(([k, v]) => v > 0)
       .map(([name, value]) => ({ name, value: Number((value / 1000).toFixed(2)) })) // Convert to km
       .sort((a, b) => b.value - a.value);
-      
+
     return { materialDistribution: matData, diameterDistribution: diaData };
   }, [globalPoints, plannedStreets, activeTab, activeFile]);
 
   const analysisData = useMemo(() => {
     const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
-    // Exclude Points, Polygons, etc. Only analyze LineString elements!
-    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString');
+    // Exclude Points, Polygons, and duplicate black-colored lines!
+    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString' && !isBlackLine(pt));
     if (pointsToAnalyze.length === 0) return [];
-    
+
     const groups: Record<string, { totalLength: number, count: number }> = {};
     let totalAllLength = 0;
 
     pointsToAnalyze.forEach(pt => {
       const originalColor = (pt.color || '#dcb13c').toUpperCase();
       const canonicalColor = canonicalColorMap[originalColor] || originalColor;
-      
+
       if (!groups[canonicalColor]) groups[canonicalColor] = { totalLength: 0, count: 0 };
-      
+
       let len = pt.originalLength || 0;
       if (len === 0 && pt.type === 'LineString' && pt.path) {
           len = calculatePathLength(pt.path);
       }
-      
+
       groups[canonicalColor].totalLength += len;
       groups[canonicalColor].count += 1;
       totalAllLength += len;
@@ -555,7 +754,7 @@ const App: React.FC = () => {
   }, [globalPoints, plannedStreets, activeTab, canonicalColorMap, activeFile]);
 
   const placemarksSummary = useMemo(() => {
-    const pointsToAnalyze = !activeFile ? plannedStreets : globalPoints;
+    const pointsToAnalyze = (!activeFile ? plannedStreets : globalPoints).filter(pt => !isBlackLine(pt));
     let pointsCount = 0;
     let linesCount = 0;
     let polygonsCount = 0;
@@ -580,25 +779,25 @@ const App: React.FC = () => {
 
   const wMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.type === 'LineString' && p.layer && p.layer.toUpperCase().includes('W_MAINLINE'));
-    
+    const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && p.layer.toUpperCase().includes('W_MAINLINE'));
+
     let totalLength = 0;
     const materialCounts: Record<string, number> = {};
     const materialLengths: Record<string, number> = {};
     const diameterLengths: Record<string, number> = {};
-    
+
     segments.forEach(pt => {
         let len = pt.originalLength || 0;
         if (len === 0 && pt.type === 'LineString' && pt.path) {
             len = calculatePathLength(pt.path);
         }
         totalLength += len;
-        
+
         let material = 'Ductile Iron (DI)';
         const descLower = (pt.description || '').toLowerCase();
         const idLower = (String(pt.id) || '').toLowerCase();
         const attr1Lower = (pt.attr1 || '').toLowerCase();
-        
+
         if (descLower.includes('hdpe') || idLower.includes('hdpe') || attr1Lower.includes('hdpe')) {
             material = 'HDPE';
         } else if (descLower.includes('carbon steel') || descLower.includes('cs') || idLower.includes('cs') || attr1Lower.includes('cs') || descLower.includes('حديد')) {
@@ -606,10 +805,10 @@ const App: React.FC = () => {
         } else if (descLower.includes('pvc') || idLower.includes('pvc') || attr1Lower.includes('pvc') || descLower.includes('بلاستيك')) {
             material = 'uPVC';
         }
-        
+
         materialCounts[material] = (materialCounts[material] || 0) + 1;
         materialLengths[material] = (materialLengths[material] || 0) + len;
-        
+
         let diameter = '300mm';
         const diaMatch = descLower.match(/(\d+)\s*(mm|inch)/i) || idLower.match(/(\d+)\s*(mm|inch)/i) || attr1Lower.match(/(\d+)\s*(mm|inch)/i) || (pt.attr2 || '').match(/(\d+)\s*(mm|inch)/i);
         if (diaMatch) {
@@ -621,10 +820,10 @@ const App: React.FC = () => {
         } else if (descLower.includes('200') || idLower.includes('200')) {
             diameter = '200mm';
         }
-        
+
         diameterLengths[diameter] = (diameterLengths[diameter] || 0) + len;
     });
-    
+
     return {
         segments,
         totalLength,
@@ -637,30 +836,30 @@ const App: React.FC = () => {
 
   const wwMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.type === 'LineString' && p.layer && (
-        p.layer.toUpperCase().includes('WW_MAINLINE') || 
-        p.layer.toUpperCase().includes('S_GRAVITY_MAIN') || 
+    const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && (
+        p.layer.toUpperCase().includes('WW_MAINLINE') ||
+        p.layer.toUpperCase().includes('S_GRAVITY_MAIN') ||
         p.layer.toUpperCase().includes('SEWER') ||
         p.layer.toUpperCase().includes('WASTEWATER')
     ));
-    
+
     let totalLength = 0;
     const materialCounts: Record<string, number> = {};
     const materialLengths: Record<string, number> = {};
     const diameterLengths: Record<string, number> = {};
-    
+
     segments.forEach(pt => {
         let len = pt.originalLength || 0;
         if (len === 0 && pt.type === 'LineString' && pt.path) {
             len = calculatePathLength(pt.path);
         }
         totalLength += len;
-        
+
         let material = 'uPVC';
         const descLower = (pt.description || '').toLowerCase();
         const idLower = (String(pt.id) || '').toLowerCase();
         const attr1Lower = (pt.attr1 || '').toLowerCase();
-        
+
         if (descLower.includes('clay') || descLower.includes('vc') || idLower.includes('vc') || attr1Lower.includes('clay') || descLower.includes('فخار')) {
             material = 'Vitrified Clay (VC)';
         } else if (descLower.includes('concrete') || descLower.includes('co') || descLower.includes('rc') || idLower.includes('co') || descLower.includes('خرسانة')) {
@@ -672,10 +871,10 @@ const App: React.FC = () => {
         } else if (descLower.includes('pvc') || idLower.includes('pvc') || attr1Lower.includes('pvc') || descLower.includes('بلاستيك')) {
             material = 'uPVC';
         }
-        
+
         materialCounts[material] = (materialCounts[material] || 0) + 1;
         materialLengths[material] = (materialLengths[material] || 0) + len;
-        
+
         let diameter = '300mm';
         const diaMatch = descLower.match(/(\d+)\s*(mm|inch)/i) || idLower.match(/(\d+)\s*(mm|inch)/i) || attr1Lower.match(/(\d+)\s*(mm|inch)/i) || (pt.attr2 || '').match(/(\d+)\s*(mm|inch)/i);
         if (diaMatch) {
@@ -689,10 +888,10 @@ const App: React.FC = () => {
         } else if (descLower.includes('200') || idLower.includes('200')) {
             diameter = '200mm';
         }
-        
+
         diameterLengths[diameter] = (diameterLengths[diameter] || 0) + len;
     });
-    
+
     return {
         segments,
         totalLength,
@@ -712,7 +911,7 @@ const App: React.FC = () => {
         const originalHeaders = activeFile.headers || [];
         const filteredHeaders = originalHeaders.filter(h => selectedHeaders.includes(h));
         const newHeaders = [
-            ...filteredHeaders, 
+            ...filteredHeaders,
             lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)',
             lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)',
             lang === 'ar' ? 'الشارع' : 'Street',
@@ -727,7 +926,7 @@ const App: React.FC = () => {
             const street = pt ? (pt.street || '') : '';
             const district = pt ? (pt.district || '') : '';
             const link = pt ? `https://www.google.com/maps?q=${lat},${lon}` : '';
-            
+
             const rowObj: any = {};
             originalHeaders.forEach((h, i) => {
                 if (selectedHeaders.includes(h)) {
@@ -739,22 +938,23 @@ const App: React.FC = () => {
                     }
                 }
             });
-            
+
             rowObj[lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)'] = lat;
             rowObj[lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)'] = lon;
             rowObj[lang === 'ar' ? 'الشارع' : 'Street'] = street;
             rowObj[lang === 'ar' ? 'الحي' : 'District'] = district;
             rowObj[lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'] = link;
-            
+
             return rowObj;
         });
 
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(combinedData), lang === 'ar' ? "البيانات المحولة كاملة" : "Full Converted Data");
     } else {
-        const pointsToExport = (activeTab === 'street-planner') 
-            ? [...globalPoints, ...plannedStreets] 
+        const rawExport = (activeTab === 'street-planner')
+            ? [...globalPoints, ...plannedStreets]
             : (activeTab === 'analyzer' && !activeFile ? plannedStreets : globalPoints);
-            
+        const pointsToExport = rawExport.filter(pt => !isBlackLine(pt));
+
         const detailedData = pointsToExport.map(pt => {
             const lat = pt.y;
             const lon = pt.x;
@@ -779,7 +979,7 @@ const App: React.FC = () => {
         });
 
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailedData), lang === 'ar' ? "بيانات العناصر" : "Elements Data");
-        
+
         if (activeTab === 'analyzer') {
             const summaryData = analysisData.map(d => ({
                 [lang === 'ar' ? 'اللون (كود)' : 'Color (Hex)']: d.color,
@@ -802,7 +1002,7 @@ const App: React.FC = () => {
 
     try {
         setStatusMessage(lang === 'ar' ? 'جاري جلب الشوارع وتحليل البيانات...' : 'Fetching streets and analyzing data...');
-        
+
         const sitePolygon = globalPoints.find(p => p.type === 'Polygon' && p.path && p.path.length > 2);
         let queryArea: {x: number, y: number}[] = [];
 
@@ -816,7 +1016,7 @@ const App: React.FC = () => {
             });
             queryArea = calculateBoundingBox(allPoints);
         }
-        
+
         if (queryArea.length > 0) {
             const buffered = bufferPolygon(queryArea, plannerBuffer);
             try {
@@ -832,10 +1032,10 @@ const App: React.FC = () => {
         const updated = [...globalPoints];
         let successCount = 0;
         const batchSize = geocodingMode === 'accurate' ? 4 : 10;
-        
+
         for (let i = 0; i < total; i += batchSize) {
-            setStatusMessage(lang === 'ar' 
-              ? `جاري عنونة البيانات (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})` 
+            setStatusMessage(lang === 'ar'
+              ? `جاري عنونة البيانات (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})`
               : `Geocoding data (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
             );
             const chunk = updated.slice(i, i + batchSize);
@@ -854,9 +1054,9 @@ const App: React.FC = () => {
                 await new Promise(r => setTimeout(r, 60));
             }
         }
-        
-        setStatusMessage(lang === 'ar' 
-          ? `تم جلب ${plannedStreets.length} شارع وتحديث ${successCount} عنوان!` 
+
+        setStatusMessage(lang === 'ar'
+          ? `تم جلب ${plannedStreets.length} شارع وتحديث ${successCount} عنوان!`
           : `Fetched ${plannedStreets.length} streets and updated ${successCount} addresses!`
         );
     } catch (e: any) {
@@ -877,8 +1077,8 @@ const App: React.FC = () => {
     const batchSize = geocodingMode === 'accurate' ? 4 : 10;
 
     for (let i = 0; i < total; i += batchSize) {
-        setStatusMessage(lang === 'ar' 
-            ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})` 
+        setStatusMessage(lang === 'ar'
+            ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})`
             : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
         );
         const chunk = pointsToExport.slice(i, i + batchSize);
@@ -893,7 +1093,7 @@ const App: React.FC = () => {
                 district = geoData.district;
               } catch (err) {}
             }
-            
+
             const lat = pt.y;
             const lon = pt.x;
             const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
@@ -920,7 +1120,7 @@ const App: React.FC = () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(results), lang === 'ar' ? "بيانات الشوارع" : "Street Data");
     XLSX.writeFile(workbook, `Streets_Analysis_${activeFile?.filename.split('.')[0] || 'Report'}.xlsx`);
-    
+
     setLoading(false);
     setStatusMessage('');
   };
@@ -929,7 +1129,7 @@ const App: React.FC = () => {
     if (!activeFile) return;
     const processData = async () => {
       let points: GeoPoint[] = [];
-      
+
       // 1. استخراج النقاط الخام بناءً على نوع الملف
       if (activeFile.type === 'excel' || activeFile.type === 'csv') {
         const xIdx = activeFile.headers?.indexOf(mapping.xColumn) ?? -1;
@@ -937,11 +1137,11 @@ const App: React.FC = () => {
         const idIdx = mapping.idColumn ? (activeFile.headers?.indexOf(mapping.idColumn) ?? -1) : -1;
         const linkIdx = mapping.linkColumn ? (activeFile.headers?.indexOf(mapping.linkColumn) ?? -1) : -1;
         const attr1Idx = mapping.attr1Column ? (activeFile.headers?.indexOf(mapping.attr1Column) ?? -1) : -1;
-        
+
         points = activeFile.data.map((row, idx) => {
           let rawX = parseFloat(row[xIdx]);
           let rawY = parseFloat(row[yIdx]);
-          
+
           if ((isNaN(rawX) || isNaN(rawY) || (rawX === 0 && rawY === 0)) && linkIdx !== -1) {
              const extracted = parseCoordinatesFromText(String(row[linkIdx]));
              if (extracted) {
@@ -964,7 +1164,7 @@ const App: React.FC = () => {
       } else if (activeFile.type === 'dxf') {
         points = extractPointsFromDXF(activeFile.data);
       } else if (activeFile.type === 'kmz') {
-        points = activeFile.data; 
+        points = activeFile.data;
       }
 
       // 2. تطبيق خيار تبديل الإحداثيات (Swap X/Y) إذا كان مفعلاً
@@ -998,7 +1198,7 @@ const App: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
-    setLoading(true); 
+    setLoading(true);
     setStatusMessage(t.parsing);
     setAutoDetected(null);
     setError(null);
@@ -1009,7 +1209,7 @@ const App: React.FC = () => {
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
       else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb')) result = await parseKMZ(selectedFile);
       else throw new Error(t.errors.unsupported);
-      
+
       setActiveFile(result);
       setDataId(`${result.filename}-${Date.now()}`);
 
@@ -1039,11 +1239,11 @@ const App: React.FC = () => {
     try {
       const result = await fetchMyMapsKML(trimmed);
       setActiveFile(result);
-      
+
       let parsedPoints: GeoPoint[] = result.data;
       setGlobalPoints(parsedPoints);
       setDataId(`mymaps-${Date.now()}`);
-      
+
       setLoading(false);
       setStatusMessage(lang === 'ar' ? 'تم جلب وتحميل الخريطة بنجاح!' : 'Map fetched and loaded successfully!');
       setTimeout(() => setStatusMessage(''), 2500);
@@ -1059,10 +1259,10 @@ const App: React.FC = () => {
     setLoading(true); setStatusMessage("جاري معالجة وتقسيم البيانات...");
     try {
       let processedPoints = [...globalPoints];
-      if (separateMulti) { 
-        let exploded: GeoPoint[] = []; 
-        processedPoints.forEach(p => exploded.push(p)); 
-        processedPoints = exploded; 
+      if (separateMulti) {
+        let exploded: GeoPoint[] = [];
+        processedPoints.forEach(p => exploded.push(p));
+        processedPoints = exploded;
       }
       if (splitIntersections) {
         processedPoints = splitLinesAtIntersections(processedPoints);
@@ -1136,26 +1336,26 @@ const App: React.FC = () => {
             chunks.push(`</Folder>\n`);
         });
         chunks.push(kmlFooter);
-        const zip = new JSZip(); 
+        const zip = new JSZip();
         const blobKML = new Blob(chunks, { type: "application/vnd.google-earth.kml+xml" });
-        zip.file("doc.kml", blobKML); 
-        const blob = await zip.generateAsync({ type: "blob", compression: globalPoints.length < 100000 ? "DEFLATE" : "STORE" }); 
+        zip.file("doc.kml", blobKML);
+        const blob = await zip.generateAsync({ type: "blob", compression: globalPoints.length < 100000 ? "DEFLATE" : "STORE" });
         downloadBlob(blob, `${docName}_Split.kmz`);
       } else {
         const zip = new JSZip();
-        for (const g of groups) { 
-          const kmlChunks = generateKMLChunks(g.points, g.name, { mode: 'none', keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, optimizeForMyMaps: optimizeForMyMaps }, activeFile?.headers, selectedHeaders); 
+        for (const g of groups) {
+          const kmlChunks = generateKMLChunks(g.points, g.name, { mode: 'none', keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, optimizeForMyMaps: optimizeForMyMaps }, activeFile?.headers, selectedHeaders);
           const blobKML = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
-          zip.file(`${g.name}.kml`, blobKML); 
+          zip.file(`${g.name}.kml`, blobKML);
         }
-        const blob = await zip.generateAsync({ type: "blob", compression: globalPoints.length < 100000 ? "DEFLATE" : "STORE" }); 
+        const blob = await zip.generateAsync({ type: "blob", compression: globalPoints.length < 100000 ? "DEFLATE" : "STORE" });
         downloadBlob(blob, `${docName}_Split_Files.zip`);
       }
-    } catch (e: any) { 
+    } catch (e: any) {
         console.error("Split Export Error:", e);
-        setError(e.message); 
-    } finally { 
-        setLoading(false); 
+        setError(e.message);
+    } finally {
+        setLoading(false);
     }
   };
 
@@ -1174,8 +1374,8 @@ const App: React.FC = () => {
   };
 
   const executeWithStreetFetching = async (
-    points: GeoPoint[], 
-    headers: string[] | undefined, 
+    points: GeoPoint[],
+    headers: string[] | undefined,
     action: () => Promise<void> | void
   ) => {
     const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'streetname', 'district', 'الحي'].includes(h.toLowerCase()));
@@ -1185,8 +1385,8 @@ const App: React.FC = () => {
       const batchSize = geocodingMode === 'accurate' ? 4 : 10;
 
       for (let i = 0; i < total; i += batchSize) {
-          setStatusMessage(lang === 'ar' 
-              ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})` 
+          setStatusMessage(lang === 'ar'
+              ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})`
               : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
           );
           const chunk = points.slice(i, i + batchSize);
@@ -1210,7 +1410,7 @@ const App: React.FC = () => {
               if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
               if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
               if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-              
+
               const matchDistrict = headers.find(h => h.toLowerCase() === 'district');
               const matchArabicDistrict = headers.find(h => h === 'الحي');
               if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
@@ -1225,7 +1425,7 @@ const App: React.FC = () => {
 
   const handleFetchStreets = async () => {
     let areaToQuery = selectedArea;
-    
+
     if (!areaToQuery && globalPoints.length > 0) {
       const allPathPoints: {x: number, y: number}[] = [];
       globalPoints.forEach(p => {
@@ -1235,18 +1435,18 @@ const App: React.FC = () => {
       areaToQuery = calculateBoundingBox(allPathPoints);
     }
 
-    if (!areaToQuery) { 
-      setError(lang === 'ar' ? "يرجى رسم منطقة أو رفع ملف هندسي أولاً." : "Please draw an area or upload engineering data first."); 
-      return; 
+    if (!areaToQuery) {
+      setError(lang === 'ar' ? "يرجى رسم منطقة أو رفع ملف هندسي أولاً." : "Please draw an area or upload engineering data first.");
+      return;
     }
 
-    setLoading(true); 
+    setLoading(true);
     setStatusMessage(lang === 'ar' ? "جاري جلب بيانات الشوارع..." : "Fetching streets...");
-    
-    try { 
+
+    try {
       const buffered = bufferPolygon(areaToQuery, plannerBuffer);
-      let streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters); 
-      
+      let streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
+
       if (plannerSplitIntersections) {
         streets = splitLinesAtIntersections(streets);
       }
@@ -1271,14 +1471,14 @@ const App: React.FC = () => {
         streets = splitResults;
       }
 
-      setPlannedStreets(streets); 
+      setPlannedStreets(streets);
       setDataId(`streets-${Date.now()}`);
-      setStatusMessage(`تم جلب ${streets.length} شارع بنجاح.`); 
-      setTimeout(() => setStatusMessage(''), 3000); 
-    } catch (e: any) { 
-      setError(e.message); 
-    } finally { 
-      setLoading(false); 
+      setStatusMessage(`تم جلب ${streets.length} شارع بنجاح.`);
+      setTimeout(() => setStatusMessage(''), 3000);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1292,11 +1492,11 @@ const App: React.FC = () => {
         if (fName.endsWith('.kmz') || fName.endsWith('.kml')) result = await parseKMZ(selectedFile);
         else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
         else throw new Error(t.errors.unsupported);
-        let pts: GeoPoint[] = []; 
-        if (result.type === 'kmz') pts = result.data; 
+        let pts: GeoPoint[] = [];
+        if (result.type === 'kmz') pts = result.data;
         else if (result.type === 'dxf') pts = extractPointsFromDXF(result.data);
         const poly = pts.find(p => p.type === 'Polygon' || p.type === 'LineString');
-        if (poly && poly.path) { 
+        if (poly && poly.path) {
           if (activeTab === 'splitter' && splitMode === 'spatial') {
             const newPoly: SplitPolygon = {
               id: `poly-${Date.now()}`,
@@ -1306,11 +1506,11 @@ const App: React.FC = () => {
             };
             setSplitPolygons([...splitPolygons, newPoly]);
           } else {
-            setSelectedArea(poly.path); 
-            setBoundaryPolygon(poly); 
+            setSelectedArea(poly.path);
+            setBoundaryPolygon(poly);
           }
           setDataId(`boundary-${Date.now()}`);
-          setStatusMessage("تم تحميل الحدود بنجاح."); 
+          setStatusMessage("تم تحميل الحدود بنجاح.");
         } else throw new Error(t.errors.noBoundaryInKml);
     } catch (err: any) { setError(err.message); } finally { setLoading(false); setTimeout(() => setStatusMessage(''), 3000); }
   };
@@ -1343,7 +1543,7 @@ const App: React.FC = () => {
             <GitBranch className="w-5 h-5 text-accent transform rotate-90" />
             <h3 className="text-white font-black text-sm">{finalLabel}</h3>
           </div>
-          
+
           <div className="bg-black/20 p-1 rounded-xl flex gap-1 border border-white/5">
             <button
               type="button"
@@ -1378,13 +1578,13 @@ const App: React.FC = () => {
         ) : (
           <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 text-right" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
             <p className="text-[10px] text-white/50 leading-relaxed font-bold">
-              {lang === 'ar' 
-                ? 'ضع رابط خريطة Google My Maps العام (مفتوح للمشاركة) والضغط على "استيراد" لتحميل وتعديل البيانات مباشرة.' 
+              {lang === 'ar'
+                ? 'ضع رابط خريطة Google My Maps العام (مفتوح للمشاركة) والضغط على "استيراد" لتحميل وتعديل البيانات مباشرة.'
                 : 'Paste a public Google My Maps share/edit link and click "Import" to fetch and transform the data instantly.'}
             </p>
             <div className="flex gap-2">
-              <input 
-                type="text" 
+              <input
+                type="text"
                 placeholder="https://www.google.com/maps/d/edit?mid=..."
                 value={mapsLink}
                 onChange={(e) => setMapsLink(e.target.value)}
@@ -1425,8 +1625,8 @@ const App: React.FC = () => {
               <Smartphone className="w-4 h-4 animate-bounce" />
             </div>
             <span className="truncate max-w-md sm:max-w-none">
-              {lang === 'ar' 
-                ? '📱 ثبّت تطبيق GeoGIS Pro الآن على جوالك للعمل بسرعة شاشة كاملة بدون متصفح!' 
+              {lang === 'ar'
+                ? '📱 ثبّت تطبيق GeoGIS Pro الآن على جوالك للعمل بسرعة شاشة كاملة بدون متصفح!'
                 : '📱 Install GeoGIS Pro app on your phone for ultra-fast full-screen performance!'}
             </span>
           </div>
@@ -1492,8 +1692,8 @@ const App: React.FC = () => {
                      <p className="text-[10px] text-accent font-black uppercase mt-1 tracking-widest">{theme === 'nwc' ? t.themeNWC : t.subTitle}</p>
                    </div>
                    <div className="flex items-center gap-2">
-                     <button 
-                       onClick={() => setShowInstallModal(true)} 
+                     <button
+                       onClick={() => setShowInstallModal(true)}
                        className="px-2.5 py-1.5 bg-accent/20 hover:bg-accent/30 border border-accent/40 text-accent rounded-xl text-[10px] font-black transition-all flex items-center gap-1.5 shadow-sm active:scale-95"
                        title={lang === 'ar' ? 'تثبيت التطبيق على الجوال' : 'Install Mobile App'}
                      >
@@ -1508,7 +1708,7 @@ const App: React.FC = () => {
                    </div>
                 </div>
            </div>
-           
+
            <div className="flex-1 overflow-y-auto custom-scrollbar px-10 pb-8 pt-4">
                 {error && (<div className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-in slide-in-from-top"><X className="w-4 h-4 text-red-400 shrink-0 mt-1 cursor-pointer" onClick={() => setError(null)} /><p className="text-[10px] text-red-400 font-bold leading-relaxed">{error}</p></div>)}
 
@@ -1538,7 +1738,7 @@ const App: React.FC = () => {
                                         ))}
                                     </div>
                                 )}
-                                
+
                                 {/* Column Selector checklist */}
                                 {activeFile.headers && activeFile.headers.length > 0 && (
                                     <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4 animate-in slide-in-from-bottom">
@@ -1551,22 +1751,22 @@ const App: React.FC = () => {
                                                 {selectedHeaders.length} / {activeFile.headers.length}
                                             </span>
                                         </div>
-                                        
+
                                         <p className="text-[9px] text-white/40 leading-relaxed font-bold">
                                             {lang === 'ar' ? 'اختر الأعمدة التي ترغب بدمجها وظهورها في العناصر المصدرة.' : 'Select the columns you want to merge and include in your exported files.'}
                                         </p>
 
                                         <div className="flex gap-2">
-                                            <button 
+                                            <button
                                                 type="button"
-                                                onClick={() => setSelectedHeaders(Array.from(new Set([...(activeFile.headers || []), ...defaultFields])))} 
+                                                onClick={() => setSelectedHeaders(Array.from(new Set([...(activeFile.headers || []), ...defaultFields])))}
                                                 className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg hover:bg-accent/30 text-[9px] font-black transition-all"
                                             >
                                                 {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
                                             </button>
-                                            <button 
+                                            <button
                                                 type="button"
-                                                onClick={() => setSelectedHeaders([])} 
+                                                onClick={() => setSelectedHeaders([])}
                                                 className="px-3 py-1.5 bg-white/5 text-white/60 rounded-lg hover:bg-white/10 text-[9px] font-black transition-all"
                                             >
                                                 {lang === 'ar' ? 'إلغاء التحديد' : 'Deselect All'}
@@ -1617,43 +1817,43 @@ const App: React.FC = () => {
                                                 <h3 className="text-white font-black text-sm">{lang === 'ar' ? 'خيارات مجلدات الملف (التقسيم داخل الملف)' : 'File Folder Grouping Options'}</h3>
                                             </div>
                                         </div>
-                                        
+
                                         <p className="text-[9px] text-white/40 leading-relaxed font-bold">
                                             {lang === 'ar' ? 'اختر طريقة لتجميع العناصر وتقسيمها داخل ملف الـ KMZ كـ مجلدات منفصلة.' : 'Choose how to group and catalog elements into separate folders within the KMZ file.'}
                                         </p>
 
                                         <div className="grid grid-cols-3 gap-2">
-                                            <button 
+                                            <button
                                                 type="button"
-                                                onClick={() => setGroupingMode('none')} 
+                                                onClick={() => setGroupingMode('none')}
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
-                                                    groupingMode === 'none' 
-                                                        ? "bg-accent text-primary border-accent" 
+                                                    groupingMode === 'none'
+                                                        ? "bg-accent text-primary border-accent"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
                                                 {lang === 'ar' ? 'بدون مجلدات' : 'No Folders'}
                                             </button>
-                                            <button 
+                                            <button
                                                 type="button"
-                                                onClick={() => setGroupingMode('layer')} 
+                                                onClick={() => setGroupingMode('layer')}
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
-                                                    groupingMode === 'layer' 
-                                                        ? "bg-accent text-primary border-accent" 
+                                                    groupingMode === 'layer'
+                                                        ? "bg-accent text-primary border-accent"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
                                                 {lang === 'ar' ? 'حسب الطبقة' : 'By Layer'}
                                             </button>
-                                            <button 
+                                            <button
                                                 type="button"
-                                                onClick={() => setGroupingMode('column')} 
+                                                onClick={() => setGroupingMode('column')}
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
-                                                    groupingMode === 'column' 
-                                                        ? "bg-accent text-primary border-accent" 
+                                                    groupingMode === 'column'
+                                                        ? "bg-accent text-primary border-accent"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
@@ -1666,9 +1866,9 @@ const App: React.FC = () => {
                                                 <label className="text-[9px] font-black text-white/30 uppercase px-2">
                                                     {lang === 'ar' ? 'اختر العمود للتقسيم بناءً عليه' : 'Select Column to Group By'}
                                                 </label>
-                                                <select 
-                                                    value={groupByColumnSelect} 
-                                                    onChange={(e) => setGroupByColumnSelect(e.target.value)} 
+                                                <select
+                                                    value={groupByColumnSelect}
+                                                    onChange={(e) => setGroupByColumnSelect(e.target.value)}
                                                     className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-3 text-[10px] font-black text-white outline-none"
                                                 >
                                                     {activeFile.headers.map(h => (
@@ -1684,26 +1884,26 @@ const App: React.FC = () => {
                                                     {lang === 'ar' ? 'نمط التصدير والتجميع' : 'Export and Grouping Format'}
                                                 </label>
                                                 <div className="grid grid-cols-2 gap-2">
-                                                    <button 
+                                                    <button
                                                         type="button"
-                                                        onClick={() => setConverterExportAsZip(false)} 
+                                                        onClick={() => setConverterExportAsZip(false)}
                                                         className={cn(
                                                             "px-2 py-2.5 rounded-lg text-[9px] font-black transition-all border flex items-center justify-center gap-1.5",
-                                                            !converterExportAsZip 
-                                                                ? "bg-accent/15 text-accent border-accent/20" 
+                                                            !converterExportAsZip
+                                                                ? "bg-accent/15 text-accent border-accent/20"
                                                                 : "bg-white/5 text-white/50 border-white/10 hover:bg-white/10"
                                                         )}
                                                     >
                                                         <MapIcon className="w-3.5 h-3.5 text-accent/80" />
                                                         {lang === 'ar' ? 'ملف KMZ موحد' : 'Single KMZ File'}
                                                     </button>
-                                                    <button 
+                                                    <button
                                                         type="button"
-                                                        onClick={() => setConverterExportAsZip(true)} 
+                                                        onClick={() => setConverterExportAsZip(true)}
                                                         className={cn(
                                                             "px-2 py-2.5 rounded-lg text-[9px] font-black transition-all border flex items-center justify-center gap-1.5",
-                                                            converterExportAsZip 
-                                                                ? "bg-accent/15 text-accent border-accent/20" 
+                                                            converterExportAsZip
+                                                                ? "bg-accent/15 text-accent border-accent/20"
                                                                 : "bg-white/5 text-white/50 border-white/10 hover:bg-white/10"
                                                         )}
                                                     >
@@ -1713,14 +1913,14 @@ const App: React.FC = () => {
                                                 </div>
                                             </div>
                                         )}
-                                        
+
                                         {/* خيار تحسين خرائط جوجل My Maps لمنع التكرار */}
                                         <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between mt-3 animate-in fade-in duration-200">
                                             <div>
                                                 <h4 className="text-white font-black text-xs">{lang === 'ar' ? 'تحسين لخرائط Google My Maps' : 'Optimize for Google My Maps'}</h4>
                                                 <p className="text-white/50 text-[9px] mt-1">{lang === 'ar' ? 'إزالة جدول الوصف لمنع تكرار البيانات في لوحة My Maps.' : 'Remove description table to prevent duplication in My Maps panel.'}</p>
                                             </div>
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={() => setOptimizeForMyMaps(!optimizeForMyMaps)}
                                                 className={cn(
@@ -1740,7 +1940,7 @@ const App: React.FC = () => {
                                                 <h4 className="text-white font-black text-xs">{lang === 'ar' ? 'الاحتفاظ بالبيانات الأصلية والصور' : 'Retain Original Data & Images'}</h4>
                                                 <p className="text-white/50 text-[9px] mt-1">{lang === 'ar' ? 'استخدام الوصف والمظهر الأصليين والوسائط من الملف المصدر مباشرة.' : 'Use original description, styling, and media directly from the source file.'}</p>
                                             </div>
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={() => setKeepOriginalDescription(!keepOriginalDescription)}
                                                 className={cn(
@@ -1760,7 +1960,7 @@ const App: React.FC = () => {
                                                 <h4 className="text-white font-black text-xs">{lang === 'ar' ? 'إزالة الصور فقط' : 'Remove Images Only'}</h4>
                                                 <p className="text-white/50 text-[9px] mt-1">{lang === 'ar' ? 'حذف جميع الصور والوسائط من داخل منطاد الوصف في ملف KML.' : 'Delete all images and media from inside the description balloon in the KML file.'}</p>
                                             </div>
-                                            <button 
+                                            <button
                                                 type="button"
                                                 onClick={() => setRemoveImagesOnly(!removeImagesOnly)}
                                                 className={cn(
@@ -1778,7 +1978,7 @@ const App: React.FC = () => {
                                 )}
 
                                 <div className="grid grid-cols-1 gap-4 mt-4">
-                                    <button 
+                                    <button
                                         onClick={() => {
                                             executeWithStreetFetching(globalPoints, selectedHeaders, () => {
                                                 if (converterExportAsZip && groupingMode !== 'none') {
@@ -1787,17 +1987,17 @@ const App: React.FC = () => {
                                                     downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
                                                 }
                                             });
-                                        }} 
+                                        }}
                                         className="bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:brightness-110 active:scale-95 transition-all w-full"
                                     >
-                                      {converterExportAsZip && groupingMode !== 'none' ? <Archive className="w-5 h-5" /> : <Download className="w-5 h-5" />} 
+                                      {converterExportAsZip && groupingMode !== 'none' ? <Archive className="w-5 h-5" /> : <Download className="w-5 h-5" />}
                                       {converterExportAsZip && groupingMode !== 'none'
                                         ? (lang === 'ar' ? 'تصدير كمجلد مضغوط (ZIP)' : 'Export as Zipped Folders (ZIP)')
                                         : (lang === 'ar' ? 'تصدير Google Earth (KMZ)' : 'Export Google Earth (KMZ)')
                                       }
                                     </button>
                                     <button onClick={() => executeWithStreetFetching(globalPoints, selectedHeaders, downloadExcelAnalysis)} className="bg-white/5 border border-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:bg-white/10 active:scale-95 transition-all w-full">
-                                      <FileSpreadsheet className="w-5 h-5 text-green-500" /> 
+                                      <FileSpreadsheet className="w-5 h-5 text-green-500" />
                                       {lang === 'ar' ? 'تصدير إكسل شامل' : 'Full Excel Export'}
                                     </button>
                                 </div>
@@ -1825,8 +2025,8 @@ const App: React.FC = () => {
 
                            <GeocodingModeSelector mode={geocodingMode} setMode={setGeocodingMode} lang={lang} />
 
-                           <button 
-                             onClick={handleReverseGeocodeGlobal} 
+                           <button
+                             onClick={handleReverseGeocodeGlobal}
                              className="w-full bg-[#0b2d3d] border-2 border-accent/40 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-xs group"
                            >
                               <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
@@ -1839,7 +2039,7 @@ const App: React.FC = () => {
 
                       <div className="p-8 bg-[#0b2d3d]/40 rounded-[2.5rem] border border-white/5 shadow-2xl text-center space-y-4">
                           <h2 className="text-white font-black text-sm tracking-tight leading-tight uppercase tracking-widest">{lang === 'ar' ? 'استخراج بيانات من الخريطة' : 'Extract Map Data'}</h2>
-                          
+
                           <div className="grid grid-cols-2 gap-3">
                               <button onClick={() => setIsDrawingMode(!isDrawingMode)} className={cn("p-4 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 transition-all border shadow-lg group", isDrawingMode ? "bg-accent text-primary border-accent" : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10")}><Navigation className={cn("w-5 h-5 transition-transform group-hover:scale-110", isDrawingMode ? "text-primary" : "text-white/40")} /><span className="leading-tight">{lang === 'ar' ? "ارسم مضلع" : "Draw Polygon"}</span></button>
                               <label className="p-4 bg-white/5 text-white/80 border border-white/10 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 hover:bg-white/10 transition-all shadow-lg cursor-pointer group"><input type="file" className="hidden" onChange={handleBoundaryUpload} /><FileUp className="w-5 h-5 text-accent/60 group-hover:text-accent transition-colors" /><span className="leading-tight text-center">{lang === 'ar' ? 'رفع حدود' : 'Upload Boundary'}</span></label>
@@ -1847,7 +2047,7 @@ const App: React.FC = () => {
 
                           <button onClick={handleFetchStreets} disabled={!selectedArea && globalPoints.length === 0} className={cn("w-full py-5 rounded-2xl flex items-center justify-center gap-4 shadow-2xl transition-all font-black text-sm group", (selectedArea || globalPoints.length > 0) ? "bg-accent/10 border-2 border-accent/20 text-accent hover:bg-accent hover:text-primary" : "bg-[#0e3f53]/50 border border-white/5 text-white/20 cursor-not-allowed")}><RefreshCw className={cn("w-6 h-6", (selectedArea || globalPoints.length > 0) ? "animate-spin-slow" : "")} /><span>{lang === 'ar' ? 'جلب شوارع المنطقة المحيطة' : 'Fetch Surrounding Streets'}</span></button>
                       </div>
-                      
+
                       <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
                           <div className="flex items-center gap-2 mb-2">
                               <Settings2 className="w-4 h-4 text-accent" />
@@ -1868,13 +2068,13 @@ const App: React.FC = () => {
                                   { id: 'residential', label: t.typeResidential, color: '#10b981' },
                                   { id: 'service', label: t.typeService, color: '#10b981' }
                                 ].map(type => (
-                                  <button 
-                                    key={type.id} 
+                                  <button
+                                    key={type.id}
                                     onClick={() => toggleStreetType(type.id)}
                                     className={cn(
                                       "px-3 py-1.5 rounded-full text-[9px] font-black border transition-all flex items-center gap-1.5",
-                                      streetTypeFilters.includes(type.id) 
-                                        ? "bg-accent/20 border-accent text-accent" 
+                                      streetTypeFilters.includes(type.id)
+                                        ? "bg-accent/20 border-accent text-accent"
                                         : "bg-white/5 border-white/10 text-white/30 hover:text-white/60"
                                     )}
                                   >
@@ -1884,7 +2084,7 @@ const App: React.FC = () => {
                                 ))}
                              </div>
                           </div>
-                          
+
                           <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
                               <div className="flex flex-col gap-1">
                                   <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'قص الشوارع عند الحدود' : 'Clip to Boundary'}</span>
@@ -1903,12 +2103,12 @@ const App: React.FC = () => {
                                   </div>
                                   <span className="text-xs font-black text-accent">{plannerBuffer}m</span>
                               </div>
-                              <input 
-                                  type="range" 
-                                  min="0" max="500" step="50" 
-                                  value={plannerBuffer} 
-                                  onChange={(e) => setPlannerBuffer(parseInt(e.target.value))} 
-                                  className="w-full accent-accent h-1 bg-white/10 rounded-full cursor-pointer" 
+                              <input
+                                  type="range"
+                                  min="0" max="500" step="50"
+                                  value={plannerBuffer}
+                                  onChange={(e) => setPlannerBuffer(parseInt(e.target.value))}
+                                  className="w-full accent-accent h-1 bg-white/10 rounded-full cursor-pointer"
                               />
                           </div>
 
@@ -1949,12 +2149,12 @@ const App: React.FC = () => {
                                         <span className="text-[10px] font-bold text-accent">{lang === 'ar' ? 'م' : 'm'}</span>
                                       </div>
                                   </div>
-                                  <input 
-                                      type="range" 
-                                      min="10" max="1000" step="10" 
-                                      value={Math.min(plannerMaxLen, 1000)} 
-                                      onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))} 
-                                      className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer" 
+                                  <input
+                                      type="range"
+                                      min="10" max="1000" step="10"
+                                      value={Math.min(plannerMaxLen, 1000)}
+                                      onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))}
+                                      className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
                                   />
                                   <div className="flex flex-wrap gap-1 pt-0.5">
                                     {[10, 20, 50, 100, 200, 500, 1000].map((val) => (
@@ -1964,8 +2164,8 @@ const App: React.FC = () => {
                                         onClick={() => setPlannerMaxLen(val)}
                                         className={cn(
                                           "px-2 py-0.5 rounded-lg text-[9px] font-bold transition-all border",
-                                          plannerMaxLen === val 
-                                            ? "bg-accent text-primary border-accent shadow-md font-black scale-105" 
+                                          plannerMaxLen === val
+                                            ? "bg-accent text-primary border-accent shadow-md font-black scale-105"
                                             : "bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white"
                                         )}
                                       >
@@ -1976,7 +2176,7 @@ const App: React.FC = () => {
                               </div>
                           )}
                       </div>
-                      
+
                       {(plannedStreets.length > 0 || globalPoints.length > 0) && (
                         <div className="space-y-4 animate-in slide-in-from-bottom pb-10">
                             <div className="bg-white/5 p-6 rounded-3xl border border-white/5 space-y-3">
@@ -2000,7 +2200,7 @@ const App: React.FC = () => {
                   <div className="space-y-6 animate-in fade-in duration-500 pb-10">
                       <div className="p-10 bg-[#0b2d3d]/60 rounded-[3rem] border border-accent/20 shadow-2xl text-center space-y-4 relative overflow-hidden">
                           <div className="absolute top-4 right-4 flex items-center gap-2">
-                              <button 
+                              <button
                                 type="button"
                                 onClick={() => { setActiveFile(null); setGlobalPoints([]); setPlannedStreets([]); setUploadSourceMode('link'); }}
                                 title={lang === 'ar' ? 'استيراد رابط Google My Maps جديد' : 'Import new Google My Maps link'}
@@ -2027,13 +2227,13 @@ const App: React.FC = () => {
                               </div>
                               <span className="text-[10px] font-black text-accent bg-accent/20 px-2 py-0.5 rounded-full">{mergeThreshold}</span>
                            </div>
-                           <input 
-                              type="range" 
-                              min="0" 
-                              max="150" 
-                              step="5" 
-                              value={mergeThreshold} 
-                              onChange={(e) => setMergeThreshold(parseInt(e.target.value))} 
+                           <input
+                              type="range"
+                              min="0"
+                              max="150"
+                              step="5"
+                              value={mergeThreshold}
+                              onChange={(e) => setMergeThreshold(parseInt(e.target.value))}
                               className="w-full accent-accent h-1.5 bg-accent/10 rounded-full cursor-pointer"
                            />
                            <div className="flex justify-between text-[8px] font-black text-white/40 uppercase tracking-widest">
@@ -2097,8 +2297,8 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
                                 <p className="text-[9.5px] font-bold text-white/50 text-center leading-relaxed pt-1">
-                                    {lang === 'ar' 
-                                        ? '💡 يتم حساب الأطوال والإحصائيات وتصنيف الألوان للمسارات والشبكات فقط (Lines/LineString). تم استبعاد النقاط والمضلعات تلقائياً من تحليلات الأطوال.' 
+                                    {lang === 'ar'
+                                        ? '💡 يتم حساب الأطوال والإحصائيات وتصنيف الألوان للمسارات والشبكات فقط (Lines/LineString). تم استبعاد النقاط والمضلعات تلقائياً من تحليلات الأطوال.'
                                         : '💡 Lengths and color analytics are calculated strictly for line features (LineString). Points and Polygons are excluded from length metrics.'}
                                 </p>
                             </div>
@@ -2157,40 +2357,121 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
                             </div>
-                            
-                            {/* Spatial Overlap Detection */}
-                            <div className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 animate-in slide-in-from-bottom duration-700">
+
+                            {/* Spatial Overlap & Duplicate Matching Detection */}
+                            <div className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-5 animate-in slide-in-from-bottom duration-700">
                                 <div className="flex items-center gap-2 border-b border-white/5 pb-2">
                                     <AlertTriangle className="w-4 h-4 text-accent" />
                                     <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
-                                        {lang === 'ar' ? 'فحص التداخل المكاني' : 'Spatial Overlap Detection'}
+                                        {lang === 'ar' ? 'فحص ومعالجة التطابق والتداخل' : 'Spatial Matching & Intersection Control'}
                                     </h3>
                                 </div>
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={() => {
-                                            const pointsToCheck = !activeFile ? plannedStreets : globalPoints;
-                                            const overlaps = detectSpatialOverlap(pointsToCheck);
-                                            setOverlapResults(overlaps);
-                                            setShowOverlapModal(true);
-                                        }}
-                                        className="flex-1 bg-accent/10 hover:bg-accent/20 text-accent font-black py-3 rounded-2xl transition-all border border-accent/20 text-xs flex items-center justify-center gap-2"
-                                    >
-                                        <Sparkles className="w-4 h-4" />
-                                        {lang === 'ar' ? 'فحص التطابق والتداخل' : 'Check for Spatial Overlaps'}
-                                    </button>
-                                    {overlapResults && (
+
+                                {/* Section 1: التطابق (خط فوق خط) */}
+                                <div className="p-4 bg-black/20 rounded-2xl border border-white/5 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[11px] font-black text-amber-400 flex items-center gap-1.5">
+                                            <span>⬛</span>
+                                            {lang === 'ar' ? '1. التطابق (وجود عنصر خط فوق خط):' : '1. Matching Duplicates (Line on Line):'}
+                                        </span>
+                                    </div>
+
+                                    {/* Duplicate Tolerance Distance Input */}
+                                    <div className="flex items-center justify-between gap-2 bg-black/30 p-2.5 rounded-xl border border-white/10 text-[11px]">
+                                        <span className="text-white/80 font-bold">
+                                            {lang === 'ar' ? 'مقياس تحمل التطابق (متر):' : 'Matching Scale / Tolerance (Meters):'}
+                                        </span>
+                                        <div className="flex items-center gap-1">
+                                            <input
+                                                type="number"
+                                                min="0.1"
+                                                max="500"
+                                                step="0.5"
+                                                value={duplicateTolerance}
+                                                onChange={(e) => {
+                                                    const val = Math.max(0.1, parseFloat(e.target.value) || 5);
+                                                    setDuplicateTolerance(val);
+                                                    localStorage.setItem('duplicateTolerance', JSON.stringify(val));
+                                                }}
+                                                className="w-20 px-2 py-1 bg-white/10 text-amber-300 font-black rounded-lg text-center border border-white/15 focus:outline-none focus:border-amber-400"
+                                            />
+                                            <span className="text-white/50 font-bold">m</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                                         <button
-                                            onClick={() => {
-                                                setOverlapResults(null);
-                                            }}
-                                            className="px-4 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-black rounded-2xl transition-all border border-red-500/20 flex items-center justify-center"
-                                            title={lang === 'ar' ? 'مسح التمييز' : 'Clear Highlights'}
+                                            onClick={handleCheckDuplicates}
+                                            className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 font-black py-2.5 px-3 rounded-xl transition-all border border-amber-500/20 text-[11px] flex items-center justify-center gap-1.5"
+                                        >
+                                            <Search className="w-3.5 h-3.5" />
+                                            {lang === 'ar' ? 'فحص التطابق' : 'Check Duplicates'}
+                                        </button>
+                                        <button
+                                            onClick={handleColorDuplicatesBlack}
+                                            className="bg-slate-900 hover:bg-black text-white font-black py-2.5 px-3 rounded-xl transition-all border border-white/20 text-[11px] flex items-center justify-center gap-1.5 shadow-md"
+                                            title={lang === 'ar' ? 'تلوين الخطوط المتطابقة باللون الأسود' : 'Color matching duplicate lines black'}
+                                        >
+                                            <Palette className="w-3.5 h-3.5 text-white" />
+                                            {lang === 'ar' ? 'تلوين بالأسود ⬛' : 'Color Black ⬛'}
+                                        </button>
+                                        <button
+                                            onClick={handleResolveDuplicates}
+                                            className="bg-red-500/10 hover:bg-red-500/20 text-red-400 font-black py-2.5 px-3 rounded-xl transition-all border border-red-500/20 text-[11px] flex items-center justify-center gap-1.5"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                            {lang === 'ar' ? 'حذف المتطابقة 🗑️' : 'Delete Duplicates'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                 {/* Section 2: تقاطعات الخطوط (نقاط العبور والتلاقي) */}
+                                <div className="p-4 bg-black/20 rounded-2xl border border-white/5 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[11px] font-black text-cyan-400 flex items-center gap-1.5">
+                                            <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
+                                            {lang === 'ar' ? '2. تقاطعات الخطوط (نقاط العبور والتلاقي):' : '2. Line Intersections (Crossing Junctions):'}
+                                        </span>
+                                    </div>
+                                    <p className="text-[10px] text-white/60 leading-relaxed">
+                                        {lang === 'ar' ? 'فحص الخطوط التي تتقاطع وتتلاقى عند نقطة عبور (مستقل تماماً عن التطابق).' : 'Check lines that intersect at crossing points (completely independent from duplicates).'}
+                                    </p>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <button
+                                            onClick={handleCheckIntersections}
+                                            className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 font-black py-2.5 px-3 rounded-xl transition-all border border-cyan-500/20 text-[11px] flex items-center justify-center gap-1.5"
+                                        >
+                                            <Search className="w-3.5 h-3.5" />
+                                            {lang === 'ar' ? 'فحص التقاطعات' : 'Check Intersections'}
+                                        </button>
+                                        <button
+                                            onClick={handleTrimIntersections}
+                                            className="bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 font-black py-2.5 px-3 rounded-xl transition-all border border-blue-500/20 text-[11px] flex items-center justify-center gap-1.5"
+                                        >
+                                            <Scissors className="w-3.5 h-3.5" />
+                                            {lang === 'ar' ? 'تقليم عند التقاطعات ✂️' : 'Trim Intersections ✂️'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {overlapResults && (
+                                    <div className="flex items-center justify-between gap-2 pt-1">
+                                        <button
+                                            onClick={handleResolveDuplicates}
+                                            className="flex-1 bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30 font-black py-2.5 px-4 rounded-xl transition-all text-xs flex items-center justify-center gap-2 shadow-lg"
                                         >
                                             <Trash2 className="w-4 h-4" />
+                                            {lang === 'ar' ? 'حذف العناصر المتطابقة 🗑️' : 'Delete Duplicates 🗑️'}
                                         </button>
-                                    )}
-                                </div>
+                                        <button
+                                            onClick={() => setOverlapResults(null)}
+                                            className="px-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-black rounded-xl transition-all border border-red-500/20 flex items-center justify-center py-2.5"
+                                            title={lang === 'ar' ? 'مسح النتائج' : 'Clear Results'}
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                )}
                             </div>
 
                             {/* W_MAINLINE Geodatabase Layer Metrics Card */}
@@ -2442,7 +2723,7 @@ const App: React.FC = () => {
                       )}
                   </div>
                 )}
-                
+
                 {activeTab === 'analyzer' && !activeFile && plannedStreets.length === 0 && (
                   <div className="space-y-6 animate-in fade-in duration-500">
                     <div className="flex bg-[#0b2d3d]/80 p-1.5 rounded-2xl border border-white/10 shadow-xl">
@@ -2493,13 +2774,13 @@ const App: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-[10px] text-white/60 leading-relaxed font-bold">
-                          {lang === 'ar' 
-                            ? 'ضع رابط خريطة Google My Maps العام (مفتوح للمشاركة) وسيقوم محلل الأطوال بقراءة وتصنيف كافة الأطوال والمسارات والشبكات تلقائياً.' 
+                          {lang === 'ar'
+                            ? 'ضع رابط خريطة Google My Maps العام (مفتوح للمشاركة) وسيقوم محلل الأطوال بقراءة وتصنيف كافة الأطوال والمسارات والشبكات تلقائياً.'
                             : 'Paste a public Google My Maps share/edit link to automatically parse and calculate path lengths, color groups, and network metrics.'}
                         </p>
                         <div className="flex gap-2">
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             placeholder="https://www.google.com/maps/d/edit?mid=1yR93XqrI2xr7_dJKERGz0FfxHQxlwt4..."
                             value={mapsLink}
                             onChange={(e) => setMapsLink(e.target.value)}
@@ -2531,7 +2812,7 @@ const App: React.FC = () => {
                           {lang === 'ar' ? 'قم برفع قاعدة البيانات الجغرافية .gdb كملف مضغوط .zip، أو قم ببدء التجربة الفورية لنموذج مجهز.' : 'Upload your .gdb folder inside a .zip file, or test with our preconfigured Riyadh dataset.'}
                         </p>
                       </div>
-                      <button 
+                      <button
                         onClick={handleLoadSampleGDB}
                         className="w-full bg-[#0b2d3d] hover:bg-accent hover:text-primary text-accent border border-accent/20 font-black py-4 px-6 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-all text-xs group"
                       >
@@ -2563,15 +2844,15 @@ const App: React.FC = () => {
                             </p>
 
                             <GeocodingModeSelector mode={geocodingMode} setMode={setGeocodingMode} lang={lang} />
-                            
-                            <button 
-                              onClick={handleReverseGeocodeGlobal} 
+
+                            <button
+                              onClick={handleReverseGeocodeGlobal}
                               className="w-full bg-[#0e3f53] border-2 border-accent/20 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-xs group"
                             >
                                <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
                                {lang === 'ar' ? 'تحديث/جلب أسماء الشوارع للبيانات' : 'Fetch/Update Street Names'}
                             </button>
-                            
+
                             <p className="text-[10px] text-white/40 font-bold text-center">
                               {lang === 'ar' ? 'ملاحظة: إذا لم تكن البيانات تحتوي على أسماء شوارع مسبقاً، يرجى النقر على الزر أعلاه لجلبها.' : 'Note: If the data does not already have street names, please click the button above to fetch them.'}
                             </p>
@@ -2579,7 +2860,7 @@ const App: React.FC = () => {
                         ) : (
                           <div className="space-y-6">
                             <p className="text-[12px] text-accent font-black leading-relaxed text-center">{lang === 'ar' ? 'ارسم مضلعات على الخريطة. سيتم توزيع العناصر داخل كل مضلع في مجلد منفصل عند التصدير.' : 'Draw polygons on the map. Each polygon will group items into a separate folder on export.'}</p>
-                            
+
                             <div className="grid grid-cols-2 gap-3">
                               <button onClick={() => setIsDrawingMode(!isDrawingMode)} className={cn("w-full py-5 rounded-2xl font-black text-[10px] border transition-all flex flex-col items-center gap-2", isDrawingMode ? "bg-accent text-primary border-accent shadow-xl" : "bg-white/5 text-white/40 border-white/10")}><MousePointer2 className="w-5 h-5" />{isDrawingMode ? (lang === 'ar' ? 'جاري الرسم...' : 'Drawing...') : (lang === 'ar' ? 'رسم مضلع جديد' : 'Draw Polygon')}</button>
                               <label className="p-4 bg-white/5 text-white/40 border border-white/10 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 hover:bg-white/10 transition-all shadow-lg cursor-pointer group"><input type="file" className="hidden" onChange={handleBoundaryUpload} /><FileUp className="w-5 h-5 text-accent/60 group-hover:text-accent transition-colors" /><span>{lang === 'ar' ? 'استيراد حدود' : 'Import Boundaries'}</span></label>
@@ -2684,14 +2965,14 @@ const App: React.FC = () => {
                                 <span className="text-[10px] font-bold text-accent">{lang === 'ar' ? 'متر' : 'm'}</span>
                               </div>
                             </div>
-                            <input 
-                              type="range" 
-                              min="10" 
-                              max="1000" 
-                              step="10" 
-                              value={Math.min(maxLen, 1000)} 
-                              onChange={(e) => setMaxLen(parseInt(e.target.value))} 
-                              className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer" 
+                            <input
+                              type="range"
+                              min="10"
+                              max="1000"
+                              step="10"
+                              value={Math.min(maxLen, 1000)}
+                              onChange={(e) => setMaxLen(parseInt(e.target.value))}
+                              className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
                             />
                             <div className="flex flex-wrap gap-1.5 pt-1">
                               {[10, 20, 50, 100, 200, 500, 1000].map((val) => (
@@ -2701,8 +2982,8 @@ const App: React.FC = () => {
                                   onClick={() => setMaxLen(val)}
                                   className={cn(
                                     "px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all border",
-                                    maxLen === val 
-                                      ? "bg-accent text-primary border-accent shadow-md font-black scale-105" 
+                                    maxLen === val
+                                      ? "bg-accent text-primary border-accent shadow-md font-black scale-105"
                                       : "bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white"
                                   )}
                                 >
@@ -2736,7 +3017,14 @@ const App: React.FC = () => {
                 )}
 
                 {activeTab === 'attribute-formatter' && (
-                  <DataFormatter points={globalPoints} headers={activeFile?.headers} lang={lang} fetchStreets={executeWithStreetFetching} />
+                  <DataFormatter
+                    points={globalPoints}
+                    headers={activeFile?.headers}
+                    lang={lang}
+                    fetchStreets={executeWithStreetFetching}
+                    geocodingMode={geocodingMode}
+                    setGeocodingMode={setGeocodingMode}
+                  />
                 )}
                 {activeTab === 'comparator' && (
                   <FileComparator lang={lang} setGlobalPoints={setGlobalPoints} setDataId={setDataId} />
@@ -2747,14 +3035,14 @@ const App: React.FC = () => {
       </aside>
 
       <main className="flex-1 relative bg-[#0d1b24]">
-          <MapPreview 
+          <MapPreview
             globalBaseMap={globalBaseMap}
-            points={displayPoints} 
-            lang={lang} 
+            points={displayPoints}
+            lang={lang}
             dataId={dataId}
             overlapResults={overlapResults}
-            isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')} 
-            onPolygonComplete={(poly) => { 
+            isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
+            onPolygonComplete={(poly) => {
               if (activeTab === 'splitter' && splitMode === 'spatial') {
                 const newPoly: SplitPolygon = {
                   id: `poly-${Date.now()}`,
@@ -2764,15 +3052,15 @@ const App: React.FC = () => {
                 };
                 setSplitPolygons([...splitPolygons, newPoly]);
               } else {
-                setSelectedArea(poly); 
-                setBoundaryPolygon({ id: 'Selected_Area', x: poly[0].x, y: poly[0].y, type: 'Polygon', path: poly, color: '#ffffff' }); 
+                setSelectedArea(poly);
+                setBoundaryPolygon({ id: 'Selected_Area', x: poly[0].x, y: poly[0].y, type: 'Polygon', path: poly, color: '#ffffff' });
               }
-              setIsDrawingMode(false); 
-            }} 
+              setIsDrawingMode(false);
+            }}
          />
          {loading && (<div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center"><div className="text-center p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl"><Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" /><p className="text-white font-black text-lg">{statusMessage}</p></div></div>)}
-         
-         
+
+
          {showSettingsModal && (
              <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                  <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
@@ -2827,16 +3115,16 @@ const App: React.FC = () => {
                                 <div className="space-y-1.5">
                                    <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'لغة الواجهة:' : 'Interface Language:'}</label>
                                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setLang('ar')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setLang('ar')}
                                         className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", lang === 'ar' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         العربية
                                       </button>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setLang('en')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setLang('en')}
                                         className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", lang === 'en' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         English
@@ -2847,16 +3135,16 @@ const App: React.FC = () => {
                                 <div className="space-y-1.5">
                                    <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'المظهر:' : 'Theme:'}</label>
                                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setTheme('default')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setTheme('default')}
                                         className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", theme === 'default' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'الافتراضي' : 'Default'}
                                       </button>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setTheme('nwc')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setTheme('nwc')}
                                         className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", theme === 'nwc' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'شركة المياه NWC' : 'NWC Theme'}
@@ -2891,16 +3179,16 @@ const App: React.FC = () => {
                                 <div className="space-y-1.5">
                                    <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'نمط الجيودكودينغ واستدلال الشوارع:' : 'Geocoding Accuracy Mode:'}</label>
                                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setGeocodingMode('accurate')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setGeocodingMode('accurate')}
                                         className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", geocodingMode === 'accurate' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? '🎯 دقيق جداً' : '🎯 Accurate'}
                                       </button>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setGeocodingMode('fast')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setGeocodingMode('fast')}
                                         className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", geocodingMode === 'fast' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? '⚡ سريع جداً' : '⚡ Fast'}
@@ -2920,23 +3208,23 @@ const App: React.FC = () => {
                                 <div className="space-y-1.5">
                                    <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'طريقة التجميع الافتراضية:' : 'Default Grouping Mode:'}</label>
                                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setGroupingMode('layer')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setGroupingMode('layer')}
                                         className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'layer' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'حسب الطبقة' : 'By Layer'}
                                       </button>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setGroupingMode('column')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setGroupingMode('column')}
                                         className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'column' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'حسب العمود' : 'By Column'}
                                       </button>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setGroupingMode('none')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setGroupingMode('none')}
                                         className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'none' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'بدون تجميع' : 'None'}
@@ -2947,16 +3235,16 @@ const App: React.FC = () => {
                                 <div className="space-y-1.5">
                                    <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'صيغة التصدير الافتراضية (المقسم):' : 'Splitter Default Export Style:'}</label>
                                    <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setExportStyle('single')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setExportStyle('single')}
                                         className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", exportStyle === 'single' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'ملف KML موحد' : 'Single KML'}
                                       </button>
-                                      <button 
-                                        type="button" 
-                                        onClick={() => setExportStyle('zip')} 
+                                      <button
+                                        type="button"
+                                        onClick={() => setExportStyle('zip')}
                                         className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", exportStyle === 'zip' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
                                       >
                                         {lang === 'ar' ? 'أرشيف ZIP مضغوط' : 'ZIP Archive'}
@@ -2967,19 +3255,19 @@ const App: React.FC = () => {
 
                              <div className="space-y-2 pt-2 border-t border-white/5">
                                 <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white/80 hover:text-white transition-colors">
-                                   <input 
-                                     type="checkbox" 
-                                     checked={optimizeForMyMaps} 
-                                     onChange={(e) => setOptimizeForMyMaps(e.target.checked)} 
+                                   <input
+                                     type="checkbox"
+                                     checked={optimizeForMyMaps}
+                                     onChange={(e) => setOptimizeForMyMaps(e.target.checked)}
                                      className="rounded bg-black/40 border-white/20 text-accent focus:ring-accent"
                                    />
                                    <span>{lang === 'ar' ? 'تفعيل التوافق الكامل مع خرائط جوجل (Google My Maps)' : 'Optimize for Google My Maps compatibility'}</span>
                                 </label>
                                 <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white/80 hover:text-white transition-colors">
-                                   <input 
-                                     type="checkbox" 
-                                     checked={keepOriginalDescription} 
-                                     onChange={(e) => setKeepOriginalDescription(e.target.checked)} 
+                                   <input
+                                     type="checkbox"
+                                     checked={keepOriginalDescription}
+                                     onChange={(e) => setKeepOriginalDescription(e.target.checked)}
                                      className="rounded bg-black/40 border-white/20 text-accent focus:ring-accent"
                                    />
                                    <span>{lang === 'ar' ? 'الاحتفاظ بنص الوصف (Description) الأصلي في ملفات KML' : 'Keep original description content in output KML'}</span>
@@ -2999,13 +3287,13 @@ const App: React.FC = () => {
                                       <span>{lang === 'ar' ? 'مقسم KML (الحد الأقصى للطول):' : 'KML Splitter Max Length:'}</span>
                                       <span className="text-accent font-black">{maxLen}m</span>
                                    </div>
-                                   <input 
-                                     type="range" 
-                                     min="10" 
-                                     max="1000" 
-                                     step="10" 
-                                     value={Math.min(maxLen, 1000)} 
-                                     onChange={(e) => setMaxLen(parseInt(e.target.value))} 
+                                   <input
+                                     type="range"
+                                     min="10"
+                                     max="1000"
+                                     step="10"
+                                     value={Math.min(maxLen, 1000)}
+                                     onChange={(e) => setMaxLen(parseInt(e.target.value))}
                                      className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
                                    />
                                 </div>
@@ -3015,13 +3303,13 @@ const App: React.FC = () => {
                                       <span>{lang === 'ar' ? 'مخطط الشوارع (الحد الأقصى للطول):' : 'Street Planner Max Length:'}</span>
                                       <span className="text-accent font-black">{plannerMaxLen}m</span>
                                    </div>
-                                   <input 
-                                     type="range" 
-                                     min="10" 
-                                     max="1000" 
-                                     step="10" 
-                                     value={Math.min(plannerMaxLen, 1000)} 
-                                     onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))} 
+                                   <input
+                                     type="range"
+                                     min="10"
+                                     max="1000"
+                                     step="10"
+                                     value={Math.min(plannerMaxLen, 1000)}
+                                     onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))}
                                      className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
                                    />
                                 </div>
@@ -3061,9 +3349,9 @@ const App: React.FC = () => {
                              <span>{lang === 'ar' ? 'إعادة ضبط التفضيلات' : 'Reset Preferences'}</span>
                           </button>
 
-                          <button 
-                             type="button" 
-                             onClick={() => setShowSettingsModal(false)} 
+                          <button
+                             type="button"
+                             onClick={() => setShowSettingsModal(false)}
                              className="px-6 py-2.5 bg-accent hover:brightness-110 text-primary font-black text-xs rounded-xl transition-all shadow-lg"
                           >
                              {lang === 'ar' ? 'حفظ وإغلاق' : 'Save & Close'}
@@ -3078,19 +3366,60 @@ const App: React.FC = () => {
                  <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
                      <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
                          <div className="flex items-center gap-3">
-                             <AlertTriangle className="w-6 h-6 text-accent" />
-                             <h2 className="text-lg font-black text-white">{lang === 'ar' ? 'نتائج فحص التداخل' : 'Overlap Check Results'}</h2>
+                             {overlapModalType === 'duplicates' ? (
+                                 <AlertTriangle className="w-6 h-6 text-amber-400" />
+                             ) : (
+                                 <GitBranch className="w-6 h-6 text-cyan-400" />
+                             )}
+                             <div>
+                               <h2 className="text-lg font-black text-white">
+                                   {overlapModalType === 'duplicates'
+                                       ? (lang === 'ar' ? 'نتائج ومعالجة التطابق (عنصر فوق عنصر)' : 'Duplicate Matching Results')
+                                       : (lang === 'ar' ? 'نتائج ومعالجة تقاطعات الخطوط (نقاط التلاقي)' : 'Line Intersection Results')}
+                               </h2>
+                               <p className="text-[10px] text-accent font-bold mt-0.5">
+                                   {overlapModalType === 'duplicates'
+                                       ? (lang === 'ar' ? 'فحص وحذف العناصر المتطابقة والموجودة فوق بعضها تماماً' : 'Check & resolve exact duplicate elements')
+                                       : (lang === 'ar' ? 'عرض وتقليم الخطوط المتقاطعة والمتلاقية عند نقاط العبور' : 'Check & trim intersecting lines at crossing points')}
+                               </p>
+                             </div>
                          </div>
                          <div className="flex items-center gap-2">
                              {overlapResults && overlapResults.length > 0 && (
-                                 <button
-                                     onClick={() => setShowOverlapModal(false)}
-                                     className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent font-black rounded-xl transition-all text-xs border border-accent/30"
-                                 >
-                                     {lang === 'ar' ? 'عرض على الخريطة' : 'View on Map'}
-                                 </button>
+                                 <div className="flex items-center gap-2 flex-wrap">
+                                     {overlapModalType === 'duplicates' ? (
+                                         <>
+                                             <button
+                                                 onClick={handleColorDuplicatesBlack}
+                                                 className="px-3.5 py-2 bg-slate-900 hover:bg-black text-white border border-white/20 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
+                                                 title={lang === 'ar' ? 'تلوين الخطوط المتطابقة (خط فوق خط) باللون الأسود' : 'Color duplicate lines black'}
+                                             >
+                                                 <Palette className="w-4 h-4 text-white" />
+                                                 <span>{lang === 'ar' ? 'تلوين المتطابقة ⬛' : 'Color Duplicates ⬛'}</span>
+                                             </button>
+                                             <button
+                                                 onClick={handleResolveDuplicates}
+                                                 className="px-3.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
+                                                 title={lang === 'ar' ? 'حذف العناصر المتطابقة المكررة تماماً' : 'Delete duplicate elements'}
+                                             >
+                                                 <Trash2 className="w-4 h-4 text-red-400" />
+                                                 <span>{lang === 'ar' ? 'حذف المتطابقة 🗑️' : 'Delete Duplicates'}</span>
+                                             </button>
+                                         </>
+                                     ) : (
+                                         <button
+                                             onClick={handleTrimIntersections}
+                                             className="px-3.5 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
+                                             title={lang === 'ar' ? 'تقليم أطوال الخطوط عند نقاط التقاطع' : 'Trim line lengths at intersection points'}
+                                         >
+                                             <Scissors className="w-4 h-4 text-blue-400" />
+                                             <span>{lang === 'ar' ? 'تقليم عند التقاطعات ✂️' : 'Trim Intersections ✂️'}</span>
+                                         </button>
+                                     )}
+
+                                 </div>
                              )}
-                             <button 
+                             <button
                                  onClick={() => setShowOverlapModal(false)}
                                  className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
                              >
@@ -3101,36 +3430,101 @@ const App: React.FC = () => {
                      <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
                          {overlapResults.length > 0 ? (
                              <>
-                                 <div className="p-4 bg-red-500/20 border border-red-500/40 rounded-2xl flex items-start gap-3">
-                                     <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
-                                     <div>
-                                         <h3 className="text-red-400 font-bold text-sm mb-1">
-                                             {lang === 'ar' ? 'تم العثور على تداخلات!' : 'Overlaps Detected!'}
-                                         </h3>
-                                         <p className="text-red-300/70 text-xs">
-                                             {lang === 'ar' 
-                                                 ? `تم العثور على ${overlapResults.length} تطابق مكاني بين العناصر. قد يؤدي ذلك لمشاكل في عرض البيانات.`
-                                                 : `Found ${overlapResults.length} spatial overlaps between elements. This might cause rendering issues.`}
-                                         </p>
+                                 {overlapModalType === 'duplicates' ? (
+                                     <div className="p-5 bg-gradient-to-r from-red-500/20 via-red-500/10 to-transparent border border-red-500/40 rounded-2xl flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
+                                         <div className="flex items-start gap-3">
+                                             <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
+                                             <div>
+                                                 <h3 className="text-red-400 font-bold text-sm mb-1">
+                                                     {lang === 'ar' ? `تم كشف ${overlapResults.length} عنصر متطابق (خط فوق خط)!` : `Detected ${overlapResults.length} duplicate elements!`}
+                                                 </h3>
+                                                 <p className="text-red-300/80 text-xs leading-relaxed">
+                                                     {lang === 'ar'
+                                                         ? `• العناصر المتطابقة عبارة عن خطوط أو نقاط مرسومة فوق بعضها بالكامل ضمن مسافة ${duplicateTolerance}m.\n• يمكنك تلوينها باللون الأسود ⬛ لتمييزها أو حذف العناصر المكررة 🗑️.`
+                                                         : '• Duplicate elements are geometries drawn directly on top of each other.\n• You can color them black ⬛ or delete duplicate items 🗑️.'}
+                                                 </p>
+                                             </div>
+                                         </div>
+                                         <div className="flex items-center gap-2 flex-wrap shrink-0">
+                                             <button
+                                                 onClick={handleResolveDuplicates}
+                                                 className="px-3.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-black text-xs rounded-xl border border-red-500/30 transition-all shadow-md flex items-center gap-1.5 active:scale-95"
+                                             >
+                                                 <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                                 <span>{lang === 'ar' ? 'حذف المتطابقة' : 'Delete Duplicates'}</span>
+                                             </button>
+                                         </div>
                                      </div>
-                                 </div>
+                                 ) : (
+                                     <div className="p-5 bg-gradient-to-r from-cyan-500/20 via-cyan-500/10 to-transparent border border-cyan-500/40 rounded-2xl flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
+                                         <div className="flex items-start gap-3">
+                                             <GitBranch className="w-5 h-5 text-cyan-400 mt-0.5 shrink-0" />
+                                             <div>
+                                                 <h3 className="text-cyan-400 font-bold text-sm mb-1">
+                                                     {lang === 'ar' ? `تم كشف ${overlapResults.length} نقطة تقاطع بين الخطوط!` : `Detected ${overlapResults.length} line intersections!`}
+                                                 </h3>
+                                                 <p className="text-cyan-300/80 text-xs leading-relaxed">
+                                                     {lang === 'ar'
+                                                         ? '• التقاطعات عبارة عن خطوط تتلاقى وتتداخل عند نقطة عبور دون أن تكون متطابقة فوق بعضها.\n• يمكنك تقليم طول الخطوط عند نقاط التقاطع بدون حذف العناصر ✂️.'
+                                                         : '• Intersections are line elements crossing at junction points.\n• You can trim line lengths at crossing points without deleting elements ✂️.'}
+                                                 </p>
+                                             </div>
+                                         </div>
+                                         <div className="flex items-center gap-2 flex-wrap shrink-0">
+                                             <button
+                                                 onClick={handleTrimIntersections}
+                                                 className="px-3.5 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 font-black text-xs rounded-xl border border-blue-500/30 transition-all shadow-md flex items-center gap-1.5 active:scale-95"
+                                             >
+                                                 <Scissors className="w-3.5 h-3.5 text-blue-400" />
+                                                 <span>{lang === 'ar' ? 'تقليم عند التقاطعات ✂️' : 'Trim Intersections ✂️'}</span>
+                                             </button>
+                                         </div>
+                                     </div>
+                                 )}
                                  <div className="space-y-3">
                                      {overlapResults.slice(0, 50).map((overlap, idx) => (
-                                         <div key={idx} className="p-4 bg-white/5 border border-white/10 rounded-xl flex items-center justify-between">
-                                             <div className="flex items-center gap-2">
-                                                 <span className="text-[10px] font-black text-white/40 bg-white/5 px-2 py-1 rounded-md">{overlap.type}</span>
-                                                 <span className="text-sm font-bold text-white">ID: {overlap.id1}</span>
-                                                 <span className="text-white/40 mx-2">↔</span>
-                                                 <span className="text-sm font-bold text-white">ID: {overlap.id2}</span>
+                                         <div key={idx} className="p-4 bg-white/5 border border-white/10 rounded-xl flex items-center justify-between gap-3 flex-wrap">
+                                             <div className="flex flex-col gap-1">
+                                                 <div className="flex items-center gap-2">
+                                                     <span className="text-[10px] font-black text-white/40 bg-white/5 px-2 py-1 rounded-md">{overlap.type}</span>
+                                                     <span className="text-xs font-bold text-white">ID: {overlap.id1}</span>
+                                                     <span className="text-white/40 mx-1">{overlapModalType === 'duplicates' ? '↔' : '✕'}</span>
+                                                     <span className="text-xs font-bold text-white">ID: {overlap.id2}</span>
+                                                 </div>
+                                                 {overlap.intersectionPoint && (
+                                                     <span className="text-[10px] text-cyan-300/80 font-mono">
+                                                         📍 Lat: {overlap.intersectionPoint.y.toFixed(6)}, Lon: {overlap.intersectionPoint.x.toFixed(6)}
+                                                     </span>
+                                                 )}
                                              </div>
-                                             <span className="text-[10px] text-red-400 font-bold bg-red-400/10 px-2 py-1 rounded-md">
-                                                 {lang === 'ar' ? 'متطابق مكانياً' : 'Spatial Match'}
-                                             </span>
+                                             <div className="flex items-center gap-2 shrink-0">
+                                                 {overlapModalType === 'duplicates' ? (
+                                                     <>
+                                                         <span className="text-[10px] text-amber-400 font-bold bg-amber-400/10 px-2 py-1 rounded-md">
+                                                             {lang === 'ar' ? 'عنصر متطابق' : 'Duplicate'}
+                                                         </span>
+                                                         <button
+                                                             onClick={() => handleDeleteDuplicateItem(overlap.id2)}
+                                                             className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 text-[10px] font-bold rounded-lg transition-all flex items-center gap-1 active:scale-95"
+                                                             title={lang === 'ar' ? 'حذف العنصر المكرر' : 'Delete Duplicate'}
+                                                         >
+                                                             <Trash2 className="w-3 h-3" />
+                                                             <span>{lang === 'ar' ? `حذف ${overlap.id2}` : `Del ${overlap.id2}`}</span>
+                                                         </button>
+                                                     </>
+                                                 ) : (
+                                                     <>
+                                                         <span className="text-[10px] text-cyan-400 font-bold bg-cyan-400/10 px-2 py-1 rounded-md">
+                                                             {lang === 'ar' ? 'تقاطع خطوط' : 'Intersection'}
+                                                         </span>
+                                                     </>
+                                                 )}
+                                             </div>
                                          </div>
                                      ))}
                                      {overlapResults.length > 50 && (
                                          <div className="text-center p-4 text-white/40 text-xs font-bold">
-                                             {lang === 'ar' ? `و ${overlapResults.length - 50} عنصر آخر متداخل...` : `And ${overlapResults.length - 50} more overlapping elements...`}
+                                             {lang === 'ar' ? `و ${overlapResults.length - 50} عنصر آخر...` : `And ${overlapResults.length - 50} more items...`}
                                          </div>
                                      )}
                                  </div>
@@ -3141,13 +3535,21 @@ const App: React.FC = () => {
                                      <Check className="w-8 h-8 text-green-400" />
                                  </div>
                                  <h3 className="text-green-400 font-black text-xl">
-                                     {lang === 'ar' ? 'لا يوجد تداخل!' : 'No Overlaps!'}
+                                     {overlapModalType === 'duplicates'
+                                         ? (lang === 'ar' ? 'تمت المعالجة - الخريطة خالية تماماً من العناصر المتطابقة!' : 'Processed - No Duplicate Elements Remaining!')
+                                         : (lang === 'ar' ? 'تمت المعالجة - الخريطة خالية من تقاطعات الخطوط!' : 'Processed - No Line Intersections Remaining!')}
                                  </h3>
-                                 <p className="text-white/60 text-sm">
-                                     {lang === 'ar' 
-                                         ? 'جميع العناصر المكانية فريدة ولا يوجد تطابق أو تداخل تام في الإحداثيات.'
-                                         : 'All spatial elements are unique, no exact overlaps found.'}
+                                 <p className="text-white/70 text-xs max-w-md mx-auto leading-relaxed">
+                                     {lang === 'ar'
+                                         ? 'جميع العناصر المكانية الآن فريدة وخالية من المشاكل الهندسية. يمكنك إغلاق النافذة وتصدير البيانات مباشرة وبدقة عالية.'
+                                         : 'All spatial elements are now clean and unique. You can close this modal and safely export your file.'}
                                  </p>
+                                 <button
+                                     onClick={() => setShowOverlapModal(false)}
+                                     className="px-6 py-2.5 bg-accent text-primary font-black text-xs rounded-xl hover:brightness-110 transition-all shadow-lg active:scale-95"
+                                 >
+                                     {lang === 'ar' ? 'حفظ وتأكيد البيانات' : 'Confirm & Close'}
+                                 </button>
                              </div>
                          )}
                      </div>
@@ -3159,7 +3561,7 @@ const App: React.FC = () => {
              <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12 overflow-y-auto print:absolute print:inset-0 print:z-[2000] print:bg-white print:p-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                  {/* Print-friendly container */}
                  <div className="bg-gradient-to-br from-[#0c2b3a] to-[#041620] border border-accent/40 rounded-[3rem] w-full max-w-4xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden print:w-full print:max-w-none print:h-full print:max-h-none print:bg-white print:border-none print:shadow-none print:text-black">
-                     
+
                      {/* Modal Header */}
                      <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 print:hidden bg-black/20">
                          <div className="flex items-center gap-3">
@@ -3167,14 +3569,14 @@ const App: React.FC = () => {
                              <h2 className="text-lg font-black text-white">{lang === 'ar' ? 'دليل المستخدم الشامل للبرنامج' : 'Universal Map Converter User Guide'}</h2>
                          </div>
                          <div className="flex items-center gap-2">
-                             <button 
+                             <button
                                  onClick={() => window.print()}
                                  className="px-4 py-2.5 bg-accent hover:brightness-110 active:scale-95 text-primary rounded-xl font-black text-[11px] transition-all flex items-center gap-1.5 shadow-lg"
                              >
                                  <Download className="w-4 h-4" />
                                  <span>{lang === 'ar' ? 'طباعة / حفظ كـ PDF' : 'Print / Save as PDF'}</span>
                              </button>
-                             <button 
+                             <button
                                  onClick={() => setShowManual(false)}
                                  className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
                              >
@@ -3332,7 +3734,7 @@ const App: React.FC = () => {
 
                      {/* Modal Footer */}
                      <div className="p-6 border-t border-white/5 bg-black/30 flex justify-end gap-3 shrink-0 print:hidden bg-black/40">
-                         <button 
+                         <button
                              onClick={() => setShowManual(false)}
                              className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-black transition-all"
                          >

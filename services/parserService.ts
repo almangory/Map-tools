@@ -236,8 +236,9 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                     }
                 });
                 if (path.length > 0) {
+                    const uniqueId = name ? `${name}_${points.length + 1}` : `KML_Feature_${points.length + 1}`;
                     points.push({
-                        id: name,
+                        id: uniqueId,
                         x: path[0].x,
                         y: path[0].y,
                         z: path[0].z,
@@ -252,8 +253,9 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
             } else {
                 const parts = tuples[0].split(',');
                 if (parts.length >= 2) {
+                    const uniqueId = name ? `${name}_${points.length + 1}` : `KML_Point_${points.length + 1}`;
                     points.push({
-                        id: name,
+                        id: uniqueId,
                         x: parseFloat(parts[0]),
                         y: parseFloat(parts[1]),
                         z: parts.length > 2 ? parseFloat(parts[2]) : 0,
@@ -435,11 +437,15 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                         }
 
                         const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
-                        points.push({ id: name, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: featureType, path: path, color, attributes, iconUrl });
+                        const uniqueId = name ? `${name}_${points.length + 1}` : `Feature_${points.length + 1}`;
+                        points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: featureType, path: path, color, attributes, iconUrl });
                     }
                 } else {
                     const parts = tuples[0].split(',');
-                    if (parts.length >= 2) points.push({ id: name, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
+                    if (parts.length >= 2) {
+                        const uniqueId = name ? `${name}_${points.length + 1}` : `Point_${points.length + 1}`;
+                        points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
+                    }
                 }
            });
         });

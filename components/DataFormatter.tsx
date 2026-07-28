@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { GeoPoint } from '../types';
-import { Database, Check, Download, AlertTriangle } from 'lucide-react';
+import { Database, Check, Download, AlertTriangle, Target, Zap } from 'lucide-react';
 import { downloadKMZ } from '../services/kmlService';
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -89,9 +89,13 @@ interface Props {
   lang: 'ar' | 'en';
   fetchStreets?: (points: GeoPoint[], headers: string[], action: () => void) => void;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
+  geocodingMode?: 'accurate' | 'fast';
+  setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
 }
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults }: Props) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode }: Props) => {
+  const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
+  const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids'>('pipes');
   const [networkType, setNetworkType] = useState<'water' | 'wastewater'>('water');
   const [keepFolders, setKeepFolders] = useState(true);
@@ -438,13 +442,25 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
               <div>
                 <h4 className="text-white font-black text-sm flex items-center gap-2">
                   <span>{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء' : 'Fetch Streets & Districts'}</span>
-                  <span className="text-[10px] text-accent bg-accent/10 border border-accent/20 px-2 py-0.5 rounded-full font-bold">
-                    {lang === 'ar' ? '🎯 دقيق جداً (هندسي)' : '🎯 High Precision'}
+                  <span className={cn(
+                    "text-[10px] px-2 py-0.5 rounded-full font-bold border transition-all",
+                    currentGeocodingMode === 'accurate' 
+                      ? "text-accent bg-accent/10 border-accent/20" 
+                      : "text-blue-300 bg-blue-500/10 border-blue-500/20"
+                  )}>
+                    {currentGeocodingMode === 'accurate'
+                      ? (lang === 'ar' ? '🎯 دقيق جداً (هندسي)' : '🎯 Accurate (Geometric)')
+                      : (lang === 'ar' ? '⚡ بحث عام (سريع)' : '⚡ Fast General Search')}
                   </span>
                 </h4>
-                <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء تلقائياً وحساب أقرب شارع هندسياً وإضافتها لحقلي STREETNAME و DISTRICT.' : 'Automatically fetch street and district names by calculating nearest road geometry.'}</p>
+                <p className="text-white/50 text-[10px] mt-1">
+                  {lang === 'ar' 
+                    ? 'جلب أسماء الشوارع والأحياء تلقائياً وإضافتها لحقلي STREETNAME و DISTRICT.' 
+                    : 'Automatically fetch street and district names for STREETNAME & DISTRICT fields.'}
+                </p>
               </div>
               <button 
+                type="button"
                 onClick={() => setAutoFetchStreets(!autoFetchStreets)}
                 className={cn(
                   "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
@@ -456,6 +472,45 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                   autoFetchStreets ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
                 )} />
               </button>
+            </div>
+
+            <div className="pt-2 border-t border-white/5 space-y-2">
+              <label className="text-[10px] font-bold text-white/70 block">
+                {lang === 'ar' ? 'اختر نمط دقة الجلب:' : 'Select Geocoding Mode:'}
+              </label>
+              <div className="grid grid-cols-2 gap-2 p-1 bg-black/30 rounded-xl border border-white/5">
+                <button
+                  type="button"
+                  onClick={() => setGeocodingMode ? setGeocodingMode('accurate') : setLocalGeocodingMode('accurate')}
+                  className={cn(
+                    "py-2 px-2.5 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5",
+                    currentGeocodingMode === 'accurate'
+                      ? "bg-accent text-primary shadow-lg"
+                      : "text-white/60 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '🎯 دقيق جداً (هندسي)' : '🎯 Accurate'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGeocodingMode ? setGeocodingMode('fast') : setLocalGeocodingMode('fast')}
+                  className={cn(
+                    "py-2 px-2.5 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5",
+                    currentGeocodingMode === 'fast'
+                      ? "bg-blue-500 text-white shadow-lg"
+                      : "text-white/60 hover:text-white hover:bg-white/5"
+                  )}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? '⚡ بحث عام (سريع)' : '⚡ Fast Search'}</span>
+                </button>
+              </div>
+              <p className="text-[9px] text-white/50 leading-relaxed px-1">
+                {currentGeocodingMode === 'accurate'
+                  ? (lang === 'ar' ? '🎯 حساب هندسي متقدم لأقرب مسار طريق لإعطاء نتائج دقيقة جداً.' : '🎯 Advanced geometry-based calculation for exact nearest road.')
+                  : (lang === 'ar' ? '⚡ بحث عام سريع ومباشر لتوفير الوقت مع كميات البيانات الكبيرة.' : '⚡ Fast general search lookup to save time on large datasets.')}
+              </p>
             </div>
           </div>
 
