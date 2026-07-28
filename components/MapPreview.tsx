@@ -12,16 +12,18 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-interface MapPreviewProps {
+export interface MapPreviewProps {
+  globalBaseMap?: BaseMapType;
   points: GeoPoint[];
   lang: Language;
   dataId?: string; // Unique string that changes when a new dataset is loaded
   isSelectionMode?: boolean;
   onPolygonComplete?: (polygon: {x: number; y: number}[]) => void;
   focusedColor?: string | null;
+  overlapResults?: import('../services/geometryService').OverlapResult[] | null;
 }
 
-type BaseMapType = 'satellite' | 'streets' | 'terrain' | 'osm';
+
 
 /**
  * Validates if coordinates are safe for Leaflet consumption
@@ -34,7 +36,7 @@ const isValidLatLng = (lat: any, lng: any): boolean => {
          lng >= -180 && lng <= 180;
 };
 
-const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelectionMode, onPolygonComplete, focusedColor }) => {
+const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelectionMode, onPolygonComplete, focusedColor, overlapResults, globalBaseMap }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const layerGroup = useRef<L.LayerGroup | null>(null);
@@ -58,6 +60,13 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
   const [showDataOverlay, setShowDataOverlay] = useState(true);
 
   const t = translations[lang];
+
+  useEffect(() => {
+    if (globalBaseMap) {
+      setBaseMap(globalBaseMap);
+    }
+  }, [globalBaseMap]);
+
 
   const baseMapConfigs: Record<BaseMapType, { url: string, name: string, icon: React.ReactNode }> = {
     satellite: { url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', name: t.layerSatellite, icon: <Globe className="w-5 h-5" /> },
@@ -165,9 +174,12 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
 
     points.forEach(pt => {
       if (isValidLatLng(pt.y, pt.x)) {
-        const featColor = (pt.color || '#dcb13c').toLowerCase();
+        const isOverlap = overlapResults?.some(o => !o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
+        const isIntersectionLine = overlapResults?.some(o => o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         
-        if (focusedColor && featColor !== focusedColor.toLowerCase()) return;
+        const featColor = isOverlap ? '#000000' : (pt.color || '#dcb13c').toLowerCase();
+        
+        if (focusedColor && featColor !== focusedColor.toLowerCase() && !isOverlap && !isIntersectionLine) return;
 
         let marker;
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {
@@ -177,7 +189,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
           
           if (latLngs.length >= 3) {
             marker = L.polygon(latLngs, { 
-              color: '#ffffff', weight: 2, fillColor: featColor, fillOpacity: 0.5
+              color: isOverlap ? '#000000' : '#ffffff', weight: isOverlap ? 4 : 2, fillColor: isOverlap ? '#9c27b0' : featColor, fillOpacity: isOverlap ? 0.7 : 0.5
             });
             
             // Add label for polygons (important for Splitter mode)
@@ -199,11 +211,28 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
           
           if (latLngs.length >= 2) {
             marker = L.polyline(latLngs, { 
-                color: featColor, weight: 4, opacity: 0.8
+                color: isOverlap ? '#000000' : featColor, weight: (isOverlap || isIntersectionLine) ? 8 : 4, opacity: (isOverlap || isIntersectionLine) ? 1 : 0.8
             });
           }
         } else {
-          marker = L.circleMarker([pt.y, pt.x], { radius: 7, fillColor: featColor, color: '#fff', weight: 2, fillOpacity: 1 });
+          if (pt.iconUrl) {
+            let safeUrl = pt.iconUrl;
+            if (safeUrl.startsWith('http://')) safeUrl = safeUrl.replace('http://', 'https://');
+            const customIcon = L.divIcon({
+              className: 'bg-transparent border-0',
+              html: `<div style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">
+                       <img src="${safeUrl}" style="width:100%; height:100%; object-fit:contain;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
+                       ${pt.color ? `<div style="position:absolute; top:0; left:0; width:100%; height:100%; background-color:${pt.color}; mix-blend-mode: multiply; -webkit-mask-image: url('${safeUrl}'); -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; mask-image: url('${safeUrl}'); mask-size: contain; mask-repeat: no-repeat; mask-position: center; pointer-events: none;"></div>` : ''}
+                       <div style="display:none; width:14px; height:14px; background-color:${featColor || '#3b82f6'}; border:2px solid ${isOverlap ? '#000000' : '#fff'}; border-radius:50%;"></div>
+                     </div>`,
+              iconSize: [28, 28],
+              iconAnchor: [14, 28],
+              popupAnchor: [0, -28]
+            });
+            marker = L.marker([pt.y, pt.x], { icon: customIcon });
+          } else {
+            marker = L.circleMarker([pt.y, pt.x], { radius: isOverlap ? 10 : 7, fillColor: isOverlap ? '#9c27b0' : featColor, color: isOverlap ? '#000000' : '#fff', weight: isOverlap ? 4 : 2, fillOpacity: 1 });
+          }
         }
         
         if (marker) {
@@ -228,12 +257,26 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
       }
     });
 
+    // Add intersection points explicitly
+    if (overlapResults) {
+      overlapResults.forEach(o => {
+        if (o.isIntersection && o.intersectionPoint && isValidLatLng(o.intersectionPoint.y, o.intersectionPoint.x)) {
+           L.circleMarker([o.intersectionPoint.y, o.intersectionPoint.x], { radius: 8, fillColor: '#9c27b0', color: '#ffffff', weight: 3, fillOpacity: 1 }).addTo(layerGroup.current!).bindPopup(`
+             <div class="p-2 font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+               <div class="font-black text-purple-700 mb-1 text-[12px]">${lang === 'ar' ? 'نقطة تداخل' : 'Intersection Point'}</div>
+               <div class="text-[10px] text-slate-500">${o.id1} × ${o.id2}</div>
+             </div>
+           `);
+        }
+      });
+    }
+
     // Auto-zoom logic: Triggered when dataId changes or when new points arrive for the first time
     if (dataId && dataId !== lastDataIdRef.current) {
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults]);
 
   const toggleDrawing = () => {
     if (isDrawing) {

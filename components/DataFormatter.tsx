@@ -1,0 +1,686 @@
+import React, { useState, useMemo } from 'react';
+import { GeoPoint } from '../types';
+import { Database, Check, Download, AlertTriangle } from 'lucide-react';
+import { downloadKMZ } from '../services/kmlService';
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); };
+
+const STANDARD_COLORS = [
+  { name: 'Water', hex: '#01579B' },
+  { name: 'Wastewater', hex: '#097138' },
+  { name: 'Work in Progress', hex: '#ffea00' },
+  { name: 'Remaining Works', hex: '#a52714' }
+];
+
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : null;
+}
+
+function colorDistance(c1: {r: number, g: number, b: number}, c2: {r: number, g: number, b: number}) {
+  return Math.sqrt(
+    Math.pow(c1.r - c2.r, 2) +
+    Math.pow(c1.g - c2.g, 2) +
+    Math.pow(c1.b - c2.b, 2)
+  );
+}
+
+function getClosestStandardColor(hex?: string) {
+  if (!hex) return hex;
+  const c1 = hexToRgb(hex);
+  if (!c1) return hex;
+  
+  let minDistance = Infinity;
+  let closest = hex;
+  
+  for (const std of STANDARD_COLORS) {
+    const c2 = hexToRgb(std.hex);
+    if (c2) {
+        const dist = colorDistance(c1, c2);
+        if (dist < minDistance) {
+            minDistance = dist;
+            closest = std.hex;
+        }
+    }
+  }
+  return closest;
+}
+
+const TEMPLATES = {
+  pipes: {
+    name: 'أنابيب / خطوط (Pipes/Lines)',
+    fields: ["OBJECTID", "ANCILLARYROLE", "ENABLED", "SERIALNUMBER", "DISTRICT", "STREETNAME", "ASSETSTATUS", "ASSETCONDITION", "STARTXCOORDINATE", "STARTYCOORDINATE", "ENDXCOORDINATE", "ENDYCOORDINATE", "STARTPIPEGROUNDELEVATION", "STARTPIPEELEVATION", "ENDPIPEGROUNDELEVATION", "ENDPIPEELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "SURVEYDATE", "FEATURETYPE", "INNERDIAMETER", "OUTERDIAMETER", "MATERIAL", "CONSULTANT", "ACTUALLENGTH", "MANUFACTURE", "REMARKS", "SHAPE_Length", "MaintRoute", "RouteSequence", "LINENO", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID"]
+  },
+  points: {
+    name: 'غرف / ملحقات (Chambers/Fittings)',
+    fields: ["OBJECTID", "ANCILLARYROLE", "ENABLED", "ASSETID", "ASSETNAME", "SERIALNUMBER", "DISTRICT", "STREETNAME", "ASSETSTATUS", "ASSETCONDITION", "XCOORDINATE", "YCOORDINATE", "GROUNDELEVATION", "ELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "FEATURETYPE", "CHAMBERSHAPE", "DIAMETER", "LENGTH", "WIDTH", "DEPTH", "REMARKS", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID"]
+  },
+  stations: {
+    name: 'محطات الرفع والخزانات (Lift Stations & Tanks)',
+    fields: ["إسم المشروع", "إسم المقاول", "رقم التعميد", "نوع المنشأة", "رقم المحطة", "السعة التصميمية للمحطة/الخزان", "عدد الخزانات", "سعة الخزان الواحد", "عدد المضخات", "طول خط الطرد", "قطر خط الطرد", "فرق المنسوب", "Water Hammer System", "Scada System", "Electric Switchboards", "موقف الاعمال المدنية", "نسبة الإنجاز الاعمال المدنية", "موقف الاعمال الميكانيكية والكهربائية", "نسبة الإنجاز الاعمال الميكانيكية والكهربائية", "التاريخ المتوقع للانتهاء من الاعمال وتسليم المحطة", "حالة اعتماد الامن الصناعي", "حالة اعتماد السلامة", "الدراسة الهيدروليكية", "إيصال التيار الكهربائي"]
+  },
+  polygons: {
+    name: 'تنظيم النطاقات (Polygons)',
+    fields: ["اسم المشروع", "اسم المقاول", "اسم مقاول الباطن", "اسم الاستشاري", "المالك", "حالة المشروع", "تصنيف المشروع", "تصنيف اداري", "البرنامج", "تاريخ البداية", "تاريخ النهاية", "تاريخ النهاية المعدل", "الازبلت", "الاستلام الابتدائي", "الاستلام النهائي", "عدد الاستلامات الجزئي", "تاريخ آخر جزء مسلم", "تاريخ الاستلام الجزئي"]
+  },
+  violations: {
+    name: 'تنسيق التعديات (Violations)',
+    fields: ["رقم بلاغ التعدي", "وصف التعدي", "أثر التعدي", "تاريخ التعدي", "رقم الرخصة", "تاريخ البلاغ", "الجهة المالكة", "الجهة المتعدية", "المقاول", "خط الطول", "خط العرض", "حالة البلاغ", "المدينة", "الحي", "الشارع", "تعليق المركز", "سجل المحادثات", "الجهه", "أسم المشروع"]
+  },
+  boundaries: {
+    name: 'حدود ومساحة العقار (Property Boundaries)',
+    fields: ["الاتجاه", "الحدود حسب الطبيعة", "الطول (حسب الطبيعة)", "الحدود حسب الصك", "الطول (حسب الصك)", "الحدود حسب المخطط", "الطول (حسب المخطط)"]
+  },
+  grids: {
+    name: 'شبكيات (Grids)',
+    fields: ["اسم المشروع", "اسم المقاول", "الحي", "حالة الشبكية", "اسم الشارع", "نوع الشبكية", "اسم الشبكية التعاقدي", "وصف الاعمال", "مدة العزل بالساعة", "تاريخ بدأ التنفيذ حسب البرنامج الزمني", "تاريخ البدأ بعد التنسيق مع الجهات", "التاريخ المتوقع للانتهاء", "طول الشبكية", "اعمق نقطة للشبكية", "عرض الشبكية", "الادارة الاشرافية", "الملاحظات"]
+  }
+};
+
+interface Props {
+  points: GeoPoint[];
+  headers?: string[];
+  lang: 'ar' | 'en';
+  fetchStreets?: (points: GeoPoint[], headers: string[], action: () => void) => void;
+  overlapResults?: import('../services/geometryService').OverlapResult[] | null;
+}
+
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults }: Props) => {
+  const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids'>('pipes');
+  const [networkType, setNetworkType] = useState<'water' | 'wastewater'>('water');
+  const [keepFolders, setKeepFolders] = useState(true);
+  const [retainUnmapped, setRetainUnmapped] = useState(true);
+  const [optimizeForMyMaps, setOptimizeForMyMaps] = useState(false);
+  const [keepOriginalDescription, setKeepOriginalDescription] = useState(false);
+  const [removeImagesOnly, setRemoveImagesOnly] = useState(false);
+  const [autoFetchStreets, setAutoFetchStreets] = useState(false);
+  const [standardizeColors, setStandardizeColors] = useState(false);
+  const [standardizePolygonColors, setStandardizePolygonColors] = useState(false);
+  const [keepOriginalGridStyle, setKeepOriginalGridStyle] = useState(false);
+  const [nameSourceField, setNameSourceField] = useState<string>('');
+  
+  // Collect all unique attributes from current points
+  const sourceAttributes = useMemo(() => {
+    const attrMap = new Map<string, string>();
+    points.forEach(p => {
+      if (p.attributes && Object.keys(p.attributes).length > 0) {
+        Object.entries(p.attributes).forEach(([k, v]) => {
+          if (!attrMap.has(k)) {
+            attrMap.set(k, String(v || '').substring(0, 30));
+          } else if (attrMap.get(k) === '' && v) {
+            attrMap.set(k, String(v).substring(0, 30));
+          }
+        });
+      }
+      
+      if (p.originalRow && headers) {
+        headers.forEach((h, i) => {
+          const v = p.originalRow![i];
+          if (!attrMap.has(h)) {
+             attrMap.set(h, String(v || '').substring(0, 30));
+          } else if (attrMap.get(h) === '' && v) {
+             attrMap.set(h, String(v).substring(0, 30));
+          }
+        });
+      }
+      if (p.street && !attrMap.has('الشارع (مسترجع)')) attrMap.set('الشارع (مسترجع)', p.street.substring(0, 30));
+      if (p.district && !attrMap.has('الحي (مسترجع)')) attrMap.set('الحي (مسترجع)', p.district.substring(0, 30));
+
+    });
+    return Array.from(attrMap.entries()).map(([name, sample]) => ({ name, sample }));
+  }, [points, headers]);
+
+  const [mapping, setMapping] = useState<Record<string, { sourceField?: string; defaultValue?: string }>>({});
+  const [selectedFields, setSelectedFields] = useState<Record<string, string[]>>({
+    pipes: [...TEMPLATES.pipes.fields],
+    points: [...TEMPLATES.points.fields],
+    stations: [...TEMPLATES.stations.fields],
+    polygons: [...TEMPLATES.polygons.fields],
+    violations: [...TEMPLATES.violations.fields],
+    boundaries: [...TEMPLATES.boundaries.fields],
+    grids: [...TEMPLATES.grids.fields]
+  });
+
+  const handleApplyExport = () => {
+    // Process points according to mapping
+    const currentSelected = selectedFields[targetTemplate] ?? TEMPLATES[targetTemplate].fields;
+    let templateFields = TEMPLATES[targetTemplate].fields.filter(f => currentSelected.includes(f));
+    
+    const unselectedTemplateFields = new Set(
+      TEMPLATES[targetTemplate].fields.filter(f => !templateFields.includes(f))
+    );
+
+    const processedPoints = points.map(p => {
+      const newAttrs: Record<string, string> = {};
+      
+      const mappedSourceFields = new Set<string>();
+
+      templateFields.forEach(field => {
+        const mapRules = mapping[field];
+        let val = '';
+        if (mapRules?.sourceField) {
+           if (mapRules.sourceField === 'الشارع (مسترجع)') {
+               val = p.street || '';
+           } else if (mapRules.sourceField === 'الحي (مسترجع)') {
+               val = p.district || '';
+           } else {
+               const sourceFieldLower = mapRules.sourceField.toLowerCase();
+               
+               if (p.attributes) {
+                   const matchedKey = Object.keys(p.attributes).find(k => k.toLowerCase() === sourceFieldLower);
+                   if (matchedKey !== undefined) {
+                       val = p.attributes[matchedKey];
+                   }
+               }
+               
+               if (!val && p.originalRow && headers) {
+                   const matchedIdx = headers.findIndex(h => h.toLowerCase() === sourceFieldLower);
+                   if (matchedIdx !== -1 && p.originalRow[matchedIdx] !== undefined) {
+                       val = String(p.originalRow[matchedIdx]);
+                   }
+               }
+           }
+           mappedSourceFields.add(mapRules.sourceField.toLowerCase());
+        }
+
+        if (!val && mapRules?.defaultValue) {
+          val = mapRules.defaultValue;
+        }
+
+        const normField = field.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        const isNumericField = normField === 'INNERDIAMETER' || 
+                               normField === 'OUTERDIAMETER' || 
+                               normField === 'DIAMETER' || 
+                               normField === 'PERMITNO' || 
+                               normField === 'ZONE' || 
+                               normField.includes('DIAMETER') ||
+                               field === 'Permit No' ||
+                               field === 'ZONE' ||
+                               field === 'INNERDIAMETER';
+        if (isNumericField && val) {
+            const numVal = val.replace(/[^0-9.]/g, '');
+            if (numVal) {
+                val = numVal;
+            }
+        }
+
+        if (autoFetchStreets && (field.toLowerCase() === 'streetname' || field === 'اسم الشارع' || field === 'الشارع')) {
+            newAttrs[field] = p.street || p.attributes?.['STREETNAME'] || p.attributes?.['اسم الشارع'] || val || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+        } else if (autoFetchStreets && (field.toLowerCase() === 'district' || field === 'الحي')) {
+            newAttrs[field] = p.district || p.attributes?.['DISTRICT'] || p.attributes?.['الحي'] || val || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+        } else if (val) {
+            newAttrs[field] = val;
+        } else {
+            newAttrs[field] = '';
+        }
+      });
+      if (retainUnmapped) {
+        if (p.attributes) {
+          Object.entries(p.attributes).forEach(([k, v]) => {
+            const normK = k.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const isUnselected = unselectedTemplateFields.has(k) ||
+              (normK === 'DISTRICT' && unselectedTemplateFields.has('DISTRICT')) ||
+              (normK === 'STREETNAME' && unselectedTemplateFields.has('STREETNAME')) ||
+              (k === 'الحي' && unselectedTemplateFields.has('الحي')) ||
+              (k === 'الشارع' && unselectedTemplateFields.has('اسم الشارع'));
+            if (!mappedSourceFields.has(k.toLowerCase()) && !newAttrs[k] && !isUnselected) {
+              let valStr = String(v || '');
+              if ((normK === 'INNERDIAMETER' || normK === 'OUTERDIAMETER' || normK === 'DIAMETER') && valStr) {
+                const numVal = valStr.replace(/[^0-9.]/g, '');
+                if (numVal) valStr = numVal;
+              }
+              newAttrs[k] = valStr;
+            }
+          });
+        }
+        if (p.originalRow && headers) {
+          headers.forEach((h, i) => {
+            const normH = h.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const isUnselected = unselectedTemplateFields.has(h) ||
+              (normH === 'DISTRICT' && unselectedTemplateFields.has('DISTRICT')) ||
+              (normH === 'STREETNAME' && unselectedTemplateFields.has('STREETNAME')) ||
+              (h === 'الحي' && unselectedTemplateFields.has('الحي')) ||
+              (h === 'الشارع' && unselectedTemplateFields.has('اسم الشارع'));
+            if (!mappedSourceFields.has(h.toLowerCase()) && !newAttrs[h] && !isUnselected) {
+              let valStr = String(p.originalRow![i] || '');
+              if ((normH === 'INNERDIAMETER' || normH === 'OUTERDIAMETER' || normH === 'DIAMETER') && valStr) {
+                const numVal = valStr.replace(/[^0-9.]/g, '');
+                if (numVal) valStr = numVal;
+              }
+              newAttrs[h] = valStr;
+            }
+          });
+        }
+      }
+
+      let finalId = p.id;
+      if (nameSourceField) {
+        if (newAttrs[nameSourceField] !== undefined && newAttrs[nameSourceField] !== '') {
+            finalId = newAttrs[nameSourceField];
+        } else if (p.attributes && p.attributes[nameSourceField] !== undefined) {
+            finalId = p.attributes[nameSourceField];
+        } else if (p.originalRow && headers) {
+            const idx = headers.indexOf(nameSourceField);
+            if (idx !== -1 && p.originalRow[idx] !== undefined) {
+                finalId = String(p.originalRow[idx]);
+            }
+        }
+      }
+
+      let finalColor = p.color;
+      if (standardizeColors && p.color && !(targetTemplate === 'grids' && keepOriginalGridStyle)) {
+          finalColor = getClosestStandardColor(p.color) || p.color;
+      }
+      
+      if (overlapResults) {
+          const isOverlap = overlapResults.some(o => !o.isIntersection && (String(o.id1) === String(p.id) || String(o.id2) === String(p.id)));
+          if (isOverlap) {
+              finalColor = '#000000'; // Black for matching elements
+          }
+      }
+
+      return {
+        ...p,
+        id: finalId,
+        color: finalColor,
+        attributes: newAttrs,
+        type: (targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? 'Polygon' : (targetTemplate === 'grids' && !keepOriginalGridStyle ? 'Point' : p.type)
+      };
+    });
+
+    if (overlapResults) {
+        overlapResults.forEach((o, i) => {
+            if (o.isIntersection && o.intersectionPoint) {
+                processedPoints.push({
+                    id: `Intersection_${i}`,
+                    x: o.intersectionPoint.x,
+                    y: o.intersectionPoint.y,
+                    type: 'Point',
+                    color: '#9c27b0', // Purple for intersection points
+                    layer: 'Intersections',
+                    attributes: {
+                        'Description': `Intersection between ${o.id1} and ${o.id2}`,
+                        'Type': 'Intersection'
+                    }
+                });
+            }
+        });
+    }
+
+    const prefix = networkType === 'water' ? 'Water' : 'Wastewater';
+    const suffix = targetTemplate === 'pipes' ? 'Lines' : targetTemplate === 'points' ? 'Points' : targetTemplate === 'stations' ? 'Stations' : targetTemplate === 'boundaries' ? 'Boundaries' : targetTemplate === 'grids' ? 'Grids' : targetTemplate === 'violations' ? 'Violations' : 'Polygons';
+    
+    // Trigger download
+    downloadKMZ(processedPoints, `${prefix}_${suffix}_Formatted`, { 
+        mode: keepFolders ? 'layer' : 'none', 
+        groupByAttribute: keepFolders ? 'layer' : undefined,
+        optimizeForMyMaps: optimizeForMyMaps,
+        keepOriginalDescription: keepOriginalDescription,
+        removeImagesOnly: removeImagesOnly,
+        ...(targetTemplate === 'pipes' ? {
+            lineStyle: { width: 3 }
+        } : {}),
+        ...((targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? {
+            polygonStyle: {
+                ...(standardizePolygonColors ? {
+                    colorHex: '#0288d1',
+                    opacityHex: '4d', // 30% opacity
+                } : {}),
+                ...(optimizeForMyMaps || standardizePolygonColors ? {
+                    outline: 0,
+                    width: 0
+                } : {})
+            }
+        } : {})
+    }, templateFields, templateFields);
+  };
+
+  const onExportClick = () => {
+    if (autoFetchStreets && fetchStreets) {
+      fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], () => {
+        handleApplyExport();
+      });
+    } else {
+      handleApplyExport();
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4">
+        <Database className="w-16 h-16 text-accent mx-auto" />
+        <h2 className="text-white font-black text-xl">{lang === 'ar' ? 'تنسيق البيانات للمشاريع' : 'Project Data Formatter'}</h2>
+        <p className="text-[10px] text-white/50 leading-relaxed font-bold uppercase">{lang === 'ar' ? 'ترتيب وتنسيق الحقول لشبكات المياه والصرف' : 'Organize and format fields for Water/Wastewater'}</p>
+      </div>
+
+      {points.length === 0 ? (
+        <div className="text-center p-8 bg-white/5 rounded-3xl border border-white/5">
+          <AlertTriangle className="w-8 h-8 text-yellow-500 mx-auto mb-3" />
+          <p className="text-sm font-bold text-white/60">{lang === 'ar' ? 'يرجى تحميل ملف به بيانات لتنسيقه.' : 'Please upload a file with data to format.'}</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1 bg-white/5 p-4 rounded-2xl border border-white/5">
+              <label className="text-[10px] text-white/40 uppercase font-black mb-2 block">{lang === 'ar' ? 'نوع الشبكة' : 'Network Type'}</label>
+              <div className="flex gap-2">
+                <button onClick={() => setNetworkType('water')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", networkType === 'water' ? "bg-blue-500 text-white" : "bg-white/10 text-white/50 hover:bg-white/20")}>{lang === 'ar' ? 'مياه (Water)' : 'Water'}</button>
+                <button onClick={() => setNetworkType('wastewater')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", networkType === 'wastewater' ? "bg-orange-600 text-white" : "bg-white/10 text-white/50 hover:bg-white/20")}>{lang === 'ar' ? 'صرف صحي (Wastewater)' : 'Wastewater'}</button>
+              </div>
+            </div>
+            
+            <div className="flex-1 bg-white/5 p-4 rounded-2xl border border-white/5">
+              <label className="text-[10px] text-white/40 uppercase font-black mb-2 block">{lang === 'ar' ? 'نوع العناصر (القالب)' : 'Element Type (Template)'}</label>
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <button onClick={() => setTargetTemplate('pipes')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'pipes' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.pipes.name}</button>
+                  <button onClick={() => setTargetTemplate('points')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'points' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.points.name}</button>
+                </div>
+                <div className="flex gap-2 mb-2">
+                  <button onClick={() => setTargetTemplate('stations')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'stations' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.stations.name}</button>
+                  <button onClick={() => setTargetTemplate('polygons')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'polygons' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.polygons.name}</button>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => setTargetTemplate('boundaries')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'boundaries' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.boundaries.name}</button>
+                                    <button onClick={() => setTargetTemplate('violations')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'violations' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.violations.name}</button>
+                  <button onClick={() => setTargetTemplate('grids')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'grids' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.grids.name}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بمجلدات الملف الأصلي' : 'Keep Original Folders'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم الحفاظ على بنية المجلدات الأصلية (الطبقات) عند التصدير.' : 'When enabled, the original folder structure (layers) will be preserved on export.'}</p>
+            </div>
+            <button 
+              onClick={() => setKeepFolders(!keepFolders)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative",
+                keepFolders ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                keepFolders ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بالحقول غير المطابقة' : 'Keep Unmapped Fields'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم إضافة الحقول الأصلية التي لم يتم تعيينها إلى البيانات المصدرة.' : 'When enabled, original fields that were not mapped will be added to the exported data.'}</p>
+            </div>
+            <button 
+              onClick={() => setRetainUnmapped(!retainUnmapped)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative",
+                retainUnmapped ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                retainUnmapped ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء' : 'Fetch Streets & Districts'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء تلقائياً لكل عنصر وإضافتها لحقلي STREETNAME و DISTRICT.' : 'Automatically fetch street and district names for each element and add them to STREETNAME and DISTRICT.'}</p>
+            </div>
+            <button 
+              onClick={() => setAutoFetchStreets(!autoFetchStreets)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
+                autoFetchStreets ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                autoFetchStreets ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'تحسين لخرائط Google My Maps' : 'Optimize for Google My Maps'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'إزالة جدول الوصف لمنع تكرار البيانات في لوحة My Maps.' : 'Remove description table to prevent duplication in My Maps panel.'}</p>
+            </div>
+            <button 
+              onClick={() => setOptimizeForMyMaps(!optimizeForMyMaps)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative",
+                optimizeForMyMaps ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                optimizeForMyMaps ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بالبيانات الأصلية والصور' : 'Retain Original Data & Images'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'استخدام الوصف والمظهر الأصليين والوسائط من الملف المصدر مباشرة.' : 'Use original description, styling, and media directly from the source file.'}</p>
+            </div>
+            <button 
+              onClick={() => setKeepOriginalDescription(!keepOriginalDescription)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative",
+                keepOriginalDescription ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                keepOriginalDescription ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'إزالة الصور فقط' : 'Remove Images Only'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'حذف جميع الصور والوسائط من داخل منطاد الوصف في ملف KML مع بقاء سائر التفاصيل.' : 'Delete all images and media from inside the description balloon in the KML file while keeping other details.'}</p>
+            </div>
+            <button 
+              onClick={() => setRemoveImagesOnly(!removeImagesOnly)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative",
+                removeImagesOnly ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                removeImagesOnly ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'توحيد ألوان المشروع' : 'Standardize Project Colors'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'تحويل جميع الألوان إلى الدرجات القياسية (أزرق، أخضر، أصفر، أحمر) بناءً على أقرب لون.' : 'Convert all colors to standard shades (blue, green, yellow, red) based on the closest match.'}</p>
+            </div>
+            <button 
+              onClick={() => setStandardizeColors(!standardizeColors)}
+              className={cn(
+                "w-12 h-6 rounded-full transition-colors relative",
+                standardizeColors ? "bg-accent" : "bg-white/20"
+              )}
+            >
+              <div className={cn(
+                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                standardizeColors ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+              )} />
+            </button>
+          </div>
+
+                    {(targetTemplate === 'grids') && (
+            <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+              <div>
+                <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بشكل والوان الملف المرفوع' : 'Keep Original Shape and Colors'}</h4>
+                <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم الحفاظ على نوع وشكل العنصر ولونه الأصلي كما هو في الملف المرفوع.' : 'When enabled, the original shape, type, and color of the element will be kept as in the uploaded file.'}</p>
+              </div>
+              <button 
+                onClick={() => setKeepOriginalGridStyle(!keepOriginalGridStyle)}
+                className={cn(
+                  "w-12 h-6 rounded-full transition-colors relative",
+                  keepOriginalGridStyle ? "bg-accent" : "bg-white/20"
+                )}
+              >
+                <div className={cn(
+                  "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                  keepOriginalGridStyle ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                )} />
+              </button>
+            </div>
+          )}
+
+          {(targetTemplate === 'polygons' || targetTemplate === 'boundaries') && (
+            <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+              <div>
+                <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'توحيد ألوان النطاقات' : 'Standardize Polygon Colors'}</h4>
+                <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'توحيد لون العناصر إلى اللون الأزرق (#0288d1) بدرجة شفافية 30% وإلغاء عرض الحدود.' : 'Standardize the color of elements to Blue (#0288d1) with 30% opacity and no border.'}</p>
+              </div>
+              <button 
+                onClick={() => setStandardizePolygonColors(!standardizePolygonColors)}
+                className={cn(
+                  "w-12 h-6 rounded-full transition-colors relative",
+                  standardizePolygonColors ? "bg-accent" : "bg-white/20"
+                )}
+              >
+                <div className={cn(
+                  "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                  standardizePolygonColors ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                )} />
+              </button>
+            </div>
+          )}
+
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'مصدر اسم العنصر (اختياري)' : 'Element Name Source (Optional)'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'اختر حقلاً ليكون هو اسم العنصر الذي يظهر على الخريطة.' : 'Choose a field to be used as the element name shown on the map.'}</p>
+            </div>
+            <select
+              value={nameSourceField}
+              onChange={(e) => setNameSourceField(e.target.value)}
+              className="w-full md:w-1/3 bg-[#0e3f53] text-white text-xs p-3 rounded-xl outline-none border border-white/10"
+            >
+              <option value="">{lang === 'ar' ? 'الاسم الافتراضي' : 'Default Name'}</option>
+              <optgroup label={lang === 'ar' ? 'الحقول المصدرية' : 'Source Fields'}>
+                {sourceAttributes.map(attr => (
+                  <option key={attr.name} value={attr.name}>{attr.name}</option>
+                ))}
+              </optgroup>
+              <optgroup label={lang === 'ar' ? 'حقول القالب' : 'Template Fields'}>
+                {TEMPLATES[targetTemplate].fields.map(field => (
+                  <option key={field} value={field}>{field}</option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+
+          <div className="bg-white/5 p-6 rounded-3xl border border-white/5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-white font-black text-sm">{lang === 'ar' ? 'مطابقة الحقول (Field Mapping)' : 'Field Mapping'}</h3>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setSelectedFields(prev => ({
+                      ...prev,
+                      [targetTemplate]: [...TEMPLATES[targetTemplate].fields]
+                    }));
+                  }}
+                  className="text-[10px] bg-white/10 hover:bg-white/20 text-white font-black px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedFields(prev => ({
+                      ...prev,
+                      [targetTemplate]: []
+                    }));
+                  }}
+                  className="text-[10px] bg-white/10 hover:bg-white/20 text-white font-black px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  {lang === 'ar' ? 'إلغاء التحديد' : 'Deselect All'}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {TEMPLATES[targetTemplate].fields.map(field => {
+                const isSelected = selectedFields[targetTemplate]?.includes(field) ?? false;
+                return (
+                <div key={field} className={cn("flex flex-col md:flex-row items-center gap-3 p-3 rounded-xl transition-all", isSelected ? "bg-black/20" : "bg-black/10 opacity-50")}>
+                  <div className="w-full md:w-1/3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFields(prev => ({
+                          ...prev,
+                          [targetTemplate]: isSelected 
+                            ? (prev[targetTemplate] || []).filter(f => f !== field)
+                            : [...(prev[targetTemplate] || []), field]
+                        }));
+                      }}
+                      className={cn(
+                        "w-4 h-4 rounded flex items-center justify-center transition-all flex-shrink-0",
+                        isSelected ? "bg-accent text-primary" : "border border-white/20 text-transparent"
+                      )}
+                    >
+                      <Check className="w-3 h-3 stroke-[3px]" />
+                    </button>
+                    <span className="text-xs font-black text-accent">{field}</span>
+                  </div>
+                  <div className="w-full md:w-1/3">
+                    <select 
+                      value={mapping[field]?.sourceField || ''} 
+                      onChange={e => setMapping(prev => ({ ...prev, [field]: { ...prev[field], sourceField: e.target.value } }))}
+                      className="w-full bg-[#0e3f53] border border-white/10 rounded-lg px-3 py-2 text-[10px] font-bold text-white focus:outline-none focus:border-accent"
+                    >
+                      <option value="">{lang === 'ar' ? '-- بدون ربط --' : '-- Unmapped --'}</option>
+                      {sourceAttributes.map(attr => (
+                        <option key={attr.name} value={attr.name}>
+                          {attr.name} {attr.sample ? (lang === 'ar' ? `(مثال: ${attr.sample})` : `(e.g. ${attr.sample})`) : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="w-full md:w-1/3">
+                    <input 
+                      type="text" 
+                      placeholder={lang === 'ar' ? 'القيمة الافتراضية (أو النقاط)..' : 'Default value (or dots)..'}
+                      value={mapping[field]?.defaultValue || ''}
+                      onChange={e => setMapping(prev => ({ ...prev, [field]: { ...prev[field], defaultValue: e.target.value } }))}
+                      className="w-full bg-[#0e3f53] border border-white/10 rounded-lg px-3 py-2 text-[10px] font-bold text-white focus:outline-none focus:border-accent placeholder-white/20"
+                    />
+                  </div>
+                </div>
+              )})}
+            </div>
+          </div>
+
+          <button onClick={onExportClick} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-xl text-sm">
+            <Download className="w-5 h-5" />
+            {lang === 'ar' ? 'تطبيق وتحميل الملف' : 'Apply & Download Formatted File'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};

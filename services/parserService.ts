@@ -8,8 +8,20 @@ const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule a
 
 
 // تحويل لون KML (AABBGGRR) إلى HEX (#RRGGBB)
-const kmlColorToHex = (kmlColor: string): string => {
-  if (!kmlColor || kmlColor.length < 8) return '#3b82f6'; 
+const kmlColorToHex = (kmlColor: string): string | undefined => {
+  if (!kmlColor) return undefined;
+  kmlColor = kmlColor.trim();
+  if (kmlColor.startsWith('#')) kmlColor = kmlColor.substring(1);
+  if (!kmlColor) return undefined;
+  
+  if (kmlColor.length === 6) {
+    const r = kmlColor.substring(4, 6);
+    const g = kmlColor.substring(2, 4);
+    const b = kmlColor.substring(0, 2);
+    return `#${r}${g}${b}`;
+  }
+  
+  if (kmlColor.length < 8) return '#3b82f6'; 
   const r = kmlColor.substring(6, 8);
   const g = kmlColor.substring(4, 6);
   const b = kmlColor.substring(2, 4);
@@ -99,6 +111,65 @@ const preprocessKML = (raw: string): string => {
   return cleaned;
 };
 
+const parseDescriptionToAttributes = (desc: string, attributes: Record<string, string>) => {
+    if (!desc) return;
+    
+    // 1. Try HTML Table
+    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+    let match;
+    while ((match = trRegex.exec(desc)) !== null) {
+        const cellRegex = /<(?:td|th)[^>]*>([\s\S]*?)<\/(?:td|th)>/gi;
+        const keyMatch = cellRegex.exec(match[1]);
+        const valMatch = cellRegex.exec(match[1]);
+        if (keyMatch && valMatch) {
+            const key = keyMatch[1].replace(/<[^>]+>/g, '').trim();
+            const val = valMatch[1].replace(/<[^>]+>/g, '').trim();
+            if (key && !attributes[key]) attributes[key] = val;
+        }
+    }
+    
+    // 2. Try Lists
+    const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    let liMatch;
+    while ((liMatch = liRegex.exec(desc)) !== null) {
+        const text = liMatch[1].replace(/<[^>]+>/g, '').trim();
+        const parts = text.split(':');
+        if (parts.length >= 2) {
+            const key = parts.shift()?.trim();
+            const val = parts.join(':').trim();
+            if (key && !attributes[key]) attributes[key] = val;
+        }
+    }
+
+    // 3. Try plain text lines (separated by <br> or \n)
+    const cleanDesc = desc.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+    const lines = cleanDesc.split('\n');
+    lines.forEach(line => {
+        line = line.trim();
+        if (!line) return;
+        
+        let separatorIdx = line.indexOf(':');
+        if (separatorIdx === -1) separatorIdx = line.indexOf('：');
+        if (separatorIdx === -1) separatorIdx = line.indexOf('-');
+        if (separatorIdx === -1) separatorIdx = line.indexOf('=');
+
+        if (separatorIdx !== -1) {
+            const key = line.substring(0, separatorIdx).trim();
+            const val = line.substring(separatorIdx + 1).trim();
+            if (key && !attributes[key]) attributes[key] = val;
+        } else {
+            separatorIdx = line.indexOf(' ');
+            if (separatorIdx !== -1) {
+                const key = line.substring(0, separatorIdx).trim();
+                const val = line.substring(separatorIdx + 1).trim();
+                if (key && /^[A-Z0-9_\u0600-\u06FF]+$/i.test(key) && !attributes[key]) {
+                    attributes[key] = val;
+                }
+            }
+        }
+    });
+};
+
 const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
     const points: GeoPoint[] = [];
     const placemarkRegex = /<Placemark[^>]*>([\s\S]*?)<\/Placemark>/g;
@@ -107,6 +178,20 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
     
     while ((match = placemarkRegex.exec(kml)) !== null) {
         const content = match[1];
+        
+        const beforePlacemark = kml.substring(0, match.index);
+        const lastFolderOpen = Math.max(beforePlacemark.lastIndexOf('<Folder'), beforePlacemark.lastIndexOf('<Document'), beforePlacemark.lastIndexOf('<folder'), beforePlacemark.lastIndexOf('<document'));
+        let layerName = 'KML Import (Recovered)';
+        if (lastFolderOpen !== -1) {
+            const folderStr = beforePlacemark.substring(lastFolderOpen);
+            const nameMatch = folderStr.match(/<name[^>]*>([\s\S]*?)<\/name>/i);
+            if (nameMatch) {
+                layerName = nameMatch[1].trim();
+                if (layerName.startsWith('<![CDATA[')) {
+                    layerName = layerName.substring(9, layerName.length - 3).trim();
+                }
+            }
+        }
         
         // Extract name
         const nameMatch = content.match(/<name[^>]*>([\s\S]*?)<\/name>/i);
@@ -121,6 +206,9 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
         if (desc.startsWith('<![CDATA[')) {
             desc = desc.substring(9, desc.length - 3).trim();
         }
+
+        const attributes: Record<string, string> = {};
+        parseDescriptionToAttributes(desc, attributes);
         
         // Extract coordinates
         const coordsMatch = content.match(/<coordinates[^>]*>([\s\S]*?)<\/coordinates>/i);
@@ -152,10 +240,11 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         y: path[0].y,
                         z: path[0].z,
                         description: desc,
-                        layer: 'KML Import (Recovered)',
+                        layer: layerName,
                         type: 'LineString',
                         path: path,
-                        color: "#3b82f6"
+                        color: "#3b82f6",
+                        attributes
                     });
                 }
             } else {
@@ -167,9 +256,10 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         y: parseFloat(parts[1]),
                         z: parts.length > 2 ? parseFloat(parts[2]) : 0,
                         description: desc,
-                        layer: 'KML Import (Recovered)',
+                        layer: layerName,
                         type: 'Point',
-                        color: "#3b82f6"
+                        color: "#3b82f6",
+                        attributes
                     });
                 }
             }
@@ -181,7 +271,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
 /**
  * دالة داخلية لتحليل محتوى KML النصي وتحويله إلى GeoPoints
  */
-const parseKMLContent = (kmlContent: string): GeoPoint[] => {
+export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
     // 1. Preprocess the KML to clean up common issues (like unescaped '&')
     const preprocessed = preprocessKML(kmlContent);
     
@@ -201,6 +291,7 @@ const parseKMLContent = (kmlContent: string): GeoPoint[] => {
         }
 
         const stylesMap: Record<string, string> = {};
+        const iconUrlMap: Record<string, string> = {};
         const styles = xmlDoc.getElementsByTagName("Style");
         for (let i = 0; i < styles.length; i++) {
             const id = styles[i].getAttribute("id");
@@ -212,6 +303,8 @@ const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                 const polyStyle = styles[i].getElementsByTagName("PolyStyle")[0];
                 const polyColor = polyStyle?.getElementsByTagName("color")[0]?.textContent;
                 const finalColor = lineColor || iconColor || polyColor;
+                const iconHref = iconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
+                if (iconHref) iconUrlMap[`#${id}`] = iconHref;
                 if (finalColor) stylesMap[`#${id}`] = kmlColorToHex(finalColor);
             }
         }
@@ -226,6 +319,7 @@ const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                     const styleUrl = pairs[j].getElementsByTagName("styleUrl")[0]?.textContent;
                     if (key === 'normal' && styleUrl) {
                         if (stylesMap[styleUrl]) stylesMap[`#${mapId}`] = stylesMap[styleUrl];
+                        if (iconUrlMap[styleUrl]) iconUrlMap[`#${mapId}`] = iconUrlMap[styleUrl];
                     }
                 }
             }
@@ -238,27 +332,63 @@ const parseKMLContent = (kmlContent: string): GeoPoint[] => {
            const name = pm.getElementsByTagName("name")[0]?.textContent || `Element ${i+1}`;
            const desc = pm.getElementsByTagName("description")[0]?.textContent || "";
            
-           let color = "#3b82f6"; 
+                      let color = undefined; 
+           let iconUrl = undefined;
            const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent;
-           if (styleUrl && stylesMap[styleUrl]) {
-               color = stylesMap[styleUrl];
-           } else {
+           if (styleUrl) {
+               if (stylesMap[styleUrl]) color = stylesMap[styleUrl];
+               if (iconUrlMap[styleUrl]) iconUrl = iconUrlMap[styleUrl];
+           }
+           if (!styleUrl || !stylesMap[styleUrl]) {
                const inlineLineStyle = pm.getElementsByTagName("LineStyle")[0];
-               const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent;
+               const inlineIconStyle = pm.getElementsByTagName("IconStyle")[0];
+               const inlinePolyStyle = pm.getElementsByTagName("PolyStyle")[0];
+               const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent || 
+                                   inlineIconStyle?.getElementsByTagName("color")[0]?.textContent || 
+                                   inlinePolyStyle?.getElementsByTagName("color")[0]?.textContent;
                if (inlineColor) color = kmlColorToHex(inlineColor);
+               
+               const inlineIconHref = inlineIconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
+               if (inlineIconHref) iconUrl = inlineIconHref;
            }
 
            let layerName = 'KML Import';
            let parent = pm.parentElement;
            while (parent) {
-               if (parent.tagName === 'Folder' || parent.tagName === 'Document') {
-                   const folderName = parent.getElementsByTagName("name")[0]?.textContent;
+               const lowerTag = (parent.localName || parent.tagName).toLowerCase();
+               if (lowerTag === 'folder' || lowerTag === 'document') {
+                   const nameNode = Array.from(parent.childNodes).find(n => {
+                       const nName = (n.localName || n.nodeName).toLowerCase();
+                       return nName === 'name';
+                   });
+                   const folderName = nameNode?.textContent;
                    if (folderName) {
                        layerName = folderName;
                        break;
                    }
                }
                parent = parent.parentElement;
+           }
+
+           const attributes: Record<string, string> = {};
+           const extendedData = pm.getElementsByTagName("ExtendedData")[0];
+           if (extendedData) {
+               const dataElements = extendedData.getElementsByTagName("Data");
+               for (let i = 0; i < dataElements.length; i++) {
+                   const nameAttr = dataElements[i].getAttribute("name");
+                   const val = dataElements[i].getElementsByTagName("value")[0]?.textContent;
+                   if (nameAttr && val) attributes[nameAttr] = val;
+               }
+               const simpleDataElements = extendedData.getElementsByTagName("SimpleData");
+               for (let i = 0; i < simpleDataElements.length; i++) {
+                   const nameAttr = simpleDataElements[i].getAttribute("name");
+                   const val = simpleDataElements[i].textContent;
+                   if (nameAttr && val) attributes[nameAttr] = val;
+               }
+           }
+           
+           if (desc) {
+               parseDescriptionToAttributes(desc, attributes);
            }
       
            const coordsTags = Array.from(pm.getElementsByTagName("coordinates"));
@@ -272,10 +402,10 @@ const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                         const parts = t.split(',');
                         if(parts.length >= 2) path.push({ x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0 });
                     });
-                    if (path.length > 0) points.push({ id: name, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: 'LineString', path: path, color });
+                    if (path.length > 0) points.push({ id: name, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: 'LineString', path: path, color, attributes, iconUrl });
                 } else {
                     const parts = tuples[0].split(',');
-                    if (parts.length >= 2) points.push({ id: name, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color });
+                    if (parts.length >= 2) points.push({ id: name, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
                 }
            });
         });
@@ -290,6 +420,55 @@ const parseKMLContent = (kmlContent: string): GeoPoint[] => {
     }
 };
  
+
+/**
+ * Async wrapper for parseKMLContent to handle NetworkLinks
+ */
+export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (percent: number) => void): Promise<GeoPoint[]> => {
+    const points = parseKMLContent(kmlContent);
+    
+    try {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(kmlContent, "text/xml");
+        const networkLinks = xmlDoc.getElementsByTagName("NetworkLink");
+        
+        for (let i = 0; i < networkLinks.length; i++) {
+            // Find Link > href
+            let href = "";
+            const linkNode = networkLinks[i].getElementsByTagName("Link")[0];
+            if (linkNode) {
+                href = linkNode.getElementsByTagName("href")[0]?.textContent?.trim() || "";
+            } else {
+                // Sometimes it's direct Url > href
+                const urlNode = networkLinks[i].getElementsByTagName("Url")[0];
+                if (urlNode) {
+                    href = urlNode.getElementsByTagName("href")[0]?.textContent?.trim() || "";
+                }
+            }
+
+            if (href) {
+                try {
+                    // Check if it's already an absolute URL. If not, it might be relative, but for web KML it usually is absolute.
+                    if (!href.startsWith('http')) {
+                        console.warn("Relative NetworkLink not supported for web fetch:", href);
+                        continue;
+                    }
+                    const parsedLink = await fetchNetworkFile(href);
+                    if (parsedLink && parsedLink.data) {
+                        points.push(...(parsedLink.data as GeoPoint[]));
+                    }
+                } catch(e) {
+                    console.error("Failed to fetch NetworkLink:", href, e);
+                }
+            }
+        }
+    } catch(e) {
+        console.error("Error parsing for NetworkLinks", e);
+    }
+
+    return points;
+};
+
 export const parseKMZ = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
   try {
     if (onProgress) onProgress(10);
@@ -472,10 +651,27 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
         const kmlFilename = Object.keys(zip.files).find(name => name.toLowerCase().endsWith('.kml'));
         if (!kmlFilename) throw new Error("Invalid KMZ: No .kml file found inside.");
         kmlContent = await zip.file(kmlFilename)?.async("string") || "";
+        
+        // Extract images and replace in KML
+        const imageFiles = Object.keys(zip.files).filter(name => /\.(png|jpg|jpeg|gif|svg)$/i.test(name));
+        for (const imgName of imageFiles) {
+            const base64 = await zip.file(imgName)?.async("base64");
+            if (base64) {
+                const ext = imgName.split('.').pop()?.toLowerCase();
+                const mimeType = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+                const dataURI = `data:${mimeType};base64,${base64}`;
+                const safeName = imgName.split('/').pop()?.replace(/[.*+?^$!()|[\]\\]/g, '\\$&');
+                if (safeName) {
+                    kmlContent = kmlContent.replace(new RegExp(`<href>[^<]*?${safeName}<\\/href>`, 'gi'), `<href>${dataURI}</href>`);
+                    kmlContent = kmlContent.replace(new RegExp(`src=['"][^'"]*?${safeName}['"]`, 'gi'), `src="${dataURI}"`);
+                }
+            }
+        }
+        
         if (onProgress) onProgress(60);
     }
     
-    const points = parseKMLContent(kmlContent);
+    const points = await parseKMLContentAsync(kmlContent);
 
     if (onProgress) onProgress(100);
     return { filename: file.name, type: 'kmz', data: points, preview: [] };
@@ -538,4 +734,111 @@ export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {
     }
   });
   return points;
+};
+
+/**
+ * جلب خريطة Google My Maps من الرابط وتحليلها عن طريق بروكسي CORS
+ */
+export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
+  const midMatch = url.match(/mid=([a-zA-Z0-9_-]+)/);
+  if (!midMatch) {
+    throw new Error("رابط غير صالح. يرجى توفير رابط مصلح يحتوي على معرّف الخريطة (mid).");
+  }
+  const mid = midMatch[1];
+  const kmlUrl = `https://www.google.com/maps/d/kml?mid=${mid}&forcekml=1`;
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(kmlUrl)}`;
+
+  let response;
+  try {
+    response = await fetch(proxyUrl);
+    if (!response.ok) throw new Error();
+  } catch (e) {
+    // Fallback to direct fetch
+    try {
+      response = await fetch(kmlUrl);
+    } catch (e2) {
+      throw new Error("تعذر جلب البيانات تلقائياً بسبب قيود الحماية (CORS). يرجى تنزيل ملف KML يدوياً من خرائط جوجل ثم وضعه هنا.");
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error("فشل جلب البيانات من الرابط. تأكد من أن الخريطة عامة ومتاحة للمشاركة وليست خاصة.");
+  }
+
+  const kmlContent = await response.text();
+  if (!kmlContent || !kmlContent.includes('<kml')) {
+    throw new Error("لم يتم العثور على بيانات KML صالحة في الرابط المسترجع. يرجى التأكد من أن رابط الخريطة صالح ومفتوح للجميع.");
+  }
+
+  const points = await parseKMLContentAsync(kmlContent);
+  return {
+    filename: `Google_My_Map_${mid}.kml`,
+    type: 'kmz',
+    data: points,
+    preview: []
+  };
+};
+
+
+
+/**
+ * Fetch a generic network KML/KMZ file via CORS proxy
+ */
+export const fetchNetworkFile = async (url: string, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
+  if (onProgress) onProgress(10);
+  
+  // Use local backend proxy to bypass CORS
+  const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+  
+  let response;
+  try {
+    response = await fetch(proxyUrl);
+    if (!response.ok) {
+       // Check if response contains JSON error
+       const text = await response.text();
+       let errMsg = "HTTP " + response.status;
+       try {
+           const json = JSON.parse(text);
+           if (json.error) errMsg = json.error;
+       } catch(e) {}
+       throw new Error("Proxy error: " + errMsg);
+    }
+  } catch (e: any) {
+    try {
+      response = await fetch(url);
+      if (!response.ok) throw new Error();
+    } catch (e2) {
+      throw new Error("تعذر جلب البيانات من الرابط بسبب قيود الحماية (CORS) أو أن الرابط غير صالح. " + e.message);
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error("فشل جلب البيانات من الرابط. تأكد من أن الملف عام ومتاح للمشاركة.");
+  }
+
+  if (onProgress) onProgress(40);
+  
+  const contentType = response.headers.get('content-type') || '';
+  const urlLower = url.toLowerCase();
+  
+  // Check if it is KMZ (zip) or KML (text)
+  if (urlLower.endsWith('.kmz') || urlLower.endsWith('.zip') || contentType.includes('application/vnd.google-earth.kmz') || contentType.includes('application/zip')) {
+     const buffer = await response.arrayBuffer();
+     // We can create a File object and pass to parseKMZ
+     const file = new File([buffer], "network_file.kmz", { type: "application/vnd.google-earth.kmz" });
+     return await parseKMZ(file, (p) => onProgress && onProgress(40 + (p * 0.6)));
+  } else {
+     const text = await response.text();
+     if (!text || !text.includes('<kml')) {
+         throw new Error("الملف لا يحتوي على بيانات KML صالحة.");
+     }
+     const points = await parseKMLContentAsync(text, onProgress);
+     if (onProgress) onProgress(100);
+     return {
+        filename: "network_file.kml",
+        type: 'kmz',
+        data: points,
+        preview: []
+     };
+  }
 };

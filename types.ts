@@ -16,6 +16,8 @@ export interface GeoPoint {
   district?: string; // Neighborhood / District name from geocoding
   street?: string; // Street name from geocoding
   originalRow?: any[]; // The raw data from Excel/CSV
+  attributes?: Record<string, string>; // Extracted extended data
+  iconUrl?: string; // Custom KML icon URL
 }
 
 export interface SplitPolygon {
@@ -62,13 +64,25 @@ export type KmlSplitMode = 'none' | 'count' | 'attribute' | 'spatial';
 export interface KmlExportOptions {
   mode: KmlSplitMode;
   splitCount?: number;
-  groupByAttribute?: 'layer' | 'attr1' | 'attr2' | 'color';
+  groupByAttribute?: 'layer' | 'attr1' | 'attr2' | 'color' | 'street';
   groupByColumn?: string;
   canonicalColorMap?: Record<string, string>; // Mapping for merging colors
   selectionPolygon?: { x: number; y: number }[];
   separateMultiGeometry?: boolean;
   splitLinesByLength?: boolean;
   maxLineLength?: number;
+  optimizeForMyMaps?: boolean;
+  keepOriginalDescription?: boolean;
+  removeImagesOnly?: boolean;
+  lineStyle?: {
+    width?: number;
+  };
+  polygonStyle?: {
+    colorHex?: string;
+    opacityHex?: string;
+    outline?: number;
+    width?: number;
+  };
 }
 
 export type SplitterMode = 'single' | 'separate';
@@ -80,3 +94,5 @@ export interface AnalysisItem {
   percentage: number;
   center?: { x: number; y: number };
 }
+
+export type BaseMapType = 'satellite' | 'streets' | 'terrain' | 'osm';

@@ -15,7 +15,7 @@ export const generateAnalysisPPTX = async (
   // Set Layout to A4 Landscape (11.69 x 8.27 inches)
   pptx.defineLayout({ name: 'A4_LANDSCAPE', width: 11.69, height: 8.27 });
   pptx.layout = 'A4_LANDSCAPE';
-  if (isAr) pptx.rtl = true;
+  if (isAr) (pptx as any).rtlMode = true;
 
   const primaryColor = "0e3f53";
   const accentColor = "dcb13c";
@@ -153,7 +153,7 @@ export const generateWMainlinePPTX = async (
   // Set Layout to A4 Landscape (11.69 x 8.27 inches)
   pptx.defineLayout({ name: 'A4_LANDSCAPE', width: 11.69, height: 8.27 });
   pptx.layout = 'A4_LANDSCAPE';
-  if (isAr) pptx.rtl = true;
+  if (isAr) (pptx as any).rtlMode = true;
 
   // NWC Color Theme (Navy, Teal, Cyan, Off-white)
   const themeNavy = "042330";
@@ -501,7 +501,7 @@ export const generateWWMainlinePPTX = async (
   // Set Layout to A4 Landscape (11.69 x 8.27 inches)
   pptx.defineLayout({ name: 'A4_LANDSCAPE', width: 11.69, height: 8.27 });
   pptx.layout = 'A4_LANDSCAPE';
-  if (isAr) pptx.rtl = true;
+  if (isAr) (pptx as any).rtlMode = true;
 
   // Sewage Specialty Color Theme (Deep Amethyst, Rose Pink, Orchid, Soft Lavender)
   const themeNavy = "2E1065";       // Extra dark purple

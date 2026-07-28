@@ -3,30 +3,35 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Upload, Download, Check, Split, Trash2, Activity, 
   Presentation, FolderInput, Menu, X, PanelTop, 
-  SlidersHorizontal, Loader2, Map as MapIcon,
+  SlidersHorizontal, Loader2, Map as MapIcon, Globe,
   BarChart3, Ruler, MapPin, Layers, RefreshCw,
   FileSpreadsheet, ToggleLeft, ToggleRight, CheckSquare, Square,
-  Shapes, Map, PieChart, FileText, DownloadCloud, Settings2, Info,
+  Shapes, PieChart, FileText, DownloadCloud, Settings2, Info,
   MapPinned, MousePointer2, Eraser, FileUp, Archive, CircleDot,
   BoxSelect, PlusSquare, Scissors, Languages, Palette, Mail,
   ChevronRight, ListOrdered, Locate, Zap, Navigation, FolderOpen, Package,
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter,
-  Database, Droplet
+  Database, Droplet, AlertTriangle
 } from 'lucide-react';
+import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import * as XLSX from 'xlsx';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
 
 import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon } from './types';
 import { COMMON_EPSG } from './constants';
-import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ } from './services/parserService';
+import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs'; 
-import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent } from './services/kmlService';
-import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon } from './services/geometryService';
+import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
+import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, OverlapResult } from './services/geometryService';
 import { generateAnalysisPPTX, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
 import { getCanonicalColorMap } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
+import { DataFormatter } from './components/DataFormatter';
+import { FileComparator } from './components/FileComparator';
+import { MapClassifier } from './components/MapClassifier';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
 
@@ -152,12 +157,25 @@ const SAMPLE_GDB_POINTS: GeoPoint[] = [
   }
 ];
 
+export const defaultFields = [
+  'INNERDIAMETER', 
+  'SHAPE_Length', 
+  'Permit No', 
+  'segment id', 
+  'ZONE', 
+  'Drilling type', 
+  'Stage',
+  'SHAPE',
+  'Street',
+  'STREETNAME'
+];
+
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('ar');
   const [theme, setTheme] = useState<'default' | 'nwc'>('default');
   const t = translations[lang];
   
-  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter'>('converter');
+  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator'>('converter');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -165,16 +183,24 @@ const App: React.FC = () => {
   const [autoDetected, setAutoDetected] = useState<string | null>(null);
 
   const [activeFile, setActiveFile] = useState<ParsedFile | null>(null);
+  const [mapsLink, setMapsLink] = useState('');
   const [globalPoints, setGlobalPoints] = useState<GeoPoint[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [dataId, setDataId] = useState<string>(''); 
+  const [dataId, setDataId] = useState<string>('');
+  const [classifierRefZones, setClassifierRefZones] = useState<GeoPoint[]>([]);
+  const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
   
   const [mergeThreshold, setMergeThreshold] = useState<number>(45);
+  const [overlapResults, setOverlapResults] = useState<OverlapResult[] | null>(null);
+  const [showOverlapModal, setShowOverlapModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>('satellite');
 
-  const [splitMode, setSplitMode] = useState<'count' | 'spatial'>('count');
+  const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
   const [splitCount, setSplitCount] = useState<number>(2);
   const [exportStyle, setExportStyle] = useState<'single' | 'zip'>('single');
   const [splitLines, setSplitLines] = useState(false);
+  const [splitIntersections, setSplitIntersections] = useState(false);
   const [separateMulti, setSeparateMulti] = useState(false);
   const [maxLen, setMaxLen] = useState(1000);
 
@@ -187,6 +213,7 @@ const App: React.FC = () => {
   
   const [plannerSeparate, setPlannerSeparate] = useState(false);
   const [plannerSplitLines, setPlannerSplitLines] = useState(false);
+  const [plannerSplitIntersections, setPlannerSplitIntersections] = useState(false);
   const [plannerMaxLen, setPlannerMaxLen] = useState(500);
   const [plannerClip, setPlannerClip] = useState(true);
   const [plannerBuffer, setPlannerBuffer] = useState(0);
@@ -203,12 +230,28 @@ const App: React.FC = () => {
   const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'column'>('layer');
   const [groupByColumnSelect, setGroupByColumnSelect] = useState<string>('');
   const [converterExportAsZip, setConverterExportAsZip] = useState<boolean>(false);
+  const [optimizeForMyMaps, setOptimizeForMyMaps] = useState<boolean>(false);
+  const [keepOriginalDescription, setKeepOriginalDescription] = useState<boolean>(false);
+  const [removeImagesOnly, setRemoveImagesOnly] = useState<boolean>(false);
 
   const boundaryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (activeFile && activeFile.headers) {
-      setSelectedHeaders(activeFile.headers);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+      const initialSelection = activeFile.headers.filter(h => {
+        const normH = normalize(h);
+        return defaultFields.some(df => {
+          const normDf = normalize(df);
+          return normH.includes(normDf) || normDf.includes(normH);
+        });
+      });
+      
+      // Also add the default fields themselves so they are always in selectedHeaders
+      // even if they don't exist in the file's headers
+      const allSelected = Array.from(new Set([...initialSelection, ...defaultFields]));
+      setSelectedHeaders(initialSelection.length > 0 ? allSelected : Array.from(new Set([...activeFile.headers, ...defaultFields])));
+      
       if (activeFile.headers.length > 0) {
         setGroupByColumnSelect(activeFile.headers[0]);
       }
@@ -252,12 +295,16 @@ const App: React.FC = () => {
       return [...globalPoints, ...polyPts];
     }
 
+    if (activeTab === 'classifier') {
+      // Render polygons (zones) first, then points (assets) on top
+      return [...classifierRefZones, ...globalPoints];
+    }
     if (activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')) {
       return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
     }
     
     return globalPoints;
-  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons]);
+  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones]);
 
   const layerStats = useMemo(() => {
     const stats: Record<string, number> = {};
@@ -274,6 +321,50 @@ const App: React.FC = () => {
     const colors = Array.from(new Set<string>(pointsToProcess.map(p => (p.color || '#dcb13c').toUpperCase())));
     return getCanonicalColorMap(colors, mergeThreshold);
   }, [globalPoints, plannedStreets, activeTab, mergeThreshold]);
+
+  
+  const { materialDistribution, diameterDistribution } = useMemo(() => {
+    const pointsToAnalyze = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    const matGroups: Record<string, number> = {};
+    const diaGroups: Record<string, number> = {};
+    
+    pointsToAnalyze.forEach(pt => {
+        let len = pt.originalLength || 0;
+        if (len === 0 && pt.type === 'LineString' && pt.path) {
+            len = calculatePathLength(pt.path);
+        }
+        
+        let material = 'Unknown';
+        let diameter = 'Unknown';
+        
+        if (pt.attributes) {
+            // Check for material keys
+            const matKey = Object.keys(pt.attributes).find(k => ['MATERIAL', 'المادة', 'material'].includes(k.toLowerCase()));
+            if (matKey && pt.attributes[matKey]) material = String(pt.attributes[matKey]);
+            
+            // Check for diameter keys
+            const diaKey = Object.keys(pt.attributes).find(k => ['INNERDIAMETER', 'DIAMETER', 'القطر', 'diameter'].includes(k.toLowerCase()));
+            if (diaKey && pt.attributes[diaKey]) diameter = String(pt.attributes[diaKey]);
+        }
+        
+        if (len > 0) {
+            matGroups[material] = (matGroups[material] || 0) + len;
+            diaGroups[diameter] = (diaGroups[diameter] || 0) + len;
+        }
+    });
+    
+    const matData = Object.entries(matGroups)
+      .filter(([k, v]) => v > 0)
+      .map(([name, value]) => ({ name, value: Number((value / 1000).toFixed(2)) })) // Convert to km
+      .sort((a, b) => b.value - a.value);
+      
+    const diaData = Object.entries(diaGroups)
+      .filter(([k, v]) => v > 0)
+      .map(([name, value]) => ({ name, value: Number((value / 1000).toFixed(2)) })) // Convert to km
+      .sort((a, b) => b.value - a.value);
+      
+    return { materialDistribution: matData, diameterDistribution: diaData };
+  }, [globalPoints, plannedStreets, activeTab, activeFile]);
 
   const analysisData = useMemo(() => {
     const pointsToAnalyze = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
@@ -483,7 +574,12 @@ const App: React.FC = () => {
             const rowObj: any = {};
             originalHeaders.forEach((h, i) => {
                 if (selectedHeaders.includes(h)) {
-                    rowObj[h] = row[i];
+                    const hLower = h.toLowerCase();
+                    if (['streetname', 'street', 'الشارع'].includes(hLower) && pt && pt.street) {
+                        rowObj[h] = pt.street;
+                    } else {
+                        rowObj[h] = row[i];
+                    }
                 }
             });
             
@@ -496,7 +592,7 @@ const App: React.FC = () => {
             return rowObj;
         });
 
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.sheet_to_json(combinedData), lang === 'ar' ? "البيانات المحولة كاملة" : "Full Converted Data");
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(combinedData), lang === 'ar' ? "البيانات المحولة كاملة" : "Full Converted Data");
     } else {
         const pointsToExport = (activeTab === 'street-planner') 
             ? [...globalPoints, ...plannedStreets] 
@@ -525,7 +621,7 @@ const App: React.FC = () => {
             };
         });
 
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.sheet_to_json(detailedData), lang === 'ar' ? "بيانات العناصر" : "Elements Data");
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailedData), lang === 'ar' ? "بيانات العناصر" : "Elements Data");
         
         if (activeTab === 'analyzer') {
             const summaryData = analysisData.map(d => ({
@@ -535,7 +631,7 @@ const App: React.FC = () => {
                 [lang === 'ar' ? 'عدد العناصر' : 'Elements Count']: d.count,
                 [lang === 'ar' ? 'النسبة المئوية (%)' : 'Percentage (%)']: d.percentage.toFixed(2)
             }));
-            XLSX.utils.book_append_sheet(workbook, XLSX.utils.sheet_to_json(summaryData), lang === 'ar' ? "ملخص التحليل" : "Summary Analysis");
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summaryData), lang === 'ar' ? "ملخص التحليل" : "Summary Analysis");
         }
     }
 
@@ -566,8 +662,13 @@ const App: React.FC = () => {
         
         if (queryArea.length > 0) {
             const buffered = bufferPolygon(queryArea, plannerBuffer);
-            const streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
-            setPlannedStreets(streets);
+            try {
+                const streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
+                setPlannedStreets(streets);
+            } catch (err: any) {
+                console.error("Failed to fetch overpass streets:", err);
+                // We won't throw here to allow standard point-by-point geocoding to proceed
+            }
         }
 
         const total = globalPoints.length;
@@ -583,6 +684,7 @@ const App: React.FC = () => {
             
             if (!pt.street || pt.street === "شارع غير معروف") {
                 const geoData = await getReverseGeocode(pt.y, pt.x);
+                  await new Promise(resolve => setTimeout(resolve, 300));
                 updated[i] = { ...pt, street: geoData.street, district: geoData.district };
                 successCount++;
                 if (total > 5) await new Promise(r => setTimeout(r, 850));
@@ -622,6 +724,7 @@ const App: React.FC = () => {
             : `Fetching Street Names: (${i + 1} of ${total})`
           );
           const geoData = await getReverseGeocode(pt.y, pt.x);
+                  await new Promise(resolve => setTimeout(resolve, 300));
           street = geoData.street;
           district = geoData.district;
         }
@@ -761,6 +864,31 @@ const App: React.FC = () => {
     } catch (err: any) { setError(err.message); } finally { setLoading(false); }
   };
 
+  const handleLoadMyMapsLink = async () => {
+    const trimmed = mapsLink.trim();
+    if (!trimmed) return;
+    setLoading(true);
+    setStatusMessage(lang === 'ar' ? "جاري جلب خريطة Google My Maps..." : "Fetching Google My Maps...");
+    setAutoDetected(null);
+    setError(null);
+    try {
+      const result = await fetchMyMapsKML(trimmed);
+      setActiveFile(result);
+      
+      let parsedPoints: GeoPoint[] = result.data;
+      setGlobalPoints(parsedPoints);
+      setDataId(`mymaps-${Date.now()}`);
+      
+      setLoading(false);
+      setStatusMessage(lang === 'ar' ? 'تم جلب وتحميل الخريطة بنجاح!' : 'Map fetched and loaded successfully!');
+      setTimeout(() => setStatusMessage(''), 2500);
+    } catch (err: any) {
+      setLoading(false);
+      setStatusMessage('');
+      setError(err?.message || "حدث خطأ أثناء تحميل الخريطة.");
+    }
+  };
+
   const handleSplitExport = async () => {
     if (globalPoints.length === 0) return;
     setLoading(true); setStatusMessage("جاري معالجة وتقسيم البيانات...");
@@ -770,6 +898,9 @@ const App: React.FC = () => {
         let exploded: GeoPoint[] = []; 
         processedPoints.forEach(p => exploded.push(p)); 
         processedPoints = exploded; 
+      }
+      if (splitIntersections) {
+        processedPoints = splitLinesAtIntersections(processedPoints);
       }
       if (splitLines) {
         let temp: GeoPoint[] = [];
@@ -786,6 +917,18 @@ const App: React.FC = () => {
       if (splitMode === 'count') {
         const size = Math.ceil(processedPoints.length / splitCount);
         for (let i = 0; i < splitCount; i++) groups.push({ name: `Part ${i + 1}`, points: processedPoints.slice(i * size, (i + 1) * size) });
+      } else if (splitMode === 'street') {
+        const streetMap = new Map<string, GeoPoint[]>();
+        processedPoints.forEach(pt => {
+          let s = pt.street || (lang === 'ar' ? 'شوارع غير معروفة' : 'Unknown Streets');
+          // Sanitize street name to prevent ZIP file creation errors or XML errors
+          s = s.replace(/[/\\?%*:|"<>]/g, '-').trim() || "Street";
+          if (!streetMap.has(s)) streetMap.set(s, []);
+          streetMap.get(s)!.push(pt);
+        });
+        streetMap.forEach((pts, s) => {
+          groups.push({ name: s, points: pts });
+        });
       } else if (splitMode === 'spatial') {
         if (splitPolygons.length === 0) throw new Error(t.errors.noPolygon);
 
@@ -810,14 +953,18 @@ const App: React.FC = () => {
         if (remaining.length > 0) groups.push({ name: lang === 'ar' ? 'خارج المضلعات' : 'Outside Polygons', points: remaining });
       }
 
-      const docName = activeFile?.filename.split('.')[0] || "Split_Export";
+      const docName = activeFile?.filename ? activeFile.filename.split('.')[0] : "Split_Export";
       if (exportStyle === 'single') {
-        const kmlHeader = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${docName}</name>\n`;
+        const safeDocName = docName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const allPoints = groups.flatMap(g => g.points);
+        const stylesXML = generateKMLStyles(allPoints);
+        const kmlHeader = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${safeDocName}</name>\n${stylesXML}`;
         const kmlFooter = `</Document></kml>`;
         const chunks: string[] = [kmlHeader];
         groups.forEach(g => {
-            chunks.push(`<Folder><name>${g.name}</name><open>0</open>\n`);
-            const placemarks = generateKMLFolderContent(g.points, activeFile?.headers, selectedHeaders);
+            const safeGroupName = g.name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            chunks.push(`<Folder><name>${safeGroupName}</name><open>0</open>\n`);
+            const placemarks = generateKMLFolderContent(g.points, activeFile?.headers, selectedHeaders, { mode: 'none', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly });
             for (const p of placemarks) {
                 chunks.push(p);
             }
@@ -826,20 +973,25 @@ const App: React.FC = () => {
         chunks.push(kmlFooter);
         const zip = new JSZip(); 
         const blobKML = new Blob(chunks, { type: "application/vnd.google-earth.kml+xml" });
-        zip.file("doc.kml", await blobKML.arrayBuffer()); 
+        zip.file("doc.kml", blobKML); 
         const blob = await zip.generateAsync({ type: "blob", compression: globalPoints.length < 100000 ? "DEFLATE" : "STORE" }); 
         downloadBlob(blob, `${docName}_Split.kmz`);
       } else {
         const zip = new JSZip();
         for (const g of groups) { 
-          const kmlChunks = generateKMLChunks(g.points, g.name, { mode: 'none' }, activeFile?.headers, selectedHeaders); 
+          const kmlChunks = generateKMLChunks(g.points, g.name, { mode: 'none', keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, optimizeForMyMaps: optimizeForMyMaps }, activeFile?.headers, selectedHeaders); 
           const blobKML = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
-          zip.file(`${g.name}.kml`, await blobKML.arrayBuffer()); 
+          zip.file(`${g.name}.kml`, blobKML); 
         }
         const blob = await zip.generateAsync({ type: "blob", compression: globalPoints.length < 100000 ? "DEFLATE" : "STORE" }); 
         downloadBlob(blob, `${docName}_Split_Files.zip`);
       }
-    } catch (e: any) { setError(e.message); } finally { setLoading(false); }
+    } catch (e: any) { 
+        console.error("Split Export Error:", e);
+        setError(e.message); 
+    } finally { 
+        setLoading(false); 
+    }
   };
 
   const handleExportPolygonsOnly = async () => {
@@ -854,6 +1006,53 @@ const App: React.FC = () => {
       layer: 'Split Boundaries'
     }));
     await downloadKMZ(polyGeoPoints, "Split_Boundaries", { mode: 'none' });
+  };
+
+  const executeWithStreetFetching = async (
+    points: GeoPoint[], 
+    headers: string[] | undefined, 
+    action: () => Promise<void> | void
+  ) => {
+    const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'streetname', 'district', 'الحي'].includes(h.toLowerCase()));
+    if (hasStreetHeader) {
+      setLoading(true);
+      const total = points.length;
+      for (let i = 0; i < total; i++) {
+          const pt = points[i];
+          let street = pt.street;
+          if (!street) {
+              setStatusMessage(lang === 'ar' 
+                  ? `جاري جلب أسماء الشوارع: (${i + 1} من ${total})` 
+                  : `Fetching Street Names: (${i + 1} of ${total})`
+              );
+              try {
+                  const geoData = await getReverseGeocode(pt.y, pt.x);
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                  street = geoData.street;
+                  pt.street = street;
+                  pt.district = geoData.district;
+              } catch (err) {
+                  street = "";
+              }
+          }
+          if (!pt.attributes) pt.attributes = {};
+          const matchStreet = headers.find(h => h.toLowerCase() === 'street');
+          const matchArabic = headers.find(h => h === 'الشارع');
+          const matchStreetName = headers.find(h => h.toLowerCase() === 'streetname');
+
+          if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          
+          const matchDistrict = headers.find(h => h.toLowerCase() === 'district');
+          const matchArabicDistrict = headers.find(h => h === 'الحي');
+          if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+      }
+      setLoading(false);
+      setStatusMessage(null);
+    }
+    await action();
   };
 
   const handleFetchStreets = async () => {
@@ -880,6 +1079,10 @@ const App: React.FC = () => {
       const buffered = bufferPolygon(areaToQuery, plannerBuffer);
       let streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters); 
       
+      if (plannerSplitIntersections) {
+        streets = splitLinesAtIntersections(streets);
+      }
+
       if (plannerSplitLines) {
         let splitResults: GeoPoint[] = [];
         streets.forEach(s => {
@@ -963,17 +1166,86 @@ const App: React.FC = () => {
     }, 600);
   };
 
-  const FileUploadZone = ({ id, label }: { id: string, label?: string }) => (
-    <div className="space-y-4">
-      {label && (<div className="flex items-center gap-2 mb-2"><GitBranch className="w-5 h-5 text-accent transform rotate-90" /><h3 className="text-white font-black text-sm">{label}</h3></div>)}
-      <label className="block border-2 border-dashed border-accent/40 rounded-[2.5rem] p-10 text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group relative overflow-hidden">
-        <input type="file" className="hidden" onChange={handleFileUpload} />
-        <Upload className="w-10 h-10 mx-auto mb-4 text-accent group-hover:scale-110 transition-all" />
-        <span className="text-[11px] font-black text-white block leading-tight px-4">{activeFile ? activeFile.filename : (lang === 'ar' ? 'ارفق الملف هنا' : 'Upload Data Source')}</span>
-        <span className="text-[9px] text-accent mt-3 block font-bold uppercase tracking-widest">{activeFile ? (lang === 'ar' ? 'انقر لتغيير الملف' : 'Change File') : (lang === 'ar' ? 'انقر لاختيار الملف' : 'Select File')}</span>
-      </label>
-    </div>
-  );
+  const FileUploadZone = ({ id, label }: { id: string, label?: string }) => {
+    const finalLabel = label || (lang === 'ar' ? 'مصدر البيانات الطبوغرافية' : 'Topographic Data Source');
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <GitBranch className="w-5 h-5 text-accent transform rotate-90" />
+            <h3 className="text-white font-black text-sm">{finalLabel}</h3>
+          </div>
+          
+          <div className="bg-black/20 p-1 rounded-xl flex gap-1 border border-white/5">
+            <button
+              type="button"
+              onClick={() => setUploadSourceMode('file')}
+              className={cn(
+                "px-3 py-1 text-[9px] font-black transition-all rounded-lg",
+                uploadSourceMode === 'file' ? "bg-accent text-primary shadow-md" : "text-white/40 hover:text-white"
+              )}
+            >
+              {lang === 'ar' ? 'ملف محلي' : 'Local File'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setUploadSourceMode('link')}
+              className={cn(
+                "px-3 py-1 text-[9px] font-black transition-all rounded-lg",
+                uploadSourceMode === 'link' ? "bg-accent text-primary shadow-md" : "text-white/40 hover:text-white"
+              )}
+            >
+              {lang === 'ar' ? 'رابط جوجل مابس' : 'Google Maps'}
+            </button>
+          </div>
+        </div>
+
+        {uploadSourceMode === 'file' ? (
+          <label className="block border-2 border-dashed border-accent/40 rounded-[2.5rem] p-10 text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group relative overflow-hidden">
+            <input type="file" className="hidden" onChange={handleFileUpload} />
+            <Upload className="w-10 h-10 mx-auto mb-4 text-accent group-hover:scale-110 transition-all" />
+            <span className="text-[11px] font-black text-white block leading-tight px-4">{activeFile ? activeFile.filename : (lang === 'ar' ? 'ارفق الملف هنا (Excel, DXF, KMZ, KML)' : 'Upload Data Source (Excel, DXF, KMZ, KML)')}</span>
+            <span className="text-[9px] text-accent mt-3 block font-bold uppercase tracking-widest">{activeFile ? (lang === 'ar' ? 'انقر لتغيير الملف' : 'Change File') : (lang === 'ar' ? 'انقر لاختيار الملف' : 'Select File')}</span>
+          </label>
+        ) : (
+          <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 text-right" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+            <p className="text-[10px] text-white/50 leading-relaxed font-bold">
+              {lang === 'ar' 
+                ? 'ضع رابط خريطة Google My Maps العام (مفتوح للمشاركة) والضغط على "استيراد" لتحميل وتعديل البيانات مباشرة.' 
+                : 'Paste a public Google My Maps share/edit link and click "Import" to fetch and transform the data instantly.'}
+            </p>
+            <div className="flex gap-2">
+              <input 
+                type="text" 
+                placeholder="https://www.google.com/maps/d/edit?mid=..."
+                value={mapsLink}
+                onChange={(e) => setMapsLink(e.target.value)}
+                className="flex-1 bg-[#0e3f53] border border-white/10 rounded-2xl px-4 py-3 text-[11px] font-bold text-white outline-none placeholder:text-white/20 select-text"
+              />
+              <button
+                type="button"
+                onClick={handleLoadMyMapsLink}
+                disabled={!mapsLink.trim()}
+                className={cn(
+                  "px-6 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-1.5 shadow-lg",
+                  mapsLink.trim() ? "bg-accent text-primary hover:brightness-110 active:scale-95" : "bg-white/5 text-white/25 cursor-not-allowed"
+                )}
+              >
+                <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+                <span>{lang === 'ar' ? 'استيراد' : 'Import'}</span>
+              </button>
+            </div>
+            {activeFile && (
+              <div className="mt-2 flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/5">
+                <span className="text-[10px] font-black text-white/80">{lang === 'ar' ? 'الخريطة النشطة:' : 'Active Map:'} {activeFile.filename}</span>
+                <button type="button" onClick={() => { setActiveFile(null); setGlobalPoints([]); }} className="text-[9px] font-bold text-red-400 hover:underline">{lang === 'ar' ? 'إلغاء التحميل' : 'Unload'}</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="flex h-screen w-screen bg-[#0a2633] font-sans overflow-hidden" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
@@ -983,8 +1255,11 @@ const App: React.FC = () => {
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
                { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
                { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+               { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف الخرائط' : 'Map Classifier' },
                { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
-               { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' }
+               { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
+               { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق البيانات' : 'Format Data' },
+               { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
              ].map((tab) => (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={cn("flex flex-col items-center gap-2 p-3 rounded-2xl transition-all", activeTab === tab.id ? "bg-accent text-primary shadow-lg" : "text-white/30 hover:text-white")}>
                   {React.cloneElement(tab.icon as any, { className: "w-6 h-6" })}
@@ -996,6 +1271,8 @@ const App: React.FC = () => {
              <button onClick={() => setShowManual(true)} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
              <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{lang.toUpperCase()}</span></button>
              <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
+             <button onClick={() => setShowSettingsModal(true)} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Settings2 className="w-5 h-5" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'إعدادات' : 'SETTINGS'}</span></button>
+
           </div>
       </nav>
 
@@ -1061,7 +1338,7 @@ const App: React.FC = () => {
                                         <div className="flex gap-2">
                                             <button 
                                                 type="button"
-                                                onClick={() => setSelectedHeaders(activeFile.headers || [])} 
+                                                onClick={() => setSelectedHeaders(Array.from(new Set([...(activeFile.headers || []), ...defaultFields])))} 
                                                 className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg hover:bg-accent/30 text-[9px] font-black transition-all"
                                             >
                                                 {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
@@ -1076,7 +1353,7 @@ const App: React.FC = () => {
                                         </div>
 
                                         <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-1.5 pr-1 border border-white/5 rounded-xl p-3 bg-black/10">
-                                            {activeFile.headers.map((header) => {
+                                            {Array.from(new Set([...activeFile.headers, ...defaultFields])).map((header) => {
                                                 const isChecked = selectedHeaders.includes(header);
                                                 return (
                                                     <button
@@ -1196,7 +1473,7 @@ const App: React.FC = () => {
                                                                 : "bg-white/5 text-white/50 border-white/10 hover:bg-white/10"
                                                         )}
                                                     >
-                                                        <Map className="w-3.5 h-3.5 text-accent/80" />
+                                                        <MapIcon className="w-3.5 h-3.5 text-accent/80" />
                                                         {lang === 'ar' ? 'ملف KMZ موحد' : 'Single KMZ File'}
                                                     </button>
                                                     <button 
@@ -1215,17 +1492,80 @@ const App: React.FC = () => {
                                                 </div>
                                             </div>
                                         )}
+                                        
+                                        {/* خيار تحسين خرائط جوجل My Maps لمنع التكرار */}
+                                        <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between mt-3 animate-in fade-in duration-200">
+                                            <div>
+                                                <h4 className="text-white font-black text-xs">{lang === 'ar' ? 'تحسين لخرائط Google My Maps' : 'Optimize for Google My Maps'}</h4>
+                                                <p className="text-white/50 text-[9px] mt-1">{lang === 'ar' ? 'إزالة جدول الوصف لمنع تكرار البيانات في لوحة My Maps.' : 'Remove description table to prevent duplication in My Maps panel.'}</p>
+                                            </div>
+                                            <button 
+                                                type="button"
+                                                onClick={() => setOptimizeForMyMaps(!optimizeForMyMaps)}
+                                                className={cn(
+                                                    "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
+                                                    optimizeForMyMaps ? "bg-accent" : "bg-white/20"
+                                                )}
+                                            >
+                                                <div className={cn(
+                                                    "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                                                    optimizeForMyMaps ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                                                )} />
+                                            </button>
+                                        </div>
+
+                                        <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between mt-3 animate-in fade-in duration-200">
+                                            <div>
+                                                <h4 className="text-white font-black text-xs">{lang === 'ar' ? 'الاحتفاظ بالبيانات الأصلية والصور' : 'Retain Original Data & Images'}</h4>
+                                                <p className="text-white/50 text-[9px] mt-1">{lang === 'ar' ? 'استخدام الوصف والمظهر الأصليين والوسائط من الملف المصدر مباشرة.' : 'Use original description, styling, and media directly from the source file.'}</p>
+                                            </div>
+                                            <button 
+                                                type="button"
+                                                onClick={() => setKeepOriginalDescription(!keepOriginalDescription)}
+                                                className={cn(
+                                                    "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
+                                                    keepOriginalDescription ? "bg-accent" : "bg-white/20"
+                                                )}
+                                            >
+                                                <div className={cn(
+                                                    "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                                                    keepOriginalDescription ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                                                )} />
+                                            </button>
+                                        </div>
+
+                                        <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between mt-3 animate-in fade-in duration-200">
+                                            <div>
+                                                <h4 className="text-white font-black text-xs">{lang === 'ar' ? 'إزالة الصور فقط' : 'Remove Images Only'}</h4>
+                                                <p className="text-white/50 text-[9px] mt-1">{lang === 'ar' ? 'حذف جميع الصور والوسائط من داخل منطاد الوصف في ملف KML.' : 'Delete all images and media from inside the description balloon in the KML file.'}</p>
+                                            </div>
+                                            <button 
+                                                type="button"
+                                                onClick={() => setRemoveImagesOnly(!removeImagesOnly)}
+                                                className={cn(
+                                                    "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
+                                                    removeImagesOnly ? "bg-accent" : "bg-white/20"
+                                                )}
+                                            >
+                                                <div className={cn(
+                                                    "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                                                    removeImagesOnly ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                                                )} />
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
 
-                                <div className="grid grid-cols-1 gap-4">
+                                <div className="grid grid-cols-1 gap-4 mt-4">
                                     <button 
                                         onClick={() => {
-                                            if (converterExportAsZip && groupingMode !== 'none') {
-                                                downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined }, activeFile.headers, selectedHeaders);
-                                            } else {
-                                                downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined }, activeFile.headers, selectedHeaders);
-                                            }
+                                            executeWithStreetFetching(globalPoints, selectedHeaders, () => {
+                                                if (converterExportAsZip && groupingMode !== 'none') {
+                                                    downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
+                                                } else {
+                                                    downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
+                                                }
+                                            });
                                         }} 
                                         className="bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:brightness-110 active:scale-95 transition-all w-full"
                                     >
@@ -1235,7 +1575,7 @@ const App: React.FC = () => {
                                         : (lang === 'ar' ? 'تصدير Google Earth (KMZ)' : 'Export Google Earth (KMZ)')
                                       }
                                     </button>
-                                    <button onClick={downloadExcelAnalysis} className="bg-white/5 border border-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:bg-white/10 active:scale-95 transition-all w-full">
+                                    <button onClick={() => executeWithStreetFetching(globalPoints, selectedHeaders, downloadExcelAnalysis)} className="bg-white/5 border border-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:bg-white/10 active:scale-95 transition-all w-full">
                                       <FileSpreadsheet className="w-5 h-5 text-green-500" /> 
                                       {lang === 'ar' ? 'تصدير إكسل شامل' : 'Full Excel Export'}
                                     </button>
@@ -1351,6 +1691,16 @@ const App: React.FC = () => {
 
                           <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
                               <div className="flex flex-col gap-1">
+                                  <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط عند التقاطعات' : 'Split Lines at Intersections'}</span>
+                                  <span className="text-[9px] text-white/40">{lang === 'ar' ? 'فصل الشوارع عند التقاطعات لقطع مستقلة' : 'Split streets at every intersection'}</span>
+                              </div>
+                              <button onClick={() => setPlannerSplitIntersections(!plannerSplitIntersections)} className={cn("w-10 h-5 rounded-full transition-all relative", plannerSplitIntersections ? "bg-accent" : "bg-white/10")}>
+                                  <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerSplitIntersections ? "left-0.5" : "left-5.5") : (plannerSplitIntersections ? "right-0.5" : "right-5.5"))} />
+                              </button>
+                          </label>
+
+                          <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
+                              <div className="flex flex-col gap-1">
                                   <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط حسب الطول' : 'Split Lines by Length'}</span>
                                   <span className="text-[9px] text-white/40">{lang === 'ar' ? 'تقسيم المسارات المستخرجة لقطع متساوية' : 'Split fetched paths equally'}</span>
                               </div>
@@ -1386,7 +1736,7 @@ const App: React.FC = () => {
                                       <span className="px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-[9px] font-black">{plannedStreets.length} {lang === 'ar' ? 'شوارع' : 'Streets'}</span>
                                    </div>
                                 </div>
-                                <button onClick={() => downloadKMZ([...globalPoints, ...plannedStreets], "Full_Street_Project", { mode: 'none', groupByAttribute: 'layer' })} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 shadow-xl transition-all"><Download className="w-5 h-5" />{lang === 'ar' ? 'تنزيل المشروع كاملاً (KMZ)' : 'Download Full KMZ'}</button>
+                                <button onClick={() => executeWithStreetFetching([...globalPoints, ...plannedStreets], selectedHeaders, () => { downloadKMZ([...globalPoints, ...plannedStreets], "Full_Street_Project", { mode: 'none', groupByAttribute: 'layer', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 shadow-xl transition-all"><Download className="w-5 h-5" />{lang === 'ar' ? 'تنزيل المشروع كاملاً (KMZ)' : 'Download Full KMZ'}</button>
                                 <button onClick={downloadExcelWithStreets} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><FileSpreadsheet className="w-5 h-5 text-green-500" />{lang === 'ar' ? 'تنزيل المشروع كاملاً (Excel)' : 'Download Full Excel'}</button>
                                 <button onClick={() => { setSelectedArea(null); setPlannedStreets([]); setBoundaryPolygon(null); setIsDrawingMode(false); setActiveFile(null); setGlobalPoints([]); }} className="w-full mt-2 bg-white/5 text-white/40 font-black py-3 rounded-xl flex items-center justify-center gap-2 hover:text-red-400 transition-all text-[10px] uppercase"><Trash2 className="w-3 h-3" />{lang === 'ar' ? 'إفراغ مساحة العمل' : 'Clear Workspace'}</button>
                             </div>
@@ -1470,7 +1820,7 @@ const App: React.FC = () => {
                                         <span className="text-lg font-black text-white mt-1">{placemarksSummary.lines}</span>
                                     </div>
                                     <div id="polygons-stat" className="bg-white/5 rounded-2xl p-2.5 flex flex-col justify-center">
-                                        <Map className="w-4 h-4 text-accent/60 mx-auto mb-1" />
+                                        <MapIcon className="w-4 h-4 text-accent/60 mx-auto mb-1" />
                                         <span className="text-[8px] font-bold text-white/40 block uppercase">{lang === 'ar' ? 'مساحات' : 'Polygons'}</span>
                                         <span className="text-lg font-black text-white mt-1">{placemarksSummary.polygons}</span>
                                     </div>
@@ -1481,6 +1831,97 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
                             </div>
+
+                                                        {/* Interactive Charts */}
+                            <div className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-6 animate-in slide-in-from-bottom duration-700">
+                                <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                                    <BarChart3 className="w-4 h-4 text-accent" />
+                                    <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
+                                        {lang === 'ar' ? 'توزيع الأطوال (كم) حسب المادة والقطر' : 'Length Distribution (km) by Material & Diameter'}
+                                    </h3>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-3">
+                                        <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب المادة' : 'By Material'}</h4>
+                                        <div className="h-[200px] w-full">
+                                            {materialDistribution.length > 0 ? (
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <RechartsPieChart>
+                                                        <Pie data={materialDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({name, percent}) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                                                            {materialDistribution.map((entry, index) => (
+                                                                <Cell key={`cell-${index}`} fill={PALETTE[index % PALETTE.length]} />
+                                                            ))}
+                                                        </Pie>
+                                                        <RechartsTooltip contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} />
+                                                    </RechartsPieChart>
+                                                </ResponsiveContainer>
+                                            ) : (
+                                                <div className="w-full h-full flex flex-col items-center justify-center text-white/20 text-xs font-black">
+                                                    <PieChart className="w-8 h-8 mb-2 opacity-20" />
+                                                    {lang === 'ar' ? 'لا يوجد بيانات مواد' : 'No material data'}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="space-y-3">
+                                        <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب القطر' : 'By Diameter'}</h4>
+                                        <div className="h-[200px] w-full">
+                                            {diameterDistribution.length > 0 ? (
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <BarChart data={diameterDistribution}>
+                                                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
+                                                        <XAxis dataKey="name" tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
+                                                        <YAxis tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
+                                                        <RechartsTooltip contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} />
+                                                        <Bar dataKey="value" fill="#06b6d4" radius={[4, 4, 0, 0]} />
+                                                    </BarChart>
+                                                </ResponsiveContainer>
+                                            ) : (
+                                                <div className="w-full h-full flex flex-col items-center justify-center text-white/20 text-xs font-black">
+                                                    <BarChart3 className="w-8 h-8 mb-2 opacity-20" />
+                                                    {lang === 'ar' ? 'لا يوجد بيانات قطر' : 'No diameter data'}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            {/* Spatial Overlap Detection */}
+                            <div className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 animate-in slide-in-from-bottom duration-700">
+                                <div className="flex items-center gap-2 border-b border-white/5 pb-2">
+                                    <AlertTriangle className="w-4 h-4 text-accent" />
+                                    <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
+                                        {lang === 'ar' ? 'فحص التداخل المكاني' : 'Spatial Overlap Detection'}
+                                    </h3>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => {
+                                            const pointsToCheck = !activeFile ? plannedStreets : globalPoints;
+                                            const overlaps = detectSpatialOverlap(pointsToCheck);
+                                            setOverlapResults(overlaps);
+                                            setShowOverlapModal(true);
+                                        }}
+                                        className="flex-1 bg-accent/10 hover:bg-accent/20 text-accent font-black py-3 rounded-2xl transition-all border border-accent/20 text-xs flex items-center justify-center gap-2"
+                                    >
+                                        <Sparkles className="w-4 h-4" />
+                                        {lang === 'ar' ? 'فحص التطابق والتداخل' : 'Check for Spatial Overlaps'}
+                                    </button>
+                                    {overlapResults && (
+                                        <button
+                                            onClick={() => {
+                                                setOverlapResults(null);
+                                            }}
+                                            className="px-4 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-black rounded-2xl transition-all border border-red-500/20 flex items-center justify-center"
+                                            title={lang === 'ar' ? 'مسح التمييز' : 'Clear Highlights'}
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
                             {/* W_MAINLINE Geodatabase Layer Metrics Card */}
                             {wMainlineStats.count > 0 && (
                               <div id="w-mainline-geodatabase-analysis" className="p-6 bg-[#032330] border border-[#00c8b3]/30 rounded-[2.5rem] shadow-[0_4px_30px_rgba(0,180,180,0.15)] space-y-6 animate-in slide-in-from-bottom duration-700">
@@ -1534,12 +1975,12 @@ const App: React.FC = () => {
                                      </span>
                                      <div className="space-y-2 bg-black/10 rounded-2xl p-3 border border-white/5">
                                          {Object.entries(wMainlineStats.materialLengths).map(([material, length]) => {
-                                              const percentage = ((length / wMainlineStats.totalLength) * 100).toFixed(1);
+                                              const percentage = ((Number(length) / wMainlineStats.totalLength) * 100).toFixed(1);
                                               return (
                                                   <div key={material} className="space-y-1">
                                                       <div className="flex justify-between text-[10px] font-bold text-white/80">
                                                           <span>{material}</span>
-                                                          <span>{(length / 1000).toFixed(3)} km ({percentage}%)</span>
+                                                          <span>{(Number(length) / 1000).toFixed(3)} km ({percentage}%)</span>
                                                       </div>
                                                       <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
                                                           <div className="h-full rounded-full bg-[#00c8b3]" style={{ width: `${percentage}%` }} />
@@ -1562,7 +2003,7 @@ const App: React.FC = () => {
                                                      <div className="w-2 h-2 rounded-full bg-[#00a8e8]" />
                                                      <span className="text-[10px] font-black text-white">{diameter}</span>
                                                   </div>
-                                                  <span className="text-[10px] font-bold text-[#00c8b3]">{(length / 1000).toFixed(3)} km</span>
+                                                  <span className="text-[10px] font-bold text-[#00c8b3]">{(Number(length) / 1000).toFixed(3)} km</span>
                                               </div>
                                           ))}
                                       </div>
@@ -1571,7 +2012,7 @@ const App: React.FC = () => {
                                   {/* Dedicated EXPORT buttons specifically for W_MAINLINE */}
                                   <div className="space-y-3">
                                       <button
-                                          onClick={() => downloadKMZ(wMainlineStats.segments, "W_MAINLINE_network_map", { mode: 'none' })}
+                                          onClick={() => executeWithStreetFetching(wMainlineStats.segments, selectedHeaders, () => { downloadKMZ(wMainlineStats.segments, "W_MAINLINE_network_map", { mode: 'none', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
                                           className="w-full bg-[#00c8b3] hover:brightness-110 active:scale-95 text-[#032330] font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-all text-xs group"
                                       >
                                           <Download className="w-5 h-5 group-hover:translate-y-0.5 transition-transform" />
@@ -1641,12 +2082,12 @@ const App: React.FC = () => {
                                      </span>
                                      <div className="space-y-2 bg-black/10 rounded-2xl p-3 border border-white/5">
                                          {Object.entries(wwMainlineStats.materialLengths).map(([material, length]) => {
-                                             const percentage = ((length / wwMainlineStats.totalLength) * 100).toFixed(1);
+                                             const percentage = ((Number(length) / wwMainlineStats.totalLength) * 100).toFixed(1);
                                              return (
                                                  <div key={material} className="space-y-1 text-left">
                                                      <div className="flex justify-between text-[10px] font-bold text-white/80">
                                                          <span>{material}</span>
-                                                         <span>{(length / 1000).toFixed(3)} km ({percentage}%)</span>
+                                                         <span>{(Number(length) / 1000).toFixed(3)} km ({percentage}%)</span>
                                                      </div>
                                                      <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
                                                          <div className="h-full rounded-full bg-[#d946ef]" style={{ width: `${percentage}%` }} />
@@ -1669,7 +2110,7 @@ const App: React.FC = () => {
                                                     <div className="w-2 h-2 rounded-full bg-[#a78bfa]" />
                                                     <span className="text-[10px] font-black text-white">{diameter}</span>
                                                  </div>
-                                                 <span className="text-[10px] font-bold text-[#d946ef]">{(length / 1000).toFixed(3)} km</span>
+                                                 <span className="text-[10px] font-bold text-[#d946ef]">{(Number(length) / 1000).toFixed(3)} km</span>
                                              </div>
                                          ))}
                                      </div>
@@ -1678,7 +2119,7 @@ const App: React.FC = () => {
                                  {/* Dedicated EXPORT buttons specifically for WW_MAINLINE */}
                                  <div className="space-y-3">
                                      <button
-                                         onClick={() => downloadKMZ(wwMainlineStats.segments, "WW_MAINLINE_sewer_map", { mode: 'none' })}
+                                         onClick={() => executeWithStreetFetching(wwMainlineStats.segments, selectedHeaders, () => { downloadKMZ(wwMainlineStats.segments, "WW_MAINLINE_sewer_map", { mode: 'none', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
                                          className="w-full bg-[#d946ef] hover:brightness-110 active:scale-95 text-[#160b2d] font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg transition-all text-xs group"
                                      >
                                          <Download className="w-5 h-5 group-hover:translate-y-0.5 transition-transform" />
@@ -1697,8 +2138,8 @@ const App: React.FC = () => {
 
                             <div className="h-6" />
                             <div className="grid grid-cols-2 gap-3">
-                                <button onClick={() => downloadKMZ(!activeFile ? plannedStreets : globalPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap }, activeFile?.headers, selectedHeaders)} className="border border-[#ffffff]/10 text-white/80 font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/5 transition-all text-[11px] shadow-lg"><DownloadCloud className="w-4 h-4 text-accent" />KMZ (Merged)</button>
-                                <button onClick={downloadExcelAnalysis} className="border border-white/10 text-white/80 font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/5 transition-all text-[11px] shadow-lg"><FileSpreadsheet className="w-4 h-4 text-green-500" />Excel (Standard)</button>
+                                <button onClick={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZ(!activeFile ? plannedStreets : globalPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })} className="border border-[#ffffff]/10 text-white/80 font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/5 transition-all text-[11px] shadow-lg"><DownloadCloud className="w-4 h-4 text-accent" />KMZ (Merged)</button>
+                                <button onClick={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, downloadExcelAnalysis)} className="border border-white/10 text-white/80 font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/5 transition-all text-[11px] shadow-lg"><FileSpreadsheet className="w-4 h-4 text-green-500" />Excel (Standard)</button>
                             </div>
                             <button onClick={downloadExcelWithStreets} className="w-full bg-[#0b2d3d] border border-accent/40 text-accent font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-sm group">
                                 <MapPinIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
@@ -1767,12 +2208,34 @@ const App: React.FC = () => {
                 {activeTab === 'splitter' && (
                   <div className="space-y-8 animate-in fade-in duration-500 pb-10">
                       <FileUploadZone id="splitter-up" label={lang === 'ar' ? '1. مصدر البيانات' : '1. Data Source'} />
-                      <div className="bg-[#0b2d3d]/40 p-2 rounded-[1.8rem] border border-white/5 flex gap-2"><button onClick={() => setSplitMode('count')} className={cn("flex-1 py-4 rounded-[1.5rem] text-[12px] font-black transition-all", splitMode === 'count' ? "bg-accent text-primary shadow-xl" : "text-white/40 hover:text-white")}>{lang === 'ar' ? 'تقسيم رقمي (أجزاء)' : 'Digital Split (Parts)'}</button><button onClick={() => setSplitMode('spatial')} className={cn("flex-1 py-4 rounded-[1.5rem] text-[12px] font-black transition-all", splitMode === 'spatial' ? "bg-accent text-primary shadow-xl" : "text-white/40 hover:text-white")}>{lang === 'ar' ? 'تقسيم حسب رسم منطقة' : 'Split by Drawing Area'}</button></div>
+                      <div className="bg-[#0b2d3d]/40 p-2 rounded-[1.8rem] border border-white/5 flex gap-2">
+                        <button onClick={() => setSplitMode('count')} className={cn("flex-1 py-3 rounded-[1.5rem] text-[11px] font-black transition-all leading-tight", splitMode === 'count' ? "bg-accent text-primary shadow-xl" : "text-white/40 hover:text-white")}>{lang === 'ar' ? 'تقسيم رقمي (أجزاء)' : 'Digital Split'}</button>
+                        <button onClick={() => setSplitMode('spatial')} className={cn("flex-1 py-3 rounded-[1.5rem] text-[11px] font-black transition-all leading-tight", splitMode === 'spatial' ? "bg-accent text-primary shadow-xl" : "text-white/40 hover:text-white")}>{lang === 'ar' ? 'حسب المنطقة' : 'Spatial Split'}</button>
+                        <button onClick={() => setSplitMode('street')} className={cn("flex-1 py-3 rounded-[1.5rem] text-[11px] font-black transition-all leading-tight", splitMode === 'street' ? "bg-accent text-primary shadow-xl" : "text-white/40 hover:text-white")}>{lang === 'ar' ? 'حسب الشارع' : 'By Street'}</button>
+                      </div>
                       <div className="bg-[#0b2d3d]/40 p-8 rounded-[2.5rem] border border-white/5 shadow-2xl space-y-8">
                         {splitMode === 'count' ? (
                           <div className="space-y-8">
                             <div className="flex items-center justify-between"><h3 className="text-white font-black text-sm">{lang === 'ar' ? 'عدد الأجزاء:' : 'Number of Parts:'}</h3><span className="text-2xl font-black text-accent">{splitCount}</span></div>
                             <div className="relative h-2 w-full bg-[#0e3f53] rounded-full"><input type="range" min="2" max="50" value={splitCount} onChange={(e) => setSplitCount(parseInt(e.target.value))} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" /><div className="h-full bg-accent/20 rounded-full" style={{ width: `${((splitCount - 2) / 48) * 100}%` }} /><div className="absolute top-1/2 -translate-y-1/2 w-6 h-6 bg-accent rounded-full border-4 border-[#0e3f53] shadow-lg pointer-events-none" style={{ left: `calc(${((splitCount - 2) / 48) * 100}% - 12px)` }} /></div>
+                          </div>
+                        ) : splitMode === 'street' ? (
+                          <div className="space-y-6">
+                            <p className="text-[12px] text-accent font-black leading-relaxed text-center">
+                              {lang === 'ar' ? 'سيتم تقسيم العناصر وتصنيفها في مجلدات منفصلة بناءً على اسم الشارع الجغرافي الخاص بها.' : 'Elements will be grouped into separate folders based on their geographic street name.'}
+                            </p>
+                            
+                            <button 
+                              onClick={handleReverseGeocodeGlobal} 
+                              className="w-full bg-[#0e3f53] border-2 border-accent/20 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-xs group"
+                            >
+                               <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
+                               {lang === 'ar' ? 'تحديث/جلب أسماء الشوارع للبيانات' : 'Fetch/Update Street Names'}
+                            </button>
+                            
+                            <p className="text-[10px] text-white/40 font-bold text-center">
+                              {lang === 'ar' ? 'ملاحظة: إذا لم تكن البيانات تحتوي على أسماء شوارع مسبقاً، يرجى النقر على الزر أعلاه لجلبها.' : 'Note: If the data does not already have street names, please click the button above to fetch them.'}
+                            </p>
                           </div>
                         ) : (
                           <div className="space-y-6">
@@ -1815,9 +2278,73 @@ const App: React.FC = () => {
                           </div>
                         )}
                       </div>
-                      <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4"><div className="flex items-center gap-2 mb-2"><Settings2 className="w-4 h-4 text-accent" /><h3 className="text-white font-black text-[11px] uppercase tracking-wider">{lang === 'ar' ? 'خيارات تقسيم متقدمة' : 'Advanced Split Options'}</h3></div><label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5"><div className="flex flex-col gap-1"><span className="text-[12px] font-black text-white">{lang === 'ar' ? 'فصل العناصر المدمجة (Explode)' : 'Separate Combined Elements'}</span><span className="text-[9px] text-white/40">{lang === 'ar' ? 'تحويل MultiGeometry إلى عناصر منفصلة قبل التقسيم' : 'Convert MultiGeometry to individual parts'}</span></div><button onClick={() => setSeparateMulti(!separateMulti)} className={cn("w-12 h-6 rounded-full transition-all relative", separateMulti ? "bg-accent" : "bg-white/10")}><div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (separateMulti ? "left-1" : "left-7") : (separateMulti ? "right-1" : "right-7"))} /></button></label><label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5"><div className="flex flex-col gap-1"><span className="text-[12px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط حسب الطول' : 'Split Lines by Length'}</span><span className="text-[9px] text-white/40">{lang === 'ar' ? 'تقسيم المسارات الطويلة لقطع متساوية' : 'Split long paths into equal segments'}</span></div><button onClick={() => setSplitLines(!splitLines)} className={cn("w-12 h-6 rounded-full transition-all relative", splitLines ? "bg-accent" : "bg-white/10")}><div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (splitLines ? "left-1" : "left-7") : (splitLines ? "right-1" : "right-7"))} /></button></label>{splitLines && (<div className="px-4 pb-2 animate-in slide-in-from-top"><div className="flex items-center justify-between mb-2"><span className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى للطول (م):' : 'Max Length (m):'}</span><span className="text-xs font-black text-accent">{maxLen}m</span></div><input type="range" min="100" max="5000" step="100" value={maxLen} onChange={(e) => setMaxLen(parseInt(e.target.value))} className="w-full accent-accent h-1 bg-white/10 rounded-full" /></div>)}</div>
+                      <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Settings2 className="w-4 h-4 text-accent" />
+                          <h3 className="text-white font-black text-[11px] uppercase tracking-wider">{lang === 'ar' ? 'خيارات تقسيم متقدمة' : 'Advanced Split Options'}</h3>
+                        </div>
+                        <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[12px] font-black text-white">{lang === 'ar' ? 'فصل العناصر المدمجة (Explode)' : 'Separate Combined Elements'}</span>
+                            <span className="text-[9px] text-white/40">{lang === 'ar' ? 'تحويل MultiGeometry إلى عناصر منفصلة قبل التقسيم' : 'Convert MultiGeometry to individual parts'}</span>
+                          </div>
+                          <button onClick={() => setSeparateMulti(!separateMulti)} className={cn("w-12 h-6 rounded-full transition-all relative", separateMulti ? "bg-accent" : "bg-white/10")}>
+                            <div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (separateMulti ? "left-1" : "left-7") : (separateMulti ? "right-1" : "right-7"))} />
+                          </button>
+                        </label>
+                        <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[12px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط عند التقاطعات' : 'Split Lines at Intersections'}</span>
+                            <span className="text-[9px] text-white/40">{lang === 'ar' ? 'فصل الخطوط عند تقاطعها مع خطوط أخرى' : 'Split lines where they intersect'}</span>
+                          </div>
+                          <button onClick={() => setSplitIntersections(!splitIntersections)} className={cn("w-12 h-6 rounded-full transition-all relative", splitIntersections ? "bg-accent" : "bg-white/10")}>
+                            <div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (splitIntersections ? "left-1" : "left-7") : (splitIntersections ? "right-1" : "right-7"))} />
+                          </button>
+                        </label>
+                        <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[12px] font-black text-white">{lang === 'ar' ? 'الاحتفاظ بالبيانات الأصلية والصور' : 'Retain Original Data & Images'}</span>
+                            <span className="text-[9px] text-white/40">{lang === 'ar' ? 'استخدام الوصف والمظهر الأصليين من الملف المصدر' : 'Use original description and styling from source'}</span>
+                          </div>
+                          <button onClick={() => setKeepOriginalDescription(!keepOriginalDescription)} className={cn("w-12 h-6 rounded-full transition-all relative", keepOriginalDescription ? "bg-accent" : "bg-white/10")}>
+                            <div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (keepOriginalDescription ? "left-1" : "left-7") : (keepOriginalDescription ? "right-1" : "right-7"))} />
+                          </button>
+                        </label>
+                        <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[12px] font-black text-white">{lang === 'ar' ? 'إزالة الصور فقط' : 'Remove Images Only'}</span>
+                            <span className="text-[9px] text-white/40">{lang === 'ar' ? 'حذف جميع الصور والوسائط من منطاد الوصف مع الاحتفاظ بالباقي' : 'Delete all images and media from the description balloon'}</span>
+                          </div>
+                          <button onClick={() => setRemoveImagesOnly(!removeImagesOnly)} className={cn("w-12 h-6 rounded-full transition-all relative", removeImagesOnly ? "bg-accent" : "bg-white/10")}>
+                            <div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (removeImagesOnly ? "left-1" : "left-7") : (removeImagesOnly ? "right-1" : "right-7"))} />
+                          </button>
+                        </label>
+                        <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-[12px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط حسب الطول' : 'Split Lines by Length'}</span>
+                            <span className="text-[9px] text-white/40">{lang === 'ar' ? 'تقسيم المسارات الطويلة لقطع متساوية' : 'Split long paths into equal segments'}</span>
+                          </div>
+                          <button onClick={() => setSplitLines(!splitLines)} className={cn("w-12 h-6 rounded-full transition-all relative", splitLines ? "bg-accent" : "bg-white/10")}>
+                            <div className={cn("absolute top-1 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (splitLines ? "left-1" : "left-7") : (splitLines ? "right-1" : "right-7"))} />
+                          </button>
+                        </label>
+                        {splitLines && (
+                          <div className="px-4 pb-2 animate-in slide-in-from-top">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى للطول (م):' : 'Max Length (m):'}</span>
+                              <span className="text-xs font-black text-accent">{maxLen}m</span>
+                            </div>
+                            <input type="range" min="100" max="5000" step="100" value={maxLen} onChange={(e) => setMaxLen(parseInt(e.target.value))} className="w-full accent-accent h-1 bg-white/10 rounded-full" />
+                          </div>
+                        )}
+                      </div>
                       <div className="space-y-4"><h3 className="text-white/40 font-black text-[10px] uppercase tracking-widest px-4">{lang === 'ar' ? 'نمط التصدير:' : 'Export Style:'}</h3><div className="grid grid-cols-2 gap-4"><button onClick={() => setExportStyle('single')} className={cn("flex flex-col items-center gap-4 p-8 rounded-[2rem] border-2 transition-all group", exportStyle === 'single' ? "bg-[#0b2d3d] border-accent" : "bg-white/5 border-transparent opacity-60 hover:opacity-100")}><div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center mb-1", exportStyle === 'single' ? "bg-accent/10 text-accent" : "bg-white/5 text-white/30")}><FolderOpen className="w-7 h-7" /></div><span className={cn("text-[10px] font-black leading-tight text-center", exportStyle === 'single' ? "text-accent" : "text-white/40")}>{lang === 'ar' ? 'ملف KML واحد (مجلدات)' : 'Single KML file (Folders)'}</span></button><button onClick={() => setExportStyle('zip')} className={cn("flex flex-col items-center gap-4 p-8 rounded-[2rem] border-2 transition-all group", exportStyle === 'zip' ? "bg-[#0b2d3d] border-accent" : "bg-white/5 border-transparent opacity-60 hover:opacity-100")}><div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center mb-1", exportStyle === 'zip' ? "bg-accent/10 text-accent" : "bg-white/5 text-white/30")}><Package className="w-7 h-7" /></div><span className={cn("text-[10px] font-black leading-tight text-center", exportStyle === 'zip' ? "text-accent" : "text-white/40")}>{lang === 'ar' ? 'ملفات KML منفصلة (ZIP)' : 'Separate KML files (ZIP)'}</span></button></div></div>
                       <button onClick={handleSplitExport} disabled={!activeFile} className={cn("w-full py-6 rounded-full font-black text-lg flex items-center justify-center gap-3 shadow-2xl transition-all transform hover:scale-[1.02] active:scale-95", activeFile ? "bg-accent text-primary" : "bg-[#0e3f53]/50 text-white/10 cursor-not-allowed")}><CloudDownload className="w-7 h-7" /><span>{lang === 'ar' ? 'تنزيل الملفات' : 'Download Files'}</span></button>
+                      {window.self !== window.top && (
+                        <p className="text-[10px] text-center text-white/40 font-bold">
+                          {lang === 'ar' ? 'ملاحظة: إذا لم يعمل التنزيل، يرجى فتح التطبيق في علامة تبويب جديدة.' : 'Note: If download fails, please open the app in a new tab.'}
+                        </p>
+                      )}
                   </div>
                 )}
 
@@ -1828,16 +2355,29 @@ const App: React.FC = () => {
                       {activeFile && (<div className="space-y-4 animate-in slide-in-from-bottom"><button onClick={() => { setLoading(true); setStatusMessage("جاري المعالجة..."); setTimeout(() => { const poly = globalPoints.map(p => p.path && p.path.length >= 3 ? {...p, type: 'Polygon' as const, path: [...p.path, p.path[0]]} : p); setGlobalPoints(poly); setLoading(false); setStatusMessage("تم التحويل!"); setTimeout(() => setStatusMessage(''), 2000); }, 1000); }} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><Scissors className="w-5 h-5 text-accent" />{lang === 'ar' ? 'تحويل الخطوط لمضلعات' : 'Lines to Polygons'}</button><button onClick={() => { const all: {x:number, y:number}[] = []; globalPoints.forEach(p => p.path ? p.path.forEach(pt => all.push({x:pt.x, y:pt.y})) : all.push({x:p.x, y:p.y})); const hull = calculateConvexHull(all); const bound: GeoPoint = { id: 'Boundary', x: hull[0].x, y: hull[0].y, type: 'Polygon', path: hull, color: '#ffffff', layer: 'Boundary' }; setGlobalPoints([bound]); setDataId(`boundary-gen-${Date.now()}`); }} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl"><BoxSelect className="w-5 h-5" />{lang === 'ar' ? 'إنشاء مضلع شامل (Boundary)' : 'Create Convex Boundary'}</button></div>)}
                   </div>
                 )}
+
+                {activeTab === 'classifier' && (
+                  <MapClassifier lang={lang} targetAssets={globalPoints} setTargetAssets={setGlobalPoints} setRefPolygons={setClassifierRefZones} setDataId={setDataId} />
+                )}
+
+                {activeTab === 'attribute-formatter' && (
+                  <DataFormatter points={globalPoints} headers={activeFile?.headers} lang={lang} fetchStreets={executeWithStreetFetching} />
+                )}
+                {activeTab === 'comparator' && (
+                  <FileComparator lang={lang} setGlobalPoints={setGlobalPoints} setDataId={setDataId} />
+                )}
            </div>
 
            <div className="p-8 border-t border-white/5 bg-black/10 shrink-0"><div className="space-y-2"><div className="flex items-center gap-2 text-white/40 group"><Mail className="w-3 h-3 group-hover:text-accent transition-colors" /><span className="text-[10px] font-bold">{t.contactDev}:</span><a href="mailto:oosman@nwc.com.sa" className="text-[10px] font-black text-accent hover:underline">oosman@nwc.com.sa</a></div><p className="text-[9px] font-black text-white/30 uppercase tracking-widest">{t.developedBy}</p></div></div>
       </aside>
 
       <main className="flex-1 relative bg-[#0d1b24]">
-         <MapPreview 
+          <MapPreview 
+            globalBaseMap={globalBaseMap}
             points={displayPoints} 
             lang={lang} 
             dataId={dataId}
+            overlapResults={overlapResults}
             isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')} 
             onPolygonComplete={(poly) => { 
               if (activeTab === 'splitter' && splitMode === 'spatial') {
@@ -1857,6 +2397,127 @@ const App: React.FC = () => {
          />
          {loading && (<div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center"><div className="text-center p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl"><Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" /><p className="text-white font-black text-lg">{statusMessage}</p></div></div>)}
          
+         
+         {showSettingsModal && (
+             <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                 <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
+                     <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
+                         <div className="flex items-center gap-3">
+                             <Settings2 className="w-6 h-6 text-accent" />
+                             <h2 className="text-xl font-black text-white">{lang === 'ar' ? 'إعدادات التطبيق' : 'App Settings'}</h2>
+                         </div>
+                         <button onClick={() => setShowSettingsModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-red-500/20 hover:text-red-400 transition-all"><X className="w-5 h-5" /></button>
+                     </div>
+                     <div className="p-8 overflow-y-auto space-y-8 flex-1">
+                         <div className="space-y-4">
+                            <h3 className="text-sm font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'نوع خريطة الأساس' : 'Base Map Type'}</h3>
+                            <div className="grid grid-cols-2 gap-3">
+                                {[
+                                  { id: 'satellite', name: lang === 'ar' ? 'القمر الصناعي' : 'Satellite', icon: <Globe className="w-5 h-5" /> },
+                                  { id: 'streets', name: lang === 'ar' ? 'شوارع' : 'Streets', icon: <MapIcon className="w-5 h-5" /> },
+                                  { id: 'terrain', name: lang === 'ar' ? 'تضاريس' : 'Terrain', icon: <Square className="w-5 h-5" /> },
+                                  { id: 'osm', name: lang === 'ar' ? 'المفتوحة (OSM)' : 'OpenStreetMap', icon: <Globe className="w-5 h-5 opacity-50" /> }
+                                ].map((type) => (
+                                    <button
+                                        key={type.id}
+                                        onClick={() => setGlobalBaseMap(type.id as import('./types').BaseMapType)}
+                                        className={"flex flex-col items-center gap-3 p-4 rounded-2xl transition-all border group " + (globalBaseMap === type.id ? "bg-accent/10 border-accent text-accent" : "bg-white/5 border-white/5 text-white/50 hover:bg-white/10 hover:border-white/10 hover:text-white")}
+                                    >
+                                        <div className={"p-2 rounded-xl transition-all " + (globalBaseMap === type.id ? "bg-accent text-[#0b2d3d]" : "bg-white/10 text-white/40 group-hover:text-white")}>
+                                            {type.icon}
+                                        </div>
+                                        <span className="text-[11px] font-black uppercase text-center leading-tight">{type.name}</span>
+                                    </button>
+                                ))}
+                            </div>
+                         </div>
+                     </div>
+                 </div>
+             </div>
+         )}
+
+         {showOverlapModal && overlapResults && (
+             <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                 <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
+                     <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
+                         <div className="flex items-center gap-3">
+                             <AlertTriangle className="w-6 h-6 text-accent" />
+                             <h2 className="text-lg font-black text-white">{lang === 'ar' ? 'نتائج فحص التداخل' : 'Overlap Check Results'}</h2>
+                         </div>
+                         <div className="flex items-center gap-2">
+                             {overlapResults && overlapResults.length > 0 && (
+                                 <button
+                                     onClick={() => setShowOverlapModal(false)}
+                                     className="px-4 py-2 bg-accent/20 hover:bg-accent/30 text-accent font-black rounded-xl transition-all text-xs border border-accent/30"
+                                 >
+                                     {lang === 'ar' ? 'عرض على الخريطة' : 'View on Map'}
+                                 </button>
+                             )}
+                             <button 
+                                 onClick={() => setShowOverlapModal(false)}
+                                 className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
+                             >
+                                 <X className="w-5 h-5" />
+                             </button>
+                         </div>
+                     </div>
+                     <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
+                         {overlapResults.length > 0 ? (
+                             <>
+                                 <div className="p-4 bg-red-500/20 border border-red-500/40 rounded-2xl flex items-start gap-3">
+                                     <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
+                                     <div>
+                                         <h3 className="text-red-400 font-bold text-sm mb-1">
+                                             {lang === 'ar' ? 'تم العثور على تداخلات!' : 'Overlaps Detected!'}
+                                         </h3>
+                                         <p className="text-red-300/70 text-xs">
+                                             {lang === 'ar' 
+                                                 ? `تم العثور على ${overlapResults.length} تطابق مكاني بين العناصر. قد يؤدي ذلك لمشاكل في عرض البيانات.`
+                                                 : `Found ${overlapResults.length} spatial overlaps between elements. This might cause rendering issues.`}
+                                         </p>
+                                     </div>
+                                 </div>
+                                 <div className="space-y-3">
+                                     {overlapResults.slice(0, 50).map((overlap, idx) => (
+                                         <div key={idx} className="p-4 bg-white/5 border border-white/10 rounded-xl flex items-center justify-between">
+                                             <div className="flex items-center gap-2">
+                                                 <span className="text-[10px] font-black text-white/40 bg-white/5 px-2 py-1 rounded-md">{overlap.type}</span>
+                                                 <span className="text-sm font-bold text-white">ID: {overlap.id1}</span>
+                                                 <span className="text-white/40 mx-2">↔</span>
+                                                 <span className="text-sm font-bold text-white">ID: {overlap.id2}</span>
+                                             </div>
+                                             <span className="text-[10px] text-red-400 font-bold bg-red-400/10 px-2 py-1 rounded-md">
+                                                 {lang === 'ar' ? 'متطابق مكانياً' : 'Spatial Match'}
+                                             </span>
+                                         </div>
+                                     ))}
+                                     {overlapResults.length > 50 && (
+                                         <div className="text-center p-4 text-white/40 text-xs font-bold">
+                                             {lang === 'ar' ? `و ${overlapResults.length - 50} عنصر آخر متداخل...` : `And ${overlapResults.length - 50} more overlapping elements...`}
+                                         </div>
+                                     )}
+                                 </div>
+                             </>
+                         ) : (
+                             <div className="text-center p-12 space-y-4">
+                                 <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-green-500/20">
+                                     <Check className="w-8 h-8 text-green-400" />
+                                 </div>
+                                 <h3 className="text-green-400 font-black text-xl">
+                                     {lang === 'ar' ? 'لا يوجد تداخل!' : 'No Overlaps!'}
+                                 </h3>
+                                 <p className="text-white/60 text-sm">
+                                     {lang === 'ar' 
+                                         ? 'جميع العناصر المكانية فريدة ولا يوجد تطابق أو تداخل تام في الإحداثيات.'
+                                         : 'All spatial elements are unique, no exact overlaps found.'}
+                                 </p>
+                             </div>
+                         )}
+                     </div>
+                 </div>
+             </div>
+         )}
+
          {showManual && (
              <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12 overflow-y-auto print:absolute print:inset-0 print:z-[2000] print:bg-white print:p-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                  {/* Print-friendly container */}

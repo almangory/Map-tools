@@ -1,0 +1,325 @@
+import React, { useState, useMemo } from 'react';
+import { GitCompare, FileUp, AlertTriangle, CheckCircle, Info, Trash2, XCircle, PlusCircle, PenTool, FileSpreadsheet } from 'lucide-react';
+import { cn } from 'clsx';
+import { GeoPoint, ParsedFile } from '../types';
+import { parseExcel, parseKMZ, extractPointsFromDXF, parseDXF } from '../services/parserService';
+import { identifyPotentialCRS, transformPoints } from '../services/crs';
+
+interface Props {
+  lang: 'ar' | 'en';
+  setGlobalPoints: (points: GeoPoint[]) => void;
+  setDataId: (id: string) => void;
+}
+
+export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
+  const [file1Name, setFile1Name] = useState<string>('');
+  const [file2Name, setFile2Name] = useState<string>('');
+  
+  const [points1, setPoints1] = useState<GeoPoint[]>([]);
+  const [points2, setPoints2] = useState<GeoPoint[]>([]);
+
+  const [idColumn1, setIdColumn1] = useState<string>('');
+  const [idColumn2, setIdColumn2] = useState<string>('');
+  
+  const [stats, setStats] = useState<{added: number, deleted: number, modified: number, unchanged: number} | null>(null);
+  const [loading, setLoading] = useState(false);
+  
+  // auto detect attributes for ID selection
+  const attributes1 = useMemo(() => {
+    const keys = new Set<string>();
+    points1.forEach(p => {
+        if (p.attributes) Object.keys(p.attributes).forEach(k => keys.add(k));
+    });
+    return Array.from(keys);
+  }, [points1]);
+  
+  const attributes2 = useMemo(() => {
+    const keys = new Set<string>();
+    points2.forEach(p => {
+        if (p.attributes) Object.keys(p.attributes).forEach(k => keys.add(k));
+    });
+    return Array.from(keys);
+  }, [points2]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isFile1: boolean) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setLoading(true);
+    try {
+      const fileExtension = file.name.split('.').pop()?.toLowerCase();
+      const fileBuffer = await file.arrayBuffer();
+      let pts: GeoPoint[] = [];
+
+      if (fileExtension === 'kmz' || fileExtension === 'kml') {
+        const parsed = await parseKMZ(fileBuffer);
+        pts = parsed.data as GeoPoint[];
+      } else if (fileExtension === 'dxf') {
+        const text = new TextDecoder().decode(fileBuffer);
+        const dxfParsed = parseDXF(text);
+        pts = extractPointsFromDXF(dxfParsed);
+      } else if (fileExtension === 'xlsx' || fileExtension === 'csv' || fileExtension === 'xls') {
+        const parsed = await parseExcel(fileBuffer, file.name);
+        const rows = parsed.data as any[][];
+        const headers = parsed.headers || [];
+        
+        let xCol = headers.find(h => /^(x|lon|lng|longitude|easting)$/i.test(h)) || '';
+        let yCol = headers.find(h => /^(y|lat|latitude|northing)$/i.test(h)) || '';
+        
+        if (xCol && yCol) {
+            const xIdx = headers.indexOf(xCol);
+            const yIdx = headers.indexOf(yCol);
+            
+            pts = rows.map((r, i) => {
+                const attrs: Record<string, string> = {};
+                headers.forEach((h, idx) => {
+                    attrs[h] = String(r[idx] || '');
+                });
+                return {
+                    id: `Feature_${i}`,
+                    x: parseFloat(r[xIdx]),
+                    y: parseFloat(r[yIdx]),
+                    type: 'Point' as const,
+                    attributes: attrs,
+                    originalRow: r
+                };
+            }).filter(p => !isNaN(p.x) && !isNaN(p.y));
+        } else {
+            alert(lang === 'ar' ? 'لم يتم العثور على أعمدة الإحداثيات (X/Y) في ملف الإكسل.' : 'Could not find coordinate columns (X/Y) in the Excel file.');
+        }
+      }
+
+      if (pts.length > 0) {
+        const crs = identifyPotentialCRS(pts);
+        if (crs) {
+            pts = transformPoints(pts, crs);
+        }
+      }
+
+      if (isFile1) {
+        setPoints1(pts);
+        setFile1Name(file.name);
+        setIdColumn1('');
+      } else {
+        setPoints2(pts);
+        setFile2Name(file.name);
+        setIdColumn2('');
+      }
+      setStats(null);
+    } catch (err) {
+      console.error(err);
+      alert(lang === 'ar' ? 'حدث خطأ أثناء قراءة الملف.' : 'Error reading file.');
+    } finally {
+      setLoading(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const compareFiles = () => {
+    if (!points1.length || !points2.length) return;
+    
+    setLoading(true);
+    
+    setTimeout(() => {
+        const map1 = new Map<string, GeoPoint>();
+        const map2 = new Map<string, GeoPoint>();
+        
+        points1.forEach(p => {
+            const key = idColumn1 && p.attributes ? p.attributes[idColumn1] : p.id;
+            if (key) map1.set(String(key), p);
+        });
+        
+        points2.forEach(p => {
+            const key = idColumn2 && p.attributes ? p.attributes[idColumn2] : p.id;
+            if (key) map2.set(String(key), p);
+        });
+        
+        const resultPoints: GeoPoint[] = [];
+        let added = 0, deleted = 0, modified = 0, unchanged = 0;
+        
+        map2.forEach((p2, key) => {
+            const p1 = map1.get(key);
+            if (!p1) {
+                added++;
+                resultPoints.push({...p2, color: '#10b981', layer: lang === 'ar' ? 'إضافة' : 'Added'}); 
+            } else {
+                const geomChanged = Math.abs(p1.x - p2.x) > 0.00001 || Math.abs(p1.y - p2.y) > 0.00001;
+                let attrsChanged = false;
+                if (p1.attributes && p2.attributes) {
+                    const keys = new Set([...Object.keys(p1.attributes), ...Object.keys(p2.attributes)]);
+                    for (let k of keys) {
+                        if (p1.attributes[k] !== p2.attributes[k]) {
+                            attrsChanged = true;
+                            break;
+                        }
+                    }
+                } else if (p1.attributes !== p2.attributes) {
+                    attrsChanged = true;
+                }
+                
+                if (geomChanged || attrsChanged) {
+                    modified++;
+                    resultPoints.push({...p2, color: '#f59e0b', layer: lang === 'ar' ? 'تعديل' : 'Modified'}); 
+                } else {
+                    unchanged++;
+                    resultPoints.push({...p2, color: '#94a3b8', layer: lang === 'ar' ? 'بدون تغيير' : 'Unchanged'}); 
+                }
+            }
+        });
+        
+        map1.forEach((p1, key) => {
+            if (!map2.has(key)) {
+                deleted++;
+                resultPoints.push({...p1, color: '#ef4444', layer: lang === 'ar' ? 'حذف' : 'Deleted'}); 
+            }
+        });
+        
+        setStats({ added, deleted, modified, unchanged });
+        setGlobalPoints(resultPoints);
+        setDataId(`compare-${Date.now()}`);
+        setLoading(false);
+    }, 100);
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden text-white" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+        <div className="p-6 bg-[#0b2d3d] border-b border-white/5 shrink-0 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <GitCompare className="w-6 h-6 text-accent" />
+                <h2 className="text-xl font-black">{lang === 'ar' ? 'مقارنة الملفات' : 'File Comparator'}</h2>
+            </div>
+            <p className="text-white/50 text-xs font-bold max-w-sm text-end">
+                {lang === 'ar' ? 'ارفع ملفين (KMZ, DXF, Excel) لمقارنة الفروقات بينهما وإظهار العناصر المضافة، المحذوفة، والمعدلة.' : 'Upload two files to compare differences and highlight added, deleted, and modified elements.'}
+            </p>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-black/20 p-6 rounded-[2rem] border border-white/5 space-y-4 relative overflow-hidden group">
+                    <div className="flex items-center gap-2 mb-2">
+                        <div className="w-8 h-8 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center">
+                            <span className="font-black text-sm">1</span>
+                        </div>
+                        <h3 className="text-sm font-black uppercase tracking-wider">{lang === 'ar' ? 'الملف الأساسي (القديم)' : 'Base File (Old)'}</h3>
+                    </div>
+                    
+                    {!file1Name ? (
+                        <label className="cursor-pointer flex flex-col items-center justify-center h-40 border-2 border-dashed border-white/10 rounded-2xl hover:border-accent hover:bg-accent/5 transition-all">
+                            <FileUp className="w-8 h-8 text-white/30 mb-3" />
+                            <span className="text-xs font-bold text-white/50">{lang === 'ar' ? 'انقر لرفع ملف KMZ/DXF/Excel' : 'Click to upload KMZ/DXF/Excel'}</span>
+                            <input type="file" className="hidden" accept=".kmz,.kml,.dxf,.xlsx,.xls,.csv" onChange={(e) => handleFileUpload(e, true)} />
+                        </label>
+                    ) : (
+                        <div className="bg-[#0e3f53] p-4 rounded-2xl flex items-center justify-between border border-white/5">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                <FileSpreadsheet className="w-6 h-6 text-blue-400 shrink-0" />
+                                <div className="truncate">
+                                    <p className="text-sm font-black truncate">{file1Name}</p>
+                                    <p className="text-[10px] text-white/50">{points1.length} {lang === 'ar' ? 'عنصر' : 'elements'}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => { setFile1Name(''); setPoints1([]); setStats(null); }} className="w-8 h-8 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-400 flex items-center justify-center transition-colors">
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        </div>
+                    )}
+                    
+                    {points1.length > 0 && attributes1.length > 0 && (
+                        <div className="pt-2">
+                            <label className="text-[10px] font-black text-white/40 uppercase mb-2 block">{lang === 'ar' ? 'مفتاح المقارنة (اختياري)' : 'Comparison Key (Optional)'}</label>
+                            <select value={idColumn1} onChange={e => setIdColumn1(e.target.value)} className="w-full bg-[#0b2d3d] text-white text-xs p-3 rounded-xl outline-none border border-white/10">
+                                <option value="">{lang === 'ar' ? '-- المطابقة التلقائية (حسب المعرف الداخلي) --' : '-- Auto Match (by Internal ID) --'}</option>
+                                {attributes1.map(a => <option key={a} value={a}>{a}</option>)}
+                            </select>
+                        </div>
+                    )}
+                </div>
+                
+                <div className="bg-black/20 p-6 rounded-[2rem] border border-white/5 space-y-4 relative overflow-hidden group">
+                    <div className="flex items-center gap-2 mb-2">
+                        <div className="w-8 h-8 rounded-xl bg-accent/20 text-accent flex items-center justify-center">
+                            <span className="font-black text-sm">2</span>
+                        </div>
+                        <h3 className="text-sm font-black uppercase tracking-wider">{lang === 'ar' ? 'الملف الجديد (المحدث)' : 'New File (Updated)'}</h3>
+                    </div>
+                    
+                    {!file2Name ? (
+                        <label className="cursor-pointer flex flex-col items-center justify-center h-40 border-2 border-dashed border-white/10 rounded-2xl hover:border-accent hover:bg-accent/5 transition-all">
+                            <FileUp className="w-8 h-8 text-white/30 mb-3" />
+                            <span className="text-xs font-bold text-white/50">{lang === 'ar' ? 'انقر لرفع ملف KMZ/DXF/Excel' : 'Click to upload KMZ/DXF/Excel'}</span>
+                            <input type="file" className="hidden" accept=".kmz,.kml,.dxf,.xlsx,.xls,.csv" onChange={(e) => handleFileUpload(e, false)} />
+                        </label>
+                    ) : (
+                        <div className="bg-[#0e3f53] p-4 rounded-2xl flex items-center justify-between border border-white/5">
+                            <div className="flex items-center gap-3 overflow-hidden">
+                                <FileSpreadsheet className="w-6 h-6 text-accent shrink-0" />
+                                <div className="truncate">
+                                    <p className="text-sm font-black truncate">{file2Name}</p>
+                                    <p className="text-[10px] text-white/50">{points2.length} {lang === 'ar' ? 'عنصر' : 'elements'}</p>
+                                </div>
+                            </div>
+                            <button onClick={() => { setFile2Name(''); setPoints2([]); setStats(null); }} className="w-8 h-8 rounded-full bg-white/10 hover:bg-red-500/20 hover:text-red-400 flex items-center justify-center transition-colors">
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        </div>
+                    )}
+                    
+                    {points2.length > 0 && attributes2.length > 0 && (
+                        <div className="pt-2">
+                            <label className="text-[10px] font-black text-white/40 uppercase mb-2 block">{lang === 'ar' ? 'مفتاح المقارنة (اختياري)' : 'Comparison Key (Optional)'}</label>
+                            <select value={idColumn2} onChange={e => setIdColumn2(e.target.value)} className="w-full bg-[#0b2d3d] text-white text-xs p-3 rounded-xl outline-none border border-white/10">
+                                <option value="">{lang === 'ar' ? '-- المطابقة التلقائية (حسب المعرف الداخلي) --' : '-- Auto Match (by Internal ID) --'}</option>
+                                {attributes2.map(a => <option key={a} value={a}>{a}</option>)}
+                            </select>
+                        </div>
+                    )}
+                </div>
+            </div>
+            
+            <div className="flex justify-center">
+                <button 
+                    onClick={compareFiles}
+                    disabled={!file1Name || !file2Name || loading}
+                    className="bg-accent text-primary font-black py-4 px-12 rounded-2xl flex items-center justify-center gap-3 hover:brightness-110 transition-all shadow-xl disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                >
+                    {loading ? <span className="animate-pulse">{lang === 'ar' ? 'جاري المقارنة...' : 'Comparing...'}</span> : (
+                        <>
+                            <GitCompare className="w-5 h-5" />
+                            {lang === 'ar' ? 'مقارنة الملفات' : 'Compare Files'}
+                        </>
+                    )}
+                </button>
+            </div>
+            
+            {stats && (
+                <div className="bg-[#0e3f53]/50 p-6 rounded-[2rem] border border-white/5 animate-in fade-in slide-in-from-bottom-4">
+                    <h3 className="text-sm font-black uppercase tracking-wider mb-6 text-center">{lang === 'ar' ? 'نتائج المقارنة' : 'Comparison Results'}</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="bg-black/30 p-4 rounded-2xl border border-green-500/20 flex flex-col items-center justify-center text-center">
+                            <PlusCircle className="w-6 h-6 text-green-500 mb-2" />
+                            <span className="text-2xl font-black text-green-500">{stats.added}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تمت إضافتها' : 'Added'}</span>
+                        </div>
+                        <div className="bg-black/30 p-4 rounded-2xl border border-red-500/20 flex flex-col items-center justify-center text-center">
+                            <XCircle className="w-6 h-6 text-red-500 mb-2" />
+                            <span className="text-2xl font-black text-red-500">{stats.deleted}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تم حذفها' : 'Deleted'}</span>
+                        </div>
+                        <div className="bg-black/30 p-4 rounded-2xl border border-orange-500/20 flex flex-col items-center justify-center text-center">
+                            <PenTool className="w-6 h-6 text-orange-500 mb-2" />
+                            <span className="text-2xl font-black text-orange-500">{stats.modified}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تم تعديلها' : 'Modified'}</span>
+                        </div>
+                        <div className="bg-black/30 p-4 rounded-2xl border border-slate-500/20 flex flex-col items-center justify-center text-center">
+                            <CheckCircle className="w-6 h-6 text-slate-400 mb-2" />
+                            <span className="text-2xl font-black text-slate-400">{stats.unchanged}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'بدون تغيير' : 'Unchanged'}</span>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+        </div>
+    </div>
+  );
+};
