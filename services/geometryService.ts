@@ -222,28 +222,38 @@ export const calculatePathLength = (path: {x: number, y: number}[]): number => {
     return total;
 };
 
+const geocodeCache = new Map<string, { street: string; district: string }>();
+
 export const getReverseGeocode = async (lat: number, lon: number): Promise<{street: string, district: string}> => {
+    if (!lat || !lon) return { street: "غير متوفر", district: "غير متوفر" };
+
+    // Check cache first (~100m grid resolution)
+    const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+    if (geocodeCache.has(cacheKey)) {
+        return geocodeCache.get(cacheKey)!;
+    }
+
     let street = "";
     let district = "";
 
-    // 1. Try ArcGIS as primary (very robust for Saudi Arabia streets)
+    // 1. Try ArcGIS as primary (very robust for Saudi Arabia streets with standard CORS support)
     try {
         const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${lon},${lat}&langCode=ar`;
         const arcgisRes = await fetch(arcgisUrl);
-        const arcgisData = await arcgisRes.json();
-        
-        if (arcgisData.address) {
-            const addr = arcgisData.address;
-            district = addr.District || addr.Neighborhood || addr.City || "";
-            // Address often comes with number like "8314 شارع فيفاء", we remove numbers from start
-            let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || "";
-            street = rawStreet.replace(/^[\d\s\-]+/, '').trim();
-            if (street.includes(",")) {
-                street = street.split(",")[0].trim();
+        if (arcgisRes.ok) {
+            const arcgisData = await arcgisRes.json();
+            if (arcgisData.address) {
+                const addr = arcgisData.address;
+                district = addr.District || addr.Neighborhood || addr.City || "";
+                let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || "";
+                street = rawStreet.replace(/^[\d\s\-]+/, '').trim();
+                if (street.includes(",")) {
+                    street = street.split(",")[0].trim();
+                }
             }
         }
     } catch (e) {
-        console.log("ArcGIS geocoding failed");
+        // Silent catch for network/CORS issues
     }
 
     // 2. Try Nominatim if ArcGIS failed to get street
@@ -251,20 +261,21 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
         try {
             const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=ar`;
             const nomRes = await fetch(nomUrl);
-            const nomData = await nomRes.json();
-            
-            street = nomData.address?.road || nomData.address?.pedestrian || nomData.address?.path || nomData.address?.footway || nomData.address?.residential || nomData.address?.street || nomData.address?.highway || nomData.address?.suburb || street;
-            if (!district) {
-                district = nomData.address?.neighbourhood || nomData.address?.suburb || nomData.address?.city_district || nomData.address?.village || nomData.address?.quarter || "";
-            }
+            if (nomRes.ok) {
+                const nomData = await nomRes.json();
+                street = nomData.address?.road || nomData.address?.pedestrian || nomData.address?.path || nomData.address?.footway || nomData.address?.residential || nomData.address?.street || nomData.address?.highway || nomData.address?.suburb || street;
+                if (!district) {
+                    district = nomData.address?.neighbourhood || nomData.address?.suburb || nomData.address?.city_district || nomData.address?.village || nomData.address?.quarter || "";
+                }
 
-            if (!street || street.length <= 2) {
-                if (nomData.name && !nomData.name.includes(",")) {
-                    street = nomData.name;
+                if (!street || street.length <= 2) {
+                    if (nomData.name && !nomData.name.includes(",")) {
+                        street = nomData.name;
+                    }
                 }
             }
         } catch (e) {
-            console.log("Nominatim geocoding failed");
+            // Silent catch
         }
     }
 
@@ -277,14 +288,21 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
         ];
-        const query = `[out:json][timeout:5];way(around:100,${lat},${lon})["highway"]["name"];out tags limit 1;`;
+        // Correct Overpass QL syntax: "out tags 1;" instead of "out tags limit 1;"
+        const query = `[out:json][timeout:5];way(around:100,${lat},${lon})["highway"]["name"];out tags 1;`;
         
         for (const endpoint of endpoints) {
             try {
-                const overpassRes = await fetch(endpoint, {
-                    method: 'POST',
-                    body: query
-                });
+                // Try GET first as GET requests include Access-Control-Allow-Origin on Overpass mirrors
+                const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
+                let overpassRes = await fetch(getUrl);
+                if (!overpassRes.ok) {
+                    // Try POST as secondary
+                    overpassRes = await fetch(endpoint, {
+                        method: 'POST',
+                        body: query
+                    });
+                }
                 if (overpassRes.ok) {
                     const overpassData = await overpassRes.json();
                     if (overpassData.elements && overpassData.elements.length > 0) {
@@ -298,10 +316,13 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
         }
     }
     
-    return {
+    const result = {
         street: street || "غير متوفر",
         district: district || "غير متوفر"
     };
+
+    geocodeCache.set(cacheKey, result);
+    return result;
 };
 
 export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], shouldClip: boolean = true, highwayTypes: string[] = []): Promise<GeoPoint[]> => {
@@ -329,10 +350,15 @@ export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], s
 
     for (const endpoint of endpoints) {
         try {
-            const response = await fetch(endpoint, { 
-                method: 'POST', 
-                body: query
-            });
+            // Try GET request first for better CORS compatibility across hosting providers like Vercel
+            const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
+            let response = await fetch(getUrl);
+            if (!response.ok) {
+                response = await fetch(endpoint, { 
+                    method: 'POST', 
+                    body: query
+                });
+            }
             if (response.ok) {
                 data = await response.json();
                 break;

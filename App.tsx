@@ -1027,7 +1027,6 @@ const App: React.FC = () => {
               );
               try {
                   const geoData = await getReverseGeocode(pt.y, pt.x);
-                  await new Promise(resolve => setTimeout(resolve, 300));
                   street = geoData.street;
                   pt.street = street;
                   pt.district = geoData.district;
