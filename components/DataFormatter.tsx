@@ -433,23 +433,30 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             </button>
           </div>
 
-          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
-            <div>
-              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء' : 'Fetch Streets & Districts'}</h4>
-              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء تلقائياً لكل عنصر وإضافتها لحقلي STREETNAME و DISTRICT.' : 'Automatically fetch street and district names for each element and add them to STREETNAME and DISTRICT.'}</p>
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-white font-black text-sm flex items-center gap-2">
+                  <span>{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء' : 'Fetch Streets & Districts'}</span>
+                  <span className="text-[10px] text-accent bg-accent/10 border border-accent/20 px-2 py-0.5 rounded-full font-bold">
+                    {lang === 'ar' ? '🎯 دقيق جداً (هندسي)' : '🎯 High Precision'}
+                  </span>
+                </h4>
+                <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء تلقائياً وحساب أقرب شارع هندسياً وإضافتها لحقلي STREETNAME و DISTRICT.' : 'Automatically fetch street and district names by calculating nearest road geometry.'}</p>
+              </div>
+              <button 
+                onClick={() => setAutoFetchStreets(!autoFetchStreets)}
+                className={cn(
+                  "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
+                  autoFetchStreets ? "bg-accent" : "bg-white/20"
+                )}
+              >
+                <div className={cn(
+                  "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
+                  autoFetchStreets ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                )} />
+              </button>
             </div>
-            <button 
-              onClick={() => setAutoFetchStreets(!autoFetchStreets)}
-              className={cn(
-                "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
-                autoFetchStreets ? "bg-accent" : "bg-white/20"
-              )}
-            >
-              <div className={cn(
-                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
-                autoFetchStreets ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
-              )} />
-            </button>
           </div>
 
           <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">

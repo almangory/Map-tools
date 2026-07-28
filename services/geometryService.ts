@@ -235,13 +235,35 @@ const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeoutM
     }
 };
 
+const pointToSegmentDistanceMeters = (
+    plat: number, plon: number,
+    lat1: number, lon1: number,
+    lat2: number, lon2: number
+): number => {
+    const dx = lon2 - lon1;
+    const dy = lat2 - lat1;
+    if (dx === 0 && dy === 0) return getDistanceMeters(plat, plon, lat1, lon1);
+
+    const t = Math.max(0, Math.min(1, ((plon - lon1) * dx + (plat - lat1) * dy) / (dx * dx + dy * dy)));
+    const projLon = lon1 + t * dx;
+    const projLat = lat1 + t * dy;
+    return getDistanceMeters(plat, plon, projLat, projLon);
+};
+
 const geocodeCache = new Map<string, { street: string; district: string }>();
 
-export const getReverseGeocode = async (lat: number, lon: number): Promise<{street: string, district: string}> => {
+export const getReverseGeocode = async (
+    lat: number, 
+    lon: number, 
+    mode: 'accurate' | 'fast' = 'accurate'
+): Promise<{street: string, district: string}> => {
     if (!lat || !lon) return { street: "غير متوفر", district: "غير متوفر" };
 
-    // Check cache first (~100m grid resolution)
-    const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+    // Check cache: in accurate mode, use 5 decimal precision (~1m); in fast mode, use 3 decimal precision (~100m)
+    const cacheKey = mode === 'accurate' 
+        ? `${lat.toFixed(5)},${lon.toFixed(5)}` 
+        : `${lat.toFixed(3)},${lon.toFixed(3)}`;
+
     if (geocodeCache.has(cacheKey)) {
         return geocodeCache.get(cacheKey)!;
     }
@@ -249,16 +271,20 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
     let street = "";
     let district = "";
 
-    // 1. Try ArcGIS as primary (very robust for Saudi Arabia & Middle East with full CORS support)
+    const isAccurate = mode === 'accurate';
+    const primaryTimeout = isAccurate ? 4000 : 2000;
+
+    // 1. Primary: ArcGIS World Geocoding Service (high precision in Middle East & KSA)
     try {
         const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${lon},${lat}&langCode=ar`;
-        const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, 2500);
+        const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, primaryTimeout);
         if (arcgisRes && arcgisRes.ok) {
             const arcgisData = await arcgisRes.json();
             if (arcgisData.address) {
                 const addr = arcgisData.address;
-                district = addr.District || addr.Neighborhood || addr.City || "";
-                let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || "";
+                district = addr.District || addr.Neighborhood || addr.City || addr.Subregion || "";
+                let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || addr.StAddr || "";
+                // Clean leading numbers/house codes if present
                 street = rawStreet.replace(/^[\d\s\-]+/, '').trim();
                 if (street.includes(",")) {
                     street = street.split(",")[0].trim();
@@ -266,34 +292,11 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
             }
         }
     } catch (e) {
-        // Silent catch for network/CORS issues
+        // Fallback silently
     }
 
-    // 2. Try Nominatim if ArcGIS failed to get street
-    if (!street || street.length <= 2 || street.includes("Unnamed") || street === "غير متوفر") {
-        try {
-            const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=ar`;
-            const nomRes = await fetchWithTimeout(nomUrl, {}, 2000);
-            if (nomRes && nomRes.ok) {
-                const nomData = await nomRes.json();
-                street = nomData.address?.road || nomData.address?.pedestrian || nomData.address?.path || nomData.address?.footway || nomData.address?.residential || nomData.address?.street || nomData.address?.highway || nomData.address?.suburb || street;
-                if (!district) {
-                    district = nomData.address?.neighbourhood || nomData.address?.suburb || nomData.address?.city_district || nomData.address?.village || nomData.address?.quarter || "";
-                }
-
-                if (!street || street.length <= 2) {
-                    if (nomData.name && !nomData.name.includes(",")) {
-                        street = nomData.name;
-                    }
-                }
-            }
-        } catch (e) {
-            // Silent catch
-        }
-    }
-
-    // 3. Fallback to Overpass API for nearest street name if still not found
-    if (!street || street.length <= 2) {
+    // 2. In Accurate Mode or if street is missing: Query Overpass with geometry to calculate nearest road way
+    if (isAccurate || !street || street.length <= 2 || street === "غير متوفر") {
         const endpoints = [
             'https://overpass-api.de/api/interpreter',
             'https://lz4.overpass-api.de/api/interpreter',
@@ -301,7 +304,10 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
         ];
-        const query = `[out:json][timeout:3];way(around:100,${lat},${lon})["highway"]["name"];out tags 1;`;
+        
+        // Query nearest named roads around 80m radius with geometry for exact distance sorting
+        const radius = isAccurate ? 90 : 50;
+        const query = `[out:json][timeout:4];way(around:${radius},${lat},${lon})["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|service"]["name"];out body geom;`;
         
         for (const endpoint of endpoints) {
             try {
@@ -309,17 +315,63 @@ export const getReverseGeocode = async (lat: number, lon: number): Promise<{stre
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: `data=${encodeURIComponent(query)}`
-                }, 2500);
+                }, isAccurate ? 3500 : 2000);
+
                 if (res && res.ok) {
                     const overpassData = await res.json();
                     if (overpassData.elements && overpassData.elements.length > 0) {
-                        street = overpassData.elements[0].tags?.['name:ar'] || overpassData.elements[0].tags?.name || "";
+                        let minDistance = Infinity;
+                        let bestStreetName = "";
+
+                        for (const way of overpassData.elements) {
+                            const wayName = way.tags?.['name:ar'] || way.tags?.name || "";
+                            if (!wayName || wayName.length <= 2) continue;
+
+                            if (way.geometry && way.geometry.length > 0) {
+                                for (let i = 0; i < way.geometry.length - 1; i++) {
+                                    const dist = pointToSegmentDistanceMeters(
+                                        lat, lon,
+                                        way.geometry[i].lat, way.geometry[i].lon,
+                                        way.geometry[i+1].lat, way.geometry[i+1].lon
+                                    );
+                                    if (dist < minDistance) {
+                                        minDistance = dist;
+                                        bestStreetName = wayName;
+                                    }
+                                }
+                            } else if (!bestStreetName) {
+                                bestStreetName = wayName;
+                            }
+                        }
+
+                        if (bestStreetName) {
+                            street = bestStreetName;
+                        }
                     }
                     break;
                 }
             } catch (e) {
                 continue;
             }
+        }
+    }
+
+    // 3. Fallback: Nominatim if street or district is still incomplete
+    if (!street || street.length <= 2 || !district) {
+        try {
+            const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=ar`;
+            const nomRes = await fetchWithTimeout(nomUrl, {}, 2000);
+            if (nomRes && nomRes.ok) {
+                const nomData = await nomRes.json();
+                if (!street || street.length <= 2) {
+                    street = nomData.address?.road || nomData.address?.pedestrian || nomData.address?.path || nomData.address?.residential || nomData.address?.street || nomData.name || street;
+                }
+                if (!district) {
+                    district = nomData.address?.neighbourhood || nomData.address?.suburb || nomData.address?.city_district || nomData.address?.village || nomData.address?.quarter || district;
+                }
+            }
+        } catch (e) {
+            // Ignore
         }
     }
     

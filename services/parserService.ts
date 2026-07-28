@@ -221,6 +221,8 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
             const tuples = coordsText.split(/\s+/);
             if (tuples.length === 0 || (tuples.length === 1 && tuples[0] === "")) continue;
             
+            const isPoly = /<Polygon/i.test(content) || /<outerBoundaryIs/i.test(content) || /<LinearRing/i.test(content);
+
             if (tuples.length > 1) {
                 const path: {x:number, y:number, z:number}[] = [];
                 tuples.forEach(t => {
@@ -241,7 +243,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         z: path[0].z,
                         description: desc,
                         layer: layerName,
-                        type: 'LineString',
+                        type: isPoly ? 'Polygon' : 'LineString',
                         path: path,
                         color: "#3b82f6",
                         attributes
@@ -402,7 +404,39 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                         const parts = t.split(',');
                         if(parts.length >= 2) path.push({ x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0 });
                     });
-                    if (path.length > 0) points.push({ id: name, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: 'LineString', path: path, color, attributes, iconUrl });
+                    if (path.length > 0) {
+                        let isPolygon = false;
+                        let isInnerBoundary = false;
+                        let isLineString = false;
+                        let isPointTag = false;
+
+                        let ancestor: Node | null = tag.parentNode;
+                        while (ancestor && ancestor !== pm) {
+                            const tagLower = (ancestor.nodeName || '').toLowerCase();
+                            if (tagLower === 'innerboundaryis') {
+                                isInnerBoundary = true;
+                            }
+                            if (tagLower === 'polygon' || tagLower === 'outerboundaryis' || tagLower === 'linearring') {
+                                isPolygon = true;
+                            } else if (tagLower === 'linestring') {
+                                isLineString = true;
+                            } else if (tagLower === 'point') {
+                                isPointTag = true;
+                            }
+                            ancestor = ancestor.parentNode;
+                        }
+
+                        if (isInnerBoundary) return;
+
+                        if (!isPolygon && !isLineString && !isPointTag) {
+                            if (pm.getElementsByTagName("Polygon").length > 0 || pm.getElementsByTagName("outerBoundaryIs").length > 0) {
+                                isPolygon = true;
+                            }
+                        }
+
+                        const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
+                        points.push({ id: name, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: featureType, path: path, color, attributes, iconUrl });
+                    }
                 } else {
                     const parts = tuples[0].split(',');
                     if (parts.length >= 2) points.push({ id: name, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
@@ -742,32 +776,51 @@ export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {
 export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
   const midMatch = url.match(/mid=([a-zA-Z0-9_-]+)/);
   if (!midMatch) {
-    throw new Error("رابط غير صالح. يرجى توفير رابط مصلح يحتوي على معرّف الخريطة (mid).");
+    throw new Error("رابط غير صالح. يرجى توفير رابط خريطة Google My Maps يحتوي على معرّف الخريطة (mid=...).");
   }
   const mid = midMatch[1];
   const kmlUrl = `https://www.google.com/maps/d/kml?mid=${mid}&forcekml=1`;
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(kmlUrl)}`;
+  
+  const proxyEndpoints = [
+    `/api/proxy?url=${encodeURIComponent(kmlUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(kmlUrl)}`,
+    `https://corsproxy.io/?${encodeURIComponent(kmlUrl)}`
+  ];
 
-  let response;
-  try {
-    response = await fetch(proxyUrl);
-    if (!response.ok) throw new Error();
-  } catch (e) {
-    // Fallback to direct fetch
+  let kmlContent = "";
+  let lastError = null;
+
+  for (const endpoint of proxyEndpoints) {
     try {
-      response = await fetch(kmlUrl);
-    } catch (e2) {
-      throw new Error("تعذر جلب البيانات تلقائياً بسبب قيود الحماية (CORS). يرجى تنزيل ملف KML يدوياً من خرائط جوجل ثم وضعه هنا.");
+      const response = await fetch(endpoint);
+      if (response.ok) {
+        const text = await response.text();
+        if (text && text.includes('<kml')) {
+          kmlContent = text;
+          break;
+        }
+      }
+    } catch (e) {
+      lastError = e;
     }
   }
 
-  if (!response.ok) {
-    throw new Error("فشل جلب البيانات من الرابط. تأكد من أن الخريطة عامة ومتاحة للمشاركة وليست خاصة.");
+  if (!kmlContent) {
+    try {
+      const directRes = await fetch(kmlUrl);
+      if (directRes.ok) {
+        const text = await directRes.text();
+        if (text && text.includes('<kml')) {
+          kmlContent = text;
+        }
+      }
+    } catch (e) {
+      // Direct fetch failed
+    }
   }
 
-  const kmlContent = await response.text();
   if (!kmlContent || !kmlContent.includes('<kml')) {
-    throw new Error("لم يتم العثور على بيانات KML صالحة في الرابط المسترجع. يرجى التأكد من أن رابط الخريطة صالح ومفتوح للجميع.");
+    throw new Error("فشل جلب خريطة Google My Maps. يرجى التأكد من أن رابط الخريطة مكتمل ومفتوح للعامة (عام) وليس خاصاً.");
   }
 
   const points = await parseKMLContentAsync(kmlContent);

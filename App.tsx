@@ -170,6 +170,57 @@ export const defaultFields = [
   'STREETNAME'
 ];
 
+const GeocodingModeSelector: React.FC<{
+  mode: 'accurate' | 'fast';
+  setMode: (m: 'accurate' | 'fast') => void;
+  lang: 'ar' | 'en';
+}> = ({ mode, setMode, lang }) => (
+  <div className="bg-[#0e3f53]/60 p-4 rounded-2xl border border-white/10 space-y-3 my-3">
+    <div className="flex items-center justify-between text-xs font-black text-white/90">
+      <span className="flex items-center gap-2">
+        <Target className="w-4 h-4 text-accent" />
+        {lang === 'ar' ? 'نمط دقة جلب أسماء الشوارع' : 'Geocoding Accuracy Mode'}
+      </span>
+      <span className={cn("px-2.5 py-0.5 rounded-full text-[10px] font-bold shadow-sm", mode === 'accurate' ? "bg-accent/20 text-accent border border-accent/40" : "bg-blue-500/20 text-blue-300 border border-blue-500/30")}>
+        {mode === 'accurate' ? (lang === 'ar' ? '🎯 دقيق جداً' : '🎯 High Accuracy') : (lang === 'ar' ? '⚡ سريع' : '⚡ Fast')}
+      </span>
+    </div>
+    <div className="grid grid-cols-2 gap-2 p-1 bg-black/30 rounded-xl border border-white/5">
+      <button
+        type="button"
+        onClick={() => setMode('accurate')}
+        className={cn(
+          "py-2.5 px-3 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5",
+          mode === 'accurate' 
+            ? "bg-accent text-primary shadow-lg" 
+            : "text-white/60 hover:text-white hover:bg-white/5"
+        )}
+      >
+        <Target className="w-3.5 h-3.5" />
+        <span>{lang === 'ar' ? 'بحث دقيق جداً' : 'Accurate Search'}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setMode('fast')}
+        className={cn(
+          "py-2.5 px-3 rounded-lg text-[11px] font-black transition-all flex items-center justify-center gap-1.5",
+          mode === 'fast' 
+            ? "bg-blue-500 text-white shadow-lg" 
+            : "text-white/60 hover:text-white hover:bg-white/5"
+        )}
+      >
+        <Zap className="w-3.5 h-3.5" />
+        <span>{lang === 'ar' ? 'جلب سريع' : 'Fast Fetch'}</span>
+      </button>
+    </div>
+    <p className="text-[10px] text-white/60 leading-relaxed">
+      {mode === 'accurate'
+        ? (lang === 'ar' ? '🎯 يفحص الإحداثيات بدقة عالية متناهية لكل عنصر بشكل مستقل مع حساب الشارع الأقرب هندسياً.' : '🎯 Independently calculates exact nearest road geometry for every coordinate.')
+        : (lang === 'ar' ? '⚡ يعتمد على تجميع النقاط القريبة لسرعة المعالجة مع الملفات الكبيرة.' : '⚡ Groups nearby points to accelerate geocoding for large datasets.')}
+    </p>
+  </div>
+);
+
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>('ar');
   const [theme, setTheme] = useState<'default' | 'nwc'>('default');
@@ -192,6 +243,7 @@ const App: React.FC = () => {
   
   const [mergeThreshold, setMergeThreshold] = useState<number>(45);
   const [overlapResults, setOverlapResults] = useState<OverlapResult[] | null>(null);
+  const [geocodingMode, setGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>('satellite');
@@ -324,7 +376,8 @@ const App: React.FC = () => {
 
   
   const { materialDistribution, diameterDistribution } = useMemo(() => {
-    const pointsToAnalyze = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString');
     const matGroups: Record<string, number> = {};
     const diaGroups: Record<string, number> = {};
     
@@ -367,7 +420,9 @@ const App: React.FC = () => {
   }, [globalPoints, plannedStreets, activeTab, activeFile]);
 
   const analysisData = useMemo(() => {
-    const pointsToAnalyze = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    // Exclude Points, Polygons, etc. Only analyze LineString elements!
+    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString');
     if (pointsToAnalyze.length === 0) return [];
     
     const groups: Record<string, { totalLength: number, count: number }> = {};
@@ -423,7 +478,7 @@ const App: React.FC = () => {
 
   const wMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.layer && p.layer.toUpperCase().includes('W_MAINLINE'));
+    const segments = pointsToProcess.filter(p => p.type === 'LineString' && p.layer && p.layer.toUpperCase().includes('W_MAINLINE'));
     
     let totalLength = 0;
     const materialCounts: Record<string, number> = {};
@@ -480,7 +535,7 @@ const App: React.FC = () => {
 
   const wwMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.layer && (
+    const segments = pointsToProcess.filter(p => p.type === 'LineString' && p.layer && (
         p.layer.toUpperCase().includes('WW_MAINLINE') || 
         p.layer.toUpperCase().includes('S_GRAVITY_MAIN') || 
         p.layer.toUpperCase().includes('SEWER') ||
@@ -674,25 +729,28 @@ const App: React.FC = () => {
         const total = globalPoints.length;
         const updated = [...globalPoints];
         let successCount = 0;
-        const batchSize = 8;
+        const batchSize = geocodingMode === 'accurate' ? 4 : 10;
         
         for (let i = 0; i < total; i += batchSize) {
             setStatusMessage(lang === 'ar' 
-              ? `جاري عنونة البيانات: (${Math.min(i + batchSize, total)} من ${total})` 
-              : `Geocoding data: (${Math.min(i + batchSize, total)} of ${total})`
+              ? `جاري عنونة البيانات (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})` 
+              : `Geocoding data (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
             );
             const chunk = updated.slice(i, i + batchSize);
             await Promise.all(chunk.map(async (pt, chunkIdx) => {
                 const idx = i + chunkIdx;
-                if (!pt.street || pt.street === "شارع غير معروف") {
+                if (!pt.street || pt.street === "شارع غير معروف" || pt.street === "غير متوفر") {
                     try {
-                        const geoData = await getReverseGeocode(pt.y, pt.x);
+                        const geoData = await getReverseGeocode(pt.y, pt.x, geocodingMode);
                         updated[idx] = { ...pt, street: geoData.street, district: geoData.district };
                         if (geoData.street && geoData.street !== "غير متوفر") successCount++;
                     } catch (err) {}
                 }
             }));
             setGlobalPoints([...updated]);
+            if (geocodingMode === 'accurate' && i + batchSize < total) {
+                await new Promise(r => setTimeout(r, 60));
+            }
         }
         
         setStatusMessage(lang === 'ar' 
@@ -714,21 +772,21 @@ const App: React.FC = () => {
     setLoading(true);
     const results: any[] = [];
     const total = pointsToExport.length;
-    const batchSize = 8;
+    const batchSize = geocodingMode === 'accurate' ? 4 : 10;
 
     for (let i = 0; i < total; i += batchSize) {
         setStatusMessage(lang === 'ar' 
-            ? `جاري جلب أسماء الشوارع: (${Math.min(i + batchSize, total)} من ${total})` 
-            : `Fetching Street Names: (${Math.min(i + batchSize, total)} of ${total})`
+            ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})` 
+            : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
         );
         const chunk = pointsToExport.slice(i, i + batchSize);
         const chunkResults = await Promise.all(chunk.map(async (pt) => {
             let street = pt.street;
             let district = pt.district;
 
-            if (!street || !district) {
+            if (!street || !district || street === "غير متوفر") {
               try {
-                const geoData = await getReverseGeocode(pt.y, pt.x);
+                const geoData = await getReverseGeocode(pt.y, pt.x, geocodingMode);
                 street = geoData.street;
                 district = geoData.district;
               } catch (err) {}
@@ -1022,19 +1080,19 @@ const App: React.FC = () => {
     if (hasStreetHeader) {
       setLoading(true);
       const total = points.length;
-      const batchSize = 8;
+      const batchSize = geocodingMode === 'accurate' ? 4 : 10;
 
       for (let i = 0; i < total; i += batchSize) {
           setStatusMessage(lang === 'ar' 
-              ? `جاري جلب أسماء الشوارع: (${Math.min(i + batchSize, total)} من ${total})` 
-              : `Fetching Street Names: (${Math.min(i + batchSize, total)} of ${total})`
+              ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})` 
+              : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
           );
           const chunk = points.slice(i, i + batchSize);
           await Promise.all(chunk.map(async (pt) => {
               let street = pt.street;
-              if (!street) {
+              if (!street || street === "غير متوفر") {
                   try {
-                      const geoData = await getReverseGeocode(pt.y, pt.x);
+                      const geoData = await getReverseGeocode(pt.y, pt.x, geocodingMode);
                       street = geoData.street;
                       pt.street = street;
                       pt.district = geoData.district;
@@ -1610,6 +1668,8 @@ const App: React.FC = () => {
                               <button onClick={() => { setActiveFile(null); setGlobalPoints([]); }} className="p-2 text-white/20 hover:text-red-400 transition-colors"><Trash2 className="w-4 h-4" /></button>
                            </div>
 
+                           <GeocodingModeSelector mode={geocodingMode} setMode={setGeocodingMode} lang={lang} />
+
                            <button 
                              onClick={handleReverseGeocodeGlobal} 
                              className="w-full bg-[#0b2d3d] border-2 border-accent/40 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-xs group"
@@ -1756,11 +1816,21 @@ const App: React.FC = () => {
                 {activeTab === 'analyzer' && (activeFile || plannedStreets.length > 0) && (
                   <div className="space-y-6 animate-in fade-in duration-500 pb-10">
                       <div className="p-10 bg-[#0b2d3d]/60 rounded-[3rem] border border-accent/20 shadow-2xl text-center space-y-4 relative overflow-hidden">
-                          <label className="absolute top-4 right-4 p-2 bg-accent/10 hover:bg-accent hover:text-primary text-accent rounded-full transition-all cursor-pointer group border border-accent/20">
-                              <input type="file" className="hidden" onChange={handleFileUpload} />
-                              <RefreshCw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-500" />
-                              <span className="sr-only">{lang === 'ar' ? 'تحديث الملف' : 'Update File'}</span>
-                          </label>
+                          <div className="absolute top-4 right-4 flex items-center gap-2">
+                              <button 
+                                type="button"
+                                onClick={() => { setActiveFile(null); setGlobalPoints([]); setPlannedStreets([]); setUploadSourceMode('link'); }}
+                                title={lang === 'ar' ? 'استيراد رابط Google My Maps جديد' : 'Import new Google My Maps link'}
+                                className="p-2 bg-accent/10 hover:bg-accent hover:text-primary text-accent rounded-full transition-all border border-accent/20 flex items-center justify-center"
+                              >
+                                  <Globe className="w-4 h-4" />
+                              </button>
+                              <label title={lang === 'ar' ? 'تحديث/تغيير الملف المحلي' : 'Update/Change local file'} className="p-2 bg-accent/10 hover:bg-accent hover:text-primary text-accent rounded-full transition-all cursor-pointer group border border-accent/20">
+                                  <input type="file" className="hidden" onChange={handleFileUpload} />
+                                  <RefreshCw className="w-4 h-4 group-hover:rotate-180 transition-transform duration-500" />
+                                  <span className="sr-only">{lang === 'ar' ? 'تحديث الملف' : 'Update File'}</span>
+                              </label>
+                          </div>
                           <div className="w-20 h-20 bg-accent/5 rounded-full flex items-center justify-center mx-auto border-2 border-dashed border-accent/30 p-2"><div className="w-full h-full bg-accent/10 rounded-full flex items-center justify-center"><PieChart className="w-10 h-10 text-accent" /></div></div>
                           <div className="space-y-1"><h2 className="text-white font-black text-2xl tracking-tight leading-tight">{lang === 'ar' ? 'نتائج تحليل الملف' : 'File Analysis Results'}</h2><p className="text-[10px] text-white/40 font-bold uppercase tracking-widest leading-relaxed max-w-[250px] mx-auto">{activeFile?.filename || (lang === 'ar' ? 'تحليل المخطط الحالي' : 'Analyzing Planned Streets')}</p></div>
                       </div>
@@ -1810,11 +1880,16 @@ const App: React.FC = () => {
 
                             {/* Summary of KML placemarks categorized by feature type */}
                             <div id="placemarks-summary" className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 animate-in slide-in-from-bottom duration-700">
-                                <div className="flex items-center gap-2 border-b border-white/5 pb-2">
-                                    <Shapes className="w-4 h-4 text-accent" />
-                                    <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
-                                        {lang === 'ar' ? 'أقسام عناصر الخريطة' : 'KML Placemarks'}
-                                    </h3>
+                                <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                                    <div className="flex items-center gap-2">
+                                        <Shapes className="w-4 h-4 text-accent" />
+                                        <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
+                                            {lang === 'ar' ? 'أقسام عناصر الخريطة' : 'KML Placemarks'}
+                                        </h3>
+                                    </div>
+                                    <span className="text-[9px] font-bold text-accent bg-accent/10 border border-accent/20 px-2.5 py-0.5 rounded-full">
+                                        {lang === 'ar' ? '🎯 تحليل الخطوط فقط (Lines)' : '🎯 Lines Only Analyzed'}
+                                    </span>
                                 </div>
                                 <div className="grid grid-cols-4 gap-2 text-center">
                                     <div id="points-stat" className="bg-white/5 rounded-2xl p-2.5 flex flex-col justify-center">
@@ -1822,22 +1897,27 @@ const App: React.FC = () => {
                                         <span className="text-[8px] font-bold text-white/40 block uppercase">{lang === 'ar' ? 'نقاط' : 'Points'}</span>
                                         <span className="text-lg font-black text-white mt-1">{placemarksSummary.points}</span>
                                     </div>
-                                    <div id="lines-stat" className="bg-white/5 rounded-2xl p-2.5 flex flex-col justify-center">
-                                        <Activity className="w-4 h-4 text-accent/60 mx-auto mb-1" />
-                                        <span className="text-[8px] font-bold text-white/40 block uppercase">{lang === 'ar' ? 'مسارات' : 'Lines'}</span>
-                                        <span className="text-lg font-black text-white mt-1">{placemarksSummary.lines}</span>
+                                    <div id="lines-stat" className="bg-accent/20 border border-accent/40 rounded-2xl p-2.5 flex flex-col justify-center">
+                                        <Activity className="w-4 h-4 text-accent mx-auto mb-1" />
+                                        <span className="text-[8px] font-bold text-accent block uppercase">{lang === 'ar' ? 'مسارات (محللة)' : 'Lines (Analyzed)'}</span>
+                                        <span className="text-lg font-black text-accent mt-1">{placemarksSummary.lines}</span>
                                     </div>
                                     <div id="polygons-stat" className="bg-white/5 rounded-2xl p-2.5 flex flex-col justify-center">
                                         <MapIcon className="w-4 h-4 text-accent/60 mx-auto mb-1" />
                                         <span className="text-[8px] font-bold text-white/40 block uppercase">{lang === 'ar' ? 'مساحات' : 'Polygons'}</span>
                                         <span className="text-lg font-black text-white mt-1">{placemarksSummary.polygons}</span>
                                     </div>
-                                    <div id="total-stat" className="bg-accent/15 border border-accent/20 rounded-2xl p-2.5 flex flex-col justify-center">
-                                        <Hash className="w-4 h-4 text-accent mx-auto mb-1" />
-                                        <span className="text-[8px] font-bold text-accent/60 block uppercase">{lang === 'ar' ? 'الإجمالي' : 'Total'}</span>
-                                        <span className="text-lg font-black text-accent mt-1">{placemarksSummary.total}</span>
+                                    <div id="total-stat" className="bg-white/5 rounded-2xl p-2.5 flex flex-col justify-center">
+                                        <Hash className="w-4 h-4 text-white/60 mx-auto mb-1" />
+                                        <span className="text-[8px] font-bold text-white/40 block uppercase">{lang === 'ar' ? 'الإجمالي' : 'Total'}</span>
+                                        <span className="text-lg font-black text-white mt-1">{placemarksSummary.total}</span>
                                     </div>
                                 </div>
+                                <p className="text-[9.5px] font-bold text-white/50 text-center leading-relaxed pt-1">
+                                    {lang === 'ar' 
+                                        ? '💡 يتم حساب الأطوال والإحصائيات وتصنيف الألوان للمسارات والشبكات فقط (Lines/LineString). تم استبعاد النقاط والمضلعات تلقائياً من تحليلات الأطوال.' 
+                                        : '💡 Lengths and color analytics are calculated strictly for line features (LineString). Points and Polygons are excluded from length metrics.'}
+                                </p>
                             </div>
 
                                                         {/* Interactive Charts */}
@@ -2182,16 +2262,82 @@ const App: React.FC = () => {
                 
                 {activeTab === 'analyzer' && !activeFile && plannedStreets.length === 0 && (
                   <div className="space-y-6 animate-in fade-in duration-500">
-                    <label className="block p-8 border-2 border-dashed border-accent/40 rounded-[3rem] text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group shadow-2xl">
-                      <input type="file" className="hidden" onChange={handleFileUpload} />
-                      <Upload className="w-10 h-10 mx-auto mb-3 text-accent group-hover:scale-110 transition-all" />
-                      <span className="text-[12px] font-black text-white block leading-tight px-6 uppercase tracking-wider">
-                        {lang === 'ar' ? 'ارفع ملف (.GDB, .ZIP, .KMZ, .DXF) لتحليله' : 'Drop file to analyze'}
-                      </span>
-                      <span className="text-[9px] text-accent mt-2 block font-bold uppercase tracking-[0.2em]">
-                        {lang === 'ar' ? 'انقر للاختيار' : 'Click to select'}
-                      </span>
-                    </label>
+                    <div className="flex bg-[#0b2d3d]/80 p-1.5 rounded-2xl border border-white/10 shadow-xl">
+                      <button
+                        type="button"
+                        onClick={() => setUploadSourceMode('file')}
+                        className={cn(
+                          "flex-1 py-3 px-4 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2",
+                          uploadSourceMode === 'file' ? "bg-accent text-primary shadow-md" : "text-white/40 hover:text-white"
+                        )}
+                      >
+                        <Upload className="w-4 h-4" />
+                        <span>{lang === 'ar' ? 'رفع ملف بيانات' : 'Upload Data File'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUploadSourceMode('link')}
+                        className={cn(
+                          "flex-1 py-3 px-4 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2",
+                          uploadSourceMode === 'link' ? "bg-accent text-primary shadow-md" : "text-white/40 hover:text-white"
+                        )}
+                      >
+                        <Globe className="w-4 h-4" />
+                        <span>{lang === 'ar' ? 'رابط Google My Maps' : 'Google My Maps Link'}</span>
+                      </button>
+                    </div>
+
+                    {uploadSourceMode === 'file' ? (
+                      <label className="block p-8 border-2 border-dashed border-accent/40 rounded-[3rem] text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group shadow-2xl">
+                        <input type="file" className="hidden" onChange={handleFileUpload} />
+                        <Upload className="w-10 h-10 mx-auto mb-3 text-accent group-hover:scale-110 transition-all" />
+                        <span className="text-[12px] font-black text-white block leading-tight px-6 uppercase tracking-wider">
+                          {lang === 'ar' ? 'ارفع ملف (.GDB, .ZIP, .KMZ, .KML, .DXF) لتحليله' : 'Drop file to analyze'}
+                        </span>
+                        <span className="text-[9px] text-accent mt-2 block font-bold uppercase tracking-[0.2em]">
+                          {lang === 'ar' ? 'انقر للاختيار' : 'Click to select'}
+                        </span>
+                      </label>
+                    ) : (
+                      <div className="bg-[#0b2d3d]/60 p-6 rounded-[2.5rem] border border-accent/20 shadow-2xl space-y-4 text-right" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                        <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                          <span className="text-xs font-black text-white flex items-center gap-2">
+                            <Globe className="w-4 h-4 text-accent" />
+                            {lang === 'ar' ? 'تحليل الأطوال عبر رابط Google My Maps' : 'Analyze Lengths via Google My Maps Link'}
+                          </span>
+                          <span className="text-[10px] text-accent font-bold bg-accent/10 border border-accent/20 px-2.5 py-0.5 rounded-full">
+                            My Maps
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-white/60 leading-relaxed font-bold">
+                          {lang === 'ar' 
+                            ? 'ضع رابط خريطة Google My Maps العام (مفتوح للمشاركة) وسيقوم محلل الأطوال بقراءة وتصنيف كافة الأطوال والمسارات والشبكات تلقائياً.' 
+                            : 'Paste a public Google My Maps share/edit link to automatically parse and calculate path lengths, color groups, and network metrics.'}
+                        </p>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            placeholder="https://www.google.com/maps/d/edit?mid=1yR93XqrI2xr7_dJKERGz0FfxHQxlwt4..."
+                            value={mapsLink}
+                            onChange={(e) => setMapsLink(e.target.value)}
+                            className="flex-1 bg-[#0e3f53] border border-white/10 rounded-2xl px-4 py-3.5 text-[11px] font-bold text-white outline-none placeholder:text-white/30 focus:border-accent transition-all select-text"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleLoadMyMapsLink}
+                            disabled={!mapsLink.trim() || loading}
+                            className={cn(
+                              "px-6 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg",
+                              mapsLink.trim() && !loading ? "bg-accent text-primary hover:brightness-110 active:scale-95" : "bg-white/5 text-white/25 cursor-not-allowed"
+                            )}
+                          >
+                            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+                            <span>{lang === 'ar' ? 'استيراد وتحليل' : 'Import & Analyze'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="text-center p-10 bg-white/5 rounded-[2.5rem] border border-dashed border-white/10 mt-6 space-y-4">
                       <Database className="w-10 h-10 text-accent/40 mx-auto animate-pulse" />
                       <div className="space-y-1">
@@ -2232,6 +2378,8 @@ const App: React.FC = () => {
                             <p className="text-[12px] text-accent font-black leading-relaxed text-center">
                               {lang === 'ar' ? 'سيتم تقسيم العناصر وتصنيفها في مجلدات منفصلة بناءً على اسم الشارع الجغرافي الخاص بها.' : 'Elements will be grouped into separate folders based on their geographic street name.'}
                             </p>
+
+                            <GeocodingModeSelector mode={geocodingMode} setMode={setGeocodingMode} lang={lang} />
                             
                             <button 
                               onClick={handleReverseGeocodeGlobal} 
