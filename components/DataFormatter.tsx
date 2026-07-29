@@ -344,64 +344,79 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             
             <div className="flex-1 bg-white/5 p-4 rounded-2xl border border-white/5">
               <label className="text-[10px] text-white/40 uppercase font-black mb-2 block">{lang === 'ar' ? 'نوع العناصر (القالب)' : 'Element Type (Template)'}</label>
-              <div className="flex flex-col gap-2">
-                <div className="flex gap-2">
-                  <button onClick={() => setTargetTemplate('pipes')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'pipes' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.pipes.name}</button>
-                  <button onClick={() => setTargetTemplate('points')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'points' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.points.name}</button>
-                </div>
-                <div className="flex gap-2 mb-2">
-                  <button onClick={() => setTargetTemplate('stations')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'stations' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.stations.name}</button>
-                  <button onClick={() => setTargetTemplate('polygons')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'polygons' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.polygons.name}</button>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => setTargetTemplate('boundaries')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'boundaries' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.boundaries.name}</button>
-                                    <button onClick={() => setTargetTemplate('violations')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'violations' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.violations.name}</button>
-                  <button onClick={() => setTargetTemplate('grids')} className={cn("flex-1 py-3 rounded-xl font-black text-xs transition-all", targetTemplate === 'grids' ? "bg-accent text-primary" : "bg-white/10 text-white/50 hover:bg-white/20")}>{TEMPLATES.grids.name}</button>
-                </div>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { id: 'pipes', label: TEMPLATES.pipes.name },
+                  { id: 'points', label: TEMPLATES.points.name },
+                  { id: 'stations', label: TEMPLATES.stations.name },
+                  { id: 'polygons', label: TEMPLATES.polygons.name },
+                  { id: 'boundaries', label: TEMPLATES.boundaries.name },
+                  { id: 'violations', label: TEMPLATES.violations.name },
+                  { id: 'grids', label: TEMPLATES.grids.name },
+                ].map((tItem) => (
+                  <button
+                    key={tItem.id}
+                    type="button"
+                    onClick={() => setTargetTemplate(tItem.id as any)}
+                    className={cn(
+                      "py-2.5 px-2 rounded-xl font-black text-[11px] leading-tight transition-all text-center flex items-center justify-center min-h-[44px] break-words",
+                      targetTemplate === tItem.id ? "bg-accent text-primary shadow-lg" : "bg-white/10 text-white/70 hover:bg-white/20",
+                      tItem.id === 'grids' && "col-span-2"
+                    )}
+                  >
+                    {tItem.label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
 
-          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between gap-3">
             <div>
               <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بمجلدات الملف الأصلي' : 'Keep Original Folders'}</h4>
               <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم الحفاظ على بنية المجلدات الأصلية (الطبقات) عند التصدير.' : 'When enabled, the original folder structure (layers) will be preserved on export.'}</p>
             </div>
             <button 
+              type="button"
               onClick={() => setKeepFolders(!keepFolders)}
               className={cn(
-                "w-12 h-6 rounded-full transition-colors relative",
+                "w-12 h-6 rounded-full transition-colors relative shrink-0 flex items-center px-1",
                 keepFolders ? "bg-accent" : "bg-white/20"
               )}
             >
               <div className={cn(
-                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
-                keepFolders ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                "w-4 h-4 bg-white rounded-full transition-all shadow-md",
+                keepFolders 
+                  ? (lang === 'ar' ? "translate-x-0" : "translate-x-6") 
+                  : (lang === 'ar' ? "translate-x-6" : "translate-x-0")
               )} />
             </button>
           </div>
 
-          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between">
+          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between gap-3">
             <div>
               <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بالحقول غير المطابقة' : 'Keep Unmapped Fields'}</h4>
               <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم إضافة الحقول الأصلية التي لم يتم تعيينها إلى البيانات المصدرة.' : 'When enabled, original fields that were not mapped will be added to the exported data.'}</p>
             </div>
             <button 
+              type="button"
               onClick={() => setRetainUnmapped(!retainUnmapped)}
               className={cn(
-                "w-12 h-6 rounded-full transition-colors relative",
+                "w-12 h-6 rounded-full transition-colors relative shrink-0 flex items-center px-1",
                 retainUnmapped ? "bg-accent" : "bg-white/20"
               )}
             >
               <div className={cn(
-                "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
-                retainUnmapped ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                "w-4 h-4 bg-white rounded-full transition-all shadow-md",
+                retainUnmapped 
+                  ? (lang === 'ar' ? "translate-x-0" : "translate-x-6") 
+                  : (lang === 'ar' ? "translate-x-6" : "translate-x-0")
               )} />
             </button>
           </div>
 
           <div className="bg-white/5 p-4 rounded-2xl border border-white/5 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-3">
               <div>
                 <h4 className="text-white font-black text-sm flex items-center gap-2">
                   <span>{lang === 'ar' ? 'جلب أسماء الشوارع والأحياء' : 'Fetch Streets & Districts'}</span>
@@ -426,13 +441,15 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                 type="button"
                 onClick={() => setAutoFetchStreets(!autoFetchStreets)}
                 className={cn(
-                  "w-12 h-6 rounded-full transition-colors relative flex-shrink-0",
+                  "w-12 h-6 rounded-full transition-colors relative shrink-0 flex items-center px-1",
                   autoFetchStreets ? "bg-accent" : "bg-white/20"
                 )}
               >
                 <div className={cn(
-                  "w-4 h-4 bg-white rounded-full absolute top-1 transition-all transform",
-                  autoFetchStreets ? (lang === 'ar' ? "-translate-x-7" : "translate-x-7") : (lang === 'ar' ? "-translate-x-1" : "translate-x-1")
+                  "w-4 h-4 bg-white rounded-full transition-all shadow-md",
+                  autoFetchStreets 
+                    ? (lang === 'ar' ? "translate-x-0" : "translate-x-6") 
+                    : (lang === 'ar' ? "translate-x-6" : "translate-x-0")
                 )} />
               </button>
             </div>

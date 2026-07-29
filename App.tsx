@@ -2054,8 +2054,8 @@ const App: React.FC = () => {
       )}
 
       <div className="flex flex-1 h-full w-full overflow-hidden">
-        <nav className="bg-primary border-e border-slate-800 flex flex-col items-center py-8 w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500">
-          <div className="flex-1 flex flex-col gap-6 w-full px-2">
+        <nav className="bg-primary border-e border-slate-800 flex flex-col items-center py-4 md:py-8 w-16 sm:w-20 md:w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500 overflow-y-auto custom-scrollbar">
+          <div className="flex-1 flex flex-col gap-4 md:gap-6 w-full px-1.5 sm:px-2">
              {[
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
                { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
@@ -2066,34 +2066,34 @@ const App: React.FC = () => {
                { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق البيانات' : 'Format Data' },
                { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
              ].map((tab) => (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={cn("flex flex-col items-center gap-2 p-3 rounded-2xl transition-all", activeTab === tab.id ? "bg-accent text-primary shadow-lg" : "text-white/30 hover:text-white")}>
-                  {React.cloneElement(tab.icon as any, { className: "w-6 h-6" })}
-                  <span className="text-[8px] font-black uppercase text-center leading-tight">{tab.label}</span>
+                <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={cn("flex flex-col items-center gap-1.5 sm:gap-2 p-2 sm:p-3 rounded-2xl transition-all", activeTab === tab.id ? "bg-accent text-primary shadow-lg" : "text-white/30 hover:text-white")}>
+                  {React.cloneElement(tab.icon as any, { className: "w-5 h-5 md:w-6 md:h-6" })}
+                  <span className="text-[7px] sm:text-[8px] font-black uppercase text-center leading-tight">{tab.label}</span>
                 </button>
              ))}
           </div>
-          <div className="flex flex-col gap-4 mt-auto">
-             <button onClick={() => setShowInstallModal(true)} className="p-3 text-accent hover:brightness-125 transition-all flex flex-col items-center gap-1 group relative" title={lang === 'ar' ? 'تثبيت التطبيق على الجوال' : 'Install Mobile App'}>
+          <div className="flex flex-col gap-3 md:gap-4 mt-auto pt-4">
+             <button onClick={() => setShowInstallModal(true)} className="p-2 sm:p-3 text-accent hover:brightness-125 transition-all flex flex-col items-center gap-1 group relative" title={lang === 'ar' ? 'تثبيت التطبيق على الجوال' : 'Install Mobile App'}>
                 <div className="relative">
                   <Smartphone className="w-5 h-5 text-accent animate-pulse" />
                   {!isStandalone && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent animate-ping" />}
                 </div>
                 <span className="text-[8px] font-black text-accent">{lang === 'ar' ? 'تثبيت' : 'APP'}</span>
              </button>
-             <button onClick={() => setShowManual(true)} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
-             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{lang.toUpperCase()}</span></button>
-             <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
-             <button onClick={() => setShowSettingsModal(true)} className="p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Settings2 className="w-5 h-5" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'إعدادات' : 'SETTINGS'}</span></button>
+             <button onClick={() => setShowManual(true)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
+             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{lang.toUpperCase()}</span></button>
+             <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
+             <button onClick={() => setShowSettingsModal(true)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Settings2 className="w-5 h-5" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'إعدادات' : 'SETTINGS'}</span></button>
 
           </div>
       </nav>
 
-      <aside className="bg-primary border-e border-slate-800 w-[420px] flex flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden">
-           <div className="p-10 pb-4 shrink-0">
+      <aside className="bg-primary border-e border-slate-800 w-full sm:w-[360px] md:w-[420px] max-w-full flex flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden shrink-0">
+           <div className="p-4 sm:p-6 md:p-10 pb-4 shrink-0">
                 <div className="flex items-center justify-between">
                    <div>
-                     <h1 className="text-2xl font-black text-white tracking-tight leading-tight">{t.appTitle}</h1>
-                     <p className="text-[10px] text-accent font-black uppercase mt-1 tracking-widest">{theme === 'nwc' ? t.themeNWC : t.subTitle}</p>
+                     <h1 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-tight">{t.appTitle}</h1>
+                     <p className="text-[9px] sm:text-[10px] text-accent font-black uppercase mt-1 tracking-widest">{theme === 'nwc' ? t.themeNWC : t.subTitle}</p>
                    </div>
                    <div className="flex items-center gap-2">
                      <button
@@ -2105,15 +2105,15 @@ const App: React.FC = () => {
                        <span>{lang === 'ar' ? 'تثبيت التطبيق' : 'Install App'}</span>
                      </button>
                      {theme === 'nwc' && (
-                       <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-lg animate-pulse">
-                         <span className="text-primary font-black text-[11px] tracking-tight">NWC</span>
+                       <div className="w-8 h-8 sm:w-10 sm:h-10 bg-white rounded-full flex items-center justify-center shadow-lg animate-pulse shrink-0">
+                         <span className="text-primary font-black text-[9px] sm:text-[11px] tracking-tight">NWC</span>
                        </div>
                      )}
                    </div>
                 </div>
            </div>
 
-           <div className="flex-1 overflow-y-auto custom-scrollbar px-10 pb-8 pt-4">
+           <div className="flex-1 overflow-y-auto custom-scrollbar px-4 sm:px-6 md:px-10 pb-8 pt-4">
                 {error && (<div className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-in slide-in-from-top"><X className="w-4 h-4 text-red-400 shrink-0 mt-1 cursor-pointer" onClick={() => setError(null)} /><p className="text-[10px] text-red-400 font-bold leading-relaxed">{error}</p></div>)}
 
                 {activeTab === 'converter' && (

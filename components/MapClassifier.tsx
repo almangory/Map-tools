@@ -388,7 +388,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 disabled={loading}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
               />
-              <div className="bg-transparent border border-dashed border-white/20 rounded-2xl p-10 text-center hover:bg-white/5 transition-colors pointer-events-none flex flex-col items-center justify-center">
+              <div className="bg-transparent border border-dashed border-white/20 rounded-2xl p-6 sm:p-10 text-center hover:bg-white/5 transition-colors pointer-events-none flex flex-col items-center justify-center">
                 <FileUp className="w-6 h-6 text-white/40 mb-2" />
                 <span className="text-white/70 font-bold text-xs">
                    {loading ? (lang === 'ar' ? 'جاري المعالجة...' : 'Processing...') : (lang === 'ar' ? 'اختر ملف KML, KMZ, DXF, GDB' : 'Select KML, KMZ, DXF, GDB')}
