@@ -89,6 +89,8 @@ export type SplitterMode = 'single' | 'separate';
 
 export interface AnalysisItem {
   color: string;
+  statusName?: string;
+  statusColor?: string;
   totalLength: number;
   count: number;
   percentage: number;

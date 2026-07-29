@@ -1,8 +1,11 @@
 
 import pptxgen from "pptxgenjs";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { Language } from "../translations";
 // Added import for AnalysisItem
 import { AnalysisItem } from "../types";
+import { matchStatusByColor } from "./colorUtils";
 
 export const generateAnalysisPPTX = async (
   data: AnalysisItem[], 
@@ -12,127 +15,316 @@ export const generateAnalysisPPTX = async (
   const isAr = lang === 'ar';
   const pptx = new pptxgen();
   
-  // Set Layout to A4 Landscape (11.69 x 8.27 inches)
-  pptx.defineLayout({ name: 'A4_LANDSCAPE', width: 11.69, height: 8.27 });
-  pptx.layout = 'A4_LANDSCAPE';
+  // Set Layout to Widescreen (16:9) for better modern presentation
+  pptx.defineLayout({ name: 'WIDESCREEN', width: 13.33, height: 7.5 });
+  pptx.layout = 'WIDESCREEN';
   if (isAr) (pptx as any).rtlMode = true;
 
-  const primaryColor = "0e3f53";
-  const accentColor = "dcb13c";
+  const primaryColor = "0B2D3D"; // Deeper blue to match app UI
+  const accentColor = "DCB13C"; // Gold accent
   const white = "FFFFFF";
+  const lightBg = "F8F9FA";
+  const grayText = "64748B";
 
   // 1. Title Slide
   const slide1 = pptx.addSlide();
   slide1.background = { color: primaryColor };
-  slide1.addText(isAr ? "تقرير تحليل أطوال المسارات" : "Path Length Analysis Report", {
-    x: 1, y: 3.0, w: 9.69, h: 1.2,
-    fontSize: 40, color: accentColor, bold: true, align: isAr ? 'right' : 'left'
+  slide1.addText(isAr ? "تحليل أطوال المسارات" : "Path Length Analysis", {
+    x: 1, y: 2.5, w: 11.33, h: 1.5,
+    fontSize: 48, color: accentColor, bold: true, align: isAr ? 'right' : 'left'
   });
-  slide1.addText(isAr ? `الملف: ${filename}` : `File: ${filename}`, {
-    x: 1, y: 4.4, w: 9.69, h: 0.6,
-    fontSize: 18, color: white, align: isAr ? 'right' : 'left'
+  slide1.addText(isAr ? `المشروع: ${filename}` : `Project: ${filename}`, {
+    x: 1, y: 4.2, w: 11.33, h: 0.8,
+    fontSize: 24, color: white, align: isAr ? 'right' : 'left'
   });
-  slide1.addText(new Date().toLocaleDateString(isAr ? 'ar-SA' : 'en-US'), {
-      x: 1, y: 5.2, w: 9.69, h: 0.5,
-      fontSize: 14, color: "cccccc", align: isAr ? 'right' : 'left'
+  slide1.addText(new Date().toLocaleDateString(isAr ? 'ar-SA' : 'en-US', { dateStyle: 'full' }), {
+      x: 1, y: 5.2, w: 11.33, h: 0.5,
+      fontSize: 16, color: "94A3B8", align: isAr ? 'right' : 'left'
   });
 
   // 2. Summary Slide
   const totalKm = data.reduce((a, b) => a + b.totalLength, 0) / 1000;
   const slide2 = pptx.addSlide();
-  slide2.addText(isAr ? "ملخص النتائج الإجمالية" : "Executive Summary", {
-      x: 0.64, y: 0.6, w: 10.4, h: 0.6,
-      fontSize: 28, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
+  slide2.addText(isAr ? "نظرة عامة على الإحصائيات" : "Statistics Overview", {
+      x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+      fontSize: 32, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
   });
 
   const summaryBoxes = [
-      { label: isAr ? "إجمالي الطول" : "Total Length", value: `${totalKm.toFixed(2)} ${isAr ? "كم" : "km"}` },
-      { label: isAr ? "عدد الألوان" : "Color Groups", value: data.length.toString() },
-      { label: isAr ? "إجمالي العناصر" : "Total Items", value: data.reduce((a, b) => a + b.count, 0).toString() }
+      { label: isAr ? "إجمالي الأطوال (كم)" : "Total Length (km)", value: `${totalKm.toFixed(2)}` },
+      { label: isAr ? "الحالات المكتشفة" : "Status Categories", value: data.length.toString() },
+      { label: isAr ? "إجمالي العناصر" : "Total Elements", value: data.reduce((a, b) => a + b.count, 0).toString() }
   ];
 
   summaryBoxes.forEach((box, i) => {
-      const xPos = 0.64 + i * 3.6;
+      const xPos = 0.8 + i * 4.0;
       slide2.addShape(pptx.ShapeType.rect, {
-          x: xPos, y: 1.6, w: 3.2, h: 4.8,
-          fill: { color: "f8f9fa" }, line: { color: primaryColor, width: 1 }
+          x: xPos, y: 2.0, w: 3.5, h: 4.0,
+          fill: { color: lightBg }, line: { color: primaryColor, width: 1.5 },
+          rectRadius: 0.2 // Rounded corners
       });
       slide2.addText(box.label, {
-          x: xPos + 0.2, y: 2.2, w: 2.8, h: 0.4,
-          fontSize: 14, color: "666666", align: 'center'
+          x: xPos + 0.2, y: 3.0, w: 3.1, h: 0.6,
+          fontSize: 18, color: grayText, align: 'center', bold: true
       });
       slide2.addText(box.value, {
-          x: xPos + 0.2, y: 3.4, w: 2.8, h: 1.0,
-          fontSize: 28, color: primaryColor, bold: true, align: 'center'
+          x: xPos + 0.2, y: 4.0, w: 3.1, h: 1.2,
+          fontSize: 40, color: primaryColor, bold: true, align: 'center'
       });
   });
 
   // 3. Chart Slide
   const slide3 = pptx.addSlide();
-  slide3.addText(isAr ? "توزيع الأطوال حسب اللون" : "Length Distribution by Color", {
-      x: 0.64, y: 0.6, w: 10.4, h: 0.6,
-      fontSize: 24, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
+  slide3.addText(isAr ? "مخطط توزيع الأطوال" : "Length Distribution Chart", {
+      x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+      fontSize: 32, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
   });
 
   const chartData = [
       {
           name: isAr ? "الأطوال" : "Lengths",
-          labels: data.map(d => d.color),
+          labels: data.map(d => d.statusName || d.color),
           values: data.map(d => parseFloat((d.totalLength / 1000).toFixed(2)))
       }
   ];
 
   slide3.addChart(pptx.ChartType.pie, chartData, {
-      x: 0.64, y: 1.5, w: 10.4, h: 5.5,
+      x: 2.0, y: 1.5, w: 9.33, h: 5.5,
       showLegend: true,
       legendPos: 'r',
-      dataLabelFontSize: 11,
+      dataLabelFontSize: 12,
+      dataLabelColor: "FFFFFF",
       showPercent: true,
-      chartColors: data.map(d => d.color.replace('#', ''))
+      chartColors: data.map(d => d.statusColor?.replace('#', '') || d.color.replace('#', ''))
   });
 
   // 4. Data Table Slide(s)
-  // Split data into chunks of 10 for table slides
-  for (let i = 0; i < data.length; i += 10) {
-      const chunk = data.slice(i, i + 10);
+  // Split data into chunks of 8 for table slides (to fit better vertically)
+  for (let i = 0; i < data.length; i += 8) {
+      const chunk = data.slice(i, i + 8);
       const slideTable = pptx.addSlide();
       slideTable.addText(isAr ? `البيانات التفصيلية (${i + 1} - ${i + chunk.length})` : `Detailed Statistics (${i + 1} - ${i + chunk.length})`, {
-          x: 0.64, y: 0.6, w: 10.4, h: 0.6,
-          fontSize: 20, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
+          x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+          fontSize: 28, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
       });
 
-      // Fixed: Explicitly type tableRows as any[][] to bypass strict type inference 
-      // which would otherwise require all rows to share the same property shape in cell options.
       const tableRows: any[][] = [
           [
-              { text: isAr ? "اللون" : "Color", options: { fill: primaryColor, color: white, bold: true } },
-              { text: isAr ? "الطول (كم)" : "Length (km)", options: { fill: primaryColor, color: white, bold: true } },
-              { text: isAr ? "العدد" : "Count", options: { fill: primaryColor, color: white, bold: true } },
-              { text: isAr ? "النسبة" : "Percentage", options: { fill: primaryColor, color: white, bold: true } }
+              { text: isAr ? "حالة التنفيذ / اللون" : "Status / Color", options: { fill: primaryColor, color: white, bold: true, fontSize: 16 } },
+              { text: isAr ? "الطول (كم)" : "Length (km)", options: { fill: primaryColor, color: white, bold: true, fontSize: 16 } },
+              { text: isAr ? "العدد" : "Count", options: { fill: primaryColor, color: white, bold: true, fontSize: 16 } },
+              { text: isAr ? "النسبة" : "Percentage", options: { fill: primaryColor, color: white, bold: true, fontSize: 16 } }
           ]
       ];
 
       chunk.forEach(item => {
+          const itemColor = item.statusColor?.replace('#', '') || item.color.replace('#', '');
           tableRows.push([
-              { text: item.color, options: { color: item.color, bold: true } },
-              { text: (item.totalLength / 1000).toFixed(3), options: {} },
-              { text: item.count.toString(), options: {} },
-              { text: `${item.percentage.toFixed(1)}%`, options: {} }
+              { text: item.statusName || item.color, options: { color: itemColor, bold: true, fontSize: 14 } },
+              { text: (item.totalLength / 1000).toFixed(3), options: { fontSize: 14 } },
+              { text: item.count.toString(), options: { fontSize: 14 } },
+              { text: `${item.percentage.toFixed(1)}%`, options: { fontSize: 14 } }
           ]);
       });
 
       slideTable.addTable(tableRows as any, {
-          x: 0.64, y: 1.5, w: 10.4,
-          border: { type: 'solid', color: "e2e8f0", pt: 1 },
-          fontSize: 12,
+          x: 0.8, y: 1.8, w: 11.73,
+          border: { type: 'solid', color: "E2E8F0", pt: 1 },
+          fontSize: 14,
           align: 'center',
-          valign: 'middle'
+          valign: 'middle',
+          colW: [4.73, 2.5, 2.0, 2.5], // proportional column widths
+          fill: "F8F9FA",
+          autoPage: false
       });
   }
 
   // Save the presentation
-  const safeName = filename.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  const safeName = filename.replace(/[^a-z0-9\u0600-\u06FF]/gi, '_');
   await pptx.writeFile({ fileName: `Analysis_Report_${safeName}.pptx` });
+};
+
+export const generateAnalysisPDF = (
+  data: AnalysisItem[], 
+  filename: string, 
+  lang: Language
+) => {
+  // Always use English for the PDF report to ensure compatibility with jsPDF's built-in fonts
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  
+  const primaryColor: [number, number, number] = [11, 45, 61]; // #0B2D3D
+  const accentColor: [number, number, number] = [220, 177, 60]; // #DCB13C
+  const textColor: [number, number, number] = [60, 60, 60];
+  const lightGray: [number, number, number] = [245, 247, 250];
+  
+  // Clean filename for title
+  const displayTitle = filename.replace(/_/g, ' ').replace(/\.kml|\.kmz|\.xlsx|\.csv|\.dxf/i, '');
+
+  // 1. Header Section (Dark Blue Background)
+  doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.rect(0, 0, 210, 45, 'F');
+  
+  // Add a subtle accent line at the bottom of the header
+  doc.setFillColor(accentColor[0], accentColor[1], accentColor[2]);
+  doc.rect(0, 45, 210, 2, 'F');
+
+  // Title Text
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(24);
+  doc.text("Path Length Analysis Report", 105, 22, { align: 'center' });
+  
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(11);
+  doc.setTextColor(200, 200, 200);
+  doc.text(`Project: ${displayTitle}`, 105, 32, { align: 'center' });
+  
+  doc.setFontSize(9);
+  doc.text(`Generated on: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 105, 38, { align: 'center' });
+
+  // 2. Summary Statistics Section
+  const totalKm = data.reduce((a, b) => a + b.totalLength, 0) / 1000;
+  const totalElements = data.reduce((a, b) => a + b.count, 0);
+
+  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text("Executive Summary", 14, 62);
+  
+  // Summary Cards (Draw 3 light gray boxes with borders)
+  const cardY = 68;
+  const cardW = 58;
+  const cardH = 22;
+  const marginX = 14;
+  const gap = (210 - (2 * marginX) - (3 * cardW)) / 2; // Calculate gap between cards
+
+  const summaryStats = [
+      { label: "Total Length (km)", value: totalKm.toFixed(2) },
+      { label: "Status Categories", value: data.length.toString() },
+      { label: "Total Elements", value: totalElements.toString() }
+  ];
+
+  summaryStats.forEach((stat, i) => {
+      const cardX = marginX + i * (cardW + gap);
+      
+      // Card Background
+      doc.setFillColor(lightGray[0], lightGray[1], lightGray[2]);
+      doc.setDrawColor(220, 225, 230);
+      doc.roundedRect(cardX, cardY, cardW, cardH, 2, 2, 'FD');
+      
+      // Card Label
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(100, 110, 120);
+      doc.text(stat.label, cardX + cardW/2, cardY + 7, { align: 'center' });
+      
+      // Card Value
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text(stat.value, cardX + cardW/2, cardY + 16, { align: 'center' });
+  });
+
+  // 3. Detailed Breakdown Section
+  doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text("Detailed Breakdown by Status", 14, 105);
+
+  // Data Table
+  const tableHead = [
+      ["", "Execution Status", "Length (km)", "Count", "Percentage"]
+  ];
+  
+  // Helper to convert hex to RGB for jsPDF
+  const hexToRgbForPdf = (hex: string): [number, number, number] => {
+      let c = hex.replace('#', '');
+      if (c.length === 3) c = c.split('').map(x => x + x).join('');
+      const r = parseInt(c.substring(0, 2), 16) || 0;
+      const g = parseInt(c.substring(2, 4), 16) || 0;
+      const b = parseInt(c.substring(4, 6), 16) || 0;
+      return [r, g, b];
+  };
+
+  const tableBody = data.map(item => {
+      const statusCat = matchStatusByColor(item.color);
+      // Fallback to the raw color code if no category matches perfectly, but we use the English name of the category
+      const displayName = statusCat ? statusCat.nameEn : item.color;
+      return [
+          "", // Empty cell for color badge
+          displayName,
+          (item.totalLength / 1000).toFixed(3),
+          item.count.toString(),
+          `${item.percentage.toFixed(1)}%`
+      ];
+  });
+
+  autoTable(doc, {
+      startY: 112,
+      head: tableHead,
+      body: tableBody,
+      theme: 'grid',
+      headStyles: { 
+          fillColor: primaryColor,
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          halign: 'center',
+          fontSize: 10
+      },
+      columnStyles: {
+          0: { cellWidth: 15, halign: 'center' }, // Color badge column
+          1: { cellWidth: 70, halign: 'left', fontStyle: 'bold' },
+          2: { cellWidth: 'auto', halign: 'right' },
+          3: { cellWidth: 'auto', halign: 'right' },
+          4: { cellWidth: 'auto', halign: 'right' }
+      },
+      styles: { 
+          fontSize: 10, 
+          cellPadding: 6,
+          textColor: textColor,
+          lineColor: [220, 225, 230],
+          valign: 'middle'
+      },
+      alternateRowStyles: {
+          fillColor: [252, 253, 254]
+      },
+      didDrawCell: function(dataOptions) {
+          // Draw color badge in the first column for body rows
+          if (dataOptions.section === 'body' && dataOptions.column.index === 0) {
+              const rowIndex = dataOptions.row.index;
+              const item = data[rowIndex];
+              const statusCat = matchStatusByColor(item.color);
+              const colorHex = statusCat ? statusCat.color : item.color;
+              const [r, g, b] = hexToRgbForPdf(colorHex);
+              
+              const dim = 6;
+              const x = dataOptions.cell.x + (dataOptions.cell.width - dim) / 2;
+              const y = dataOptions.cell.y + (dataOptions.cell.height - dim) / 2;
+              
+              doc.setFillColor(r, g, b);
+              doc.setDrawColor(200, 200, 200);
+              doc.circle(x + dim/2, y + dim/2, dim/2, 'FD');
+          }
+      }
+  });
+
+  // Footer (Page numbers)
+  const pageCount = (doc as any).internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(
+          `Page ${i} of ${pageCount}`, 
+          doc.internal.pageSize.width / 2, 
+          doc.internal.pageSize.height - 10, 
+          { align: 'center' }
+      );
+  }
+
+  const safeName = filename.replace(/[^a-z0-9]/gi, '_');
+  doc.save(`Analysis_Report_${safeName}.pdf`);
 };
 
 export const generateWMainlinePPTX = async (

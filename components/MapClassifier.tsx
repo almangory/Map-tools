@@ -1,12 +1,14 @@
 import { CircleDot } from 'lucide-react';
 import React, { useState } from 'react';
-import { Layers, Map as MapIcon, CheckCircle2, Download, RefreshCw, UploadCloud, MapPin, FileUp, Square, FolderSearch, FileSpreadsheet, CloudDownload, FolderInput, Zap } from 'lucide-react';
+import { Layers, Map as MapIcon, CheckCircle2, Download, RefreshCw, UploadCloud, MapPin, FileUp, Square, FolderSearch, FileSpreadsheet, CloudDownload, FolderInput, Zap, PenTool, FileText } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { classifyAssetsToZones, ClassifiedAsset } from '../services/turfService';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchNetworkFile } from '../services/parserService';
 import { ParsedFile } from '../types';
 import { identifyPotentialCRS, transformPoints } from '../services/crs';
 import { downloadKMZ } from '../services/kmlService';
+import { downloadDXF } from '../services/dxfExportService';
+import { downloadDataPDF } from '../services/pdfExportService';
 import * as XLSX from 'xlsx';
 
 interface Props {
@@ -439,21 +441,37 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mt-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
                 <button 
-                  onClick={downloadMergedExcel}
-                  className="bg-[#0f3b4c]/50 hover:bg-[#124258] border border-white/5 rounded-3xl py-6 flex flex-col items-center justify-center gap-3 transition-colors group shadow-inner"
+                  onClick={downloadAssetsKMZ}
+                  className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
-                  <FileSpreadsheet className="w-8 h-8 text-[#2ecc71] group-hover:scale-110 transition-transform" />
-                  <span className="text-white font-black text-sm">{lang === 'ar' ? 'إكسل مدمج (الكل)' : 'Merged Excel'}</span>
+                  <CloudDownload className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />
+                  <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'KMZ' : 'KMZ'}</span>
                 </button>
 
                 <button 
-                  onClick={downloadAssetsKMZ}
-                  className="bg-[#0f3b4c]/50 hover:bg-[#124258] border border-white/5 rounded-3xl py-6 flex flex-col items-center justify-center gap-3 transition-colors group shadow-inner"
+                  onClick={() => downloadDXF(exportPoints, "Classified_Assets")}
+                  className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
-                  <CloudDownload className="w-8 h-8 text-[#d6a536] group-hover:scale-110 transition-transform" />
-                  <span className="text-white font-black text-sm">{lang === 'ar' ? 'KMZ للأصول فقط' : 'Assets KMZ'}</span>
+                  <PenTool className="w-5 h-5 text-orange-400 group-hover:scale-110 transition-transform" />
+                  <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'DXF' : 'DXF'}</span>
+                </button>
+
+                <button 
+                  onClick={downloadMergedExcel}
+                  className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
+                >
+                  <FileSpreadsheet className="w-5 h-5 text-[#2ecc71] group-hover:scale-110 transition-transform" />
+                  <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'إكسل' : 'Excel'}</span>
+                </button>
+
+                <button 
+                  onClick={() => downloadDataPDF(exportPoints, "Classified_Assets", lang)}
+                  className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
+                >
+                  <FileText className="w-5 h-5 text-[#D32F2F] group-hover:scale-110 transition-transform" />
+                  <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'PDF' : 'PDF'}</span>
                 </button>
               </div>
 

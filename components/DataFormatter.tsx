@@ -1,7 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { GeoPoint } from '../types';
-import { Database, Check, Download, AlertTriangle, Target, Zap } from 'lucide-react';
+import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check } from 'lucide-react';
+import { GeoPoint, OverlapResult } from '../types';
 import { downloadKMZ } from '../services/kmlService';
+import { downloadDXF } from '../services/dxfExportService';
+import { downloadDataPDF } from '../services/pdfExportService';
+import * as XLSX from 'xlsx';
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -90,10 +93,11 @@ interface Props {
   fetchStreets?: (points: GeoPoint[], headers: string[], action: () => void) => void;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
   geocodingMode?: 'accurate' | 'fast';
+  onVerifyMissingAttributes?: () => void;
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
 }
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode }: Props) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes }: Props) => {
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids'>('pipes');
@@ -151,8 +155,8 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     grids: [...TEMPLATES.grids.fields]
   });
 
-  const handleApplyExport = () => {
-    // Process points according to mapping
+  
+  const getProcessedPoints = () => {
     const currentSelected = selectedFields[targetTemplate] ?? TEMPLATES[targetTemplate].fields;
     let templateFields = TEMPLATES[targetTemplate].fields.filter(f => currentSelected.includes(f));
     
@@ -162,7 +166,6 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
     const processedPoints = points.map(p => {
       const newAttrs: Record<string, string> = {};
-      
       const mappedSourceFields = new Set<string>();
 
       templateFields.forEach(field => {
@@ -175,127 +178,28 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                val = p.district || '';
            } else {
                const sourceFieldLower = mapRules.sourceField.toLowerCase();
-               
                if (p.attributes) {
                    const matchedKey = Object.keys(p.attributes).find(k => k.toLowerCase() === sourceFieldLower);
-                   if (matchedKey !== undefined) {
-                       val = p.attributes[matchedKey];
-                   }
-               }
-               
-               if (!val && p.originalRow && headers) {
-                   const matchedIdx = headers.findIndex(h => h.toLowerCase() === sourceFieldLower);
-                   if (matchedIdx !== -1 && p.originalRow[matchedIdx] !== undefined) {
-                       val = String(p.originalRow[matchedIdx]);
-                   }
+                   if (matchedKey) val = String(p.attributes[matchedKey]);
                }
            }
-           mappedSourceFields.add(mapRules.sourceField.toLowerCase());
+           if (val) mappedSourceFields.add(mapRules.sourceField);
         }
-
-        if (!val && mapRules?.defaultValue) {
-          val = mapRules.defaultValue;
-        }
-
-        const normField = field.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-        const isNumericField = normField === 'INNERDIAMETER' || 
-                               normField === 'OUTERDIAMETER' || 
-                               normField === 'DIAMETER' || 
-                               normField === 'PERMITNO' || 
-                               normField === 'ZONE' || 
-                               normField.includes('DIAMETER') ||
-                               field === 'Permit No' ||
-                               field === 'ZONE' ||
-                               field === 'INNERDIAMETER';
-        if (isNumericField && val) {
-            const numVal = val.replace(/[^0-9.]/g, '');
-            if (numVal) {
-                val = numVal;
-            }
-        }
-
-        if (autoFetchStreets && (field.toLowerCase() === 'streetname' || field === 'اسم الشارع' || field === 'الشارع')) {
-            newAttrs[field] = p.street || p.attributes?.['STREETNAME'] || p.attributes?.['اسم الشارع'] || val || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-        } else if (autoFetchStreets && (field.toLowerCase() === 'district' || field === 'الحي')) {
-            newAttrs[field] = p.district || p.attributes?.['DISTRICT'] || p.attributes?.['الحي'] || val || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-        } else if (val) {
-            newAttrs[field] = val;
-        } else {
-            newAttrs[field] = '';
-        }
+        if (!val && mapRules?.defaultValue) val = mapRules.defaultValue;
+        newAttrs[field] = val;
       });
-      if (retainUnmapped) {
+
+      if (includeUnmapped) {
         if (p.attributes) {
-          Object.entries(p.attributes).forEach(([k, v]) => {
-            const normK = k.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-            const isUnselected = unselectedTemplateFields.has(k) ||
-              (normK === 'DISTRICT' && unselectedTemplateFields.has('DISTRICT')) ||
-              (normK === 'STREETNAME' && unselectedTemplateFields.has('STREETNAME')) ||
-              (k === 'الحي' && unselectedTemplateFields.has('الحي')) ||
-              (k === 'الشارع' && unselectedTemplateFields.has('اسم الشارع'));
-            if (!mappedSourceFields.has(k.toLowerCase()) && !newAttrs[k] && !isUnselected) {
-              let valStr = String(v || '');
-              if ((normK === 'INNERDIAMETER' || normK === 'OUTERDIAMETER' || normK === 'DIAMETER') && valStr) {
-                const numVal = valStr.replace(/[^0-9.]/g, '');
-                if (numVal) valStr = numVal;
-              }
-              newAttrs[k] = valStr;
-            }
-          });
-        }
-        if (p.originalRow && headers) {
-          headers.forEach((h, i) => {
-            const normH = h.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-            const isUnselected = unselectedTemplateFields.has(h) ||
-              (normH === 'DISTRICT' && unselectedTemplateFields.has('DISTRICT')) ||
-              (normH === 'STREETNAME' && unselectedTemplateFields.has('STREETNAME')) ||
-              (h === 'الحي' && unselectedTemplateFields.has('الحي')) ||
-              (h === 'الشارع' && unselectedTemplateFields.has('اسم الشارع'));
-            if (!mappedSourceFields.has(h.toLowerCase()) && !newAttrs[h] && !isUnselected) {
-              let valStr = String(p.originalRow![i] || '');
-              if ((normH === 'INNERDIAMETER' || normH === 'OUTERDIAMETER' || normH === 'DIAMETER') && valStr) {
-                const numVal = valStr.replace(/[^0-9.]/g, '');
-                if (numVal) valStr = numVal;
-              }
-              newAttrs[h] = valStr;
-            }
-          });
+            Object.keys(p.attributes).forEach(k => {
+                if (!mappedSourceFields.has(k) && !unselectedTemplateFields.has(k)) {
+                    newAttrs[k] = String(p.attributes[k]);
+                }
+            });
         }
       }
 
-      let finalId = p.id;
-      if (nameSourceField) {
-        if (newAttrs[nameSourceField] !== undefined && newAttrs[nameSourceField] !== '') {
-            finalId = newAttrs[nameSourceField];
-        } else if (p.attributes && p.attributes[nameSourceField] !== undefined) {
-            finalId = p.attributes[nameSourceField];
-        } else if (p.originalRow && headers) {
-            const idx = headers.indexOf(nameSourceField);
-            if (idx !== -1 && p.originalRow[idx] !== undefined) {
-                finalId = String(p.originalRow[idx]);
-            }
-        }
-      }
-
-      let finalColor = p.color;
-      if (standardizeColors && p.color && !(targetTemplate === 'grids' && keepOriginalGridStyle)) {
-          finalColor = getClosestStandardColor(p.color) || p.color;
-      }
-      
-      if (overlapResults) {
-          const isOverlap = overlapResults.some(o => !o.isIntersection && (String(o.id1) === String(p.id) || String(o.id2) === String(p.id)));
-          if (isOverlap) {
-              finalColor = '#000000'; // Black for matching elements
-          }
-      }
-
-      return {
-        ...p,
-        id: finalId,
-        color: finalColor,
-        attributes: newAttrs,
-        type: (targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? 'Polygon' : (targetTemplate === 'grids' && !keepOriginalGridStyle ? 'Point' : p.type)
-      };
+      return { ...p, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
     });
 
     if (overlapResults) {
@@ -306,7 +210,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                     x: o.intersectionPoint.x,
                     y: o.intersectionPoint.y,
                     type: 'Point',
-                    color: '#9c27b0', // Purple for intersection points
+                    color: '#9c27b0',
                     layer: 'Intersections',
                     attributes: {
                         'Description': `Intersection between ${o.id1} and ${o.id2}`,
@@ -316,45 +220,71 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             }
         });
     }
+    
+    return { processedPoints, templateFields };
+  };
 
+  const getBaseFilename = () => {
     const prefix = networkType === 'water' ? 'Water' : 'Wastewater';
     const suffix = targetTemplate === 'pipes' ? 'Lines' : targetTemplate === 'points' ? 'Points' : targetTemplate === 'stations' ? 'Stations' : targetTemplate === 'boundaries' ? 'Boundaries' : targetTemplate === 'grids' ? 'Grids' : targetTemplate === 'violations' ? 'Violations' : 'Polygons';
-    
-    // Trigger download
-    downloadKMZ(processedPoints, `${prefix}_${suffix}_Formatted`, { 
+    return `${prefix}_${suffix}_Formatted`;
+  };
+
+  const handleApplyExportKMZ = () => {
+    const { processedPoints, templateFields } = getProcessedPoints();
+    downloadKMZ(processedPoints, getBaseFilename(), { 
         mode: keepFolders ? 'layer' : 'none', 
         groupByAttribute: keepFolders ? 'layer' : undefined,
         optimizeForMyMaps: optimizeForMyMaps,
         keepOriginalDescription: keepOriginalDescription,
         removeImagesOnly: removeImagesOnly,
-        ...(targetTemplate === 'pipes' ? {
-            lineStyle: { width: 3 }
-        } : {}),
+        ...(targetTemplate === 'pipes' ? { lineStyle: { width: 3 } } : {}),
         ...((targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? {
             polygonStyle: {
-                ...(standardizePolygonColors ? {
-                    colorHex: '#0288d1',
-                    opacityHex: '4d', // 30% opacity
-                } : {}),
-                ...(optimizeForMyMaps || standardizePolygonColors ? {
-                    outline: 0,
-                    width: 0
-                } : {})
+                ...(standardizePolygonColors ? { colorHex: '#0288d1', opacityHex: '4d' } : {}),
+                ...(optimizeForMyMaps || standardizePolygonColors ? { outline: 0, width: 0 } : {})
             }
         } : {})
     }, templateFields, templateFields);
   };
 
-  const onExportClick = () => {
-    if (autoFetchStreets && fetchStreets) {
-      fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], () => {
-        handleApplyExport();
-      });
-    } else {
-      handleApplyExport();
-    }
+  const handleApplyExportDXF = () => {
+    const { processedPoints } = getProcessedPoints();
+    downloadDXF(processedPoints, getBaseFilename());
   };
 
+  const handleApplyExportPDF = () => {
+    const { processedPoints } = getProcessedPoints();
+    downloadDataPDF(processedPoints, getBaseFilename(), lang);
+  };
+
+  const handleApplyExportExcel = () => {
+    const { processedPoints, templateFields } = getProcessedPoints();
+    const data = processedPoints.map(p => {
+        const row: any = { ID: p.id, Type: p.type, Layer: p.layer || '', X: p.x, Y: p.y };
+        if (p.attributes) {
+            templateFields.forEach(f => {
+                row[f] = p.attributes![f] || '';
+            });
+        }
+        return row;
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Formatted_Data");
+    XLSX.writeFile(wb, `${getBaseFilename()}.xlsx`);
+  };
+
+
+  const executeAction = (action: () => void) => {
+    if (autoFetchStreets && fetchStreets) {
+      fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], () => {
+        action();
+      });
+    } else {
+      action();
+    }
+  };
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4">
@@ -737,10 +667,34 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             </div>
           </div>
 
-          <button onClick={onExportClick} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-xl text-sm">
-            <Download className="w-5 h-5" />
-            {lang === 'ar' ? 'تطبيق وتحميل الملف' : 'Apply & Download Formatted File'}
-          </button>
+          
+          
+          {onVerifyMissingAttributes && (
+            <button onClick={onVerifyMissingAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group mt-6">
+                <AlertTriangle className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
+            </button>
+          )}
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+            <button onClick={() => executeAction(handleApplyExportKMZ)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
+              <CloudDownload className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />
+              <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'KMZ' : 'KMZ'}</span>
+            </button>
+            <button onClick={() => executeAction(handleApplyExportDXF)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
+              <PenTool className="w-5 h-5 text-orange-400 group-hover:scale-110 transition-transform" />
+              <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'DXF' : 'DXF'}</span>
+            </button>
+            <button onClick={() => executeAction(handleApplyExportExcel)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
+              <FileSpreadsheet className="w-5 h-5 text-[#2ecc71] group-hover:scale-110 transition-transform" />
+              <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'إكسل' : 'Excel'}</span>
+            </button>
+            <button onClick={() => executeAction(handleApplyExportPDF)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
+              <FileText className="w-5 h-5 text-[#D32F2F] group-hover:scale-110 transition-transform" />
+              <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'PDF' : 'PDF'}</span>
+            </button>
+          </div>
+
         </div>
       )}
     </div>

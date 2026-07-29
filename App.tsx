@@ -12,7 +12,7 @@ import {
   ChevronRight, ListOrdered, Locate, Zap, Navigation, FolderOpen, Package,
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
-  Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone
+  Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -26,7 +26,9 @@ import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML } 
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
-import { generateAnalysisPPTX, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
+import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
+import { downloadDXF } from './services/dxfExportService';
+import { downloadDataPDF } from './services/pdfExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
@@ -244,6 +246,56 @@ const savePreference = <T,>(key: string, value: T) => {
   }
 };
 
+
+const UniversalExportBar = ({
+  data,
+  filename,
+  lang,
+  onExcelExport,
+  isExecuting,
+  onKmzExport
+}: {
+  data: GeoPoint[];
+  filename: string;
+  lang: Language;
+  onExcelExport: () => void;
+  isExecuting: boolean;
+  onKmzExport: () => void;
+}) => {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 w-full">
+      <button 
+        disabled={isExecuting}
+        onClick={onKmzExport} 
+        className="bg-[#0b2d3d] border border-accent/30 text-accent font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-accent hover:text-primary active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <DownloadCloud className="w-4 h-4" />
+        {lang === 'ar' ? 'KMZ' : 'KMZ'}
+      </button>
+      <button 
+        disabled={isExecuting}
+        onClick={() => downloadDXF(data, filename || 'Export')} 
+        className="bg-white/5 border border-white/10 text-white/80 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <PenTool className="w-4 h-4 text-orange-400" />
+        {lang === 'ar' ? 'DXF' : 'DXF'}
+      </button>
+      <button 
+        disabled={isExecuting}
+        onClick={onExcelExport} 
+        className="bg-white/5 border border-white/10 text-white/80 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <FileSpreadsheet className="w-4 h-4 text-green-500" />
+        {lang === 'ar' ? 'إكسل' : 'Excel'}
+      </button>
+      <button 
+        disabled={isExecuting}
+        onClick={() => downloadDataPDF(data, filename || 'Export', lang)} 
+        className="bg-white/5 border border-white/10 text-white/80 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <FileText className="w-4 h-4 text-[#D32F2F]" />
+        {lang === 'ar' ? 'PDF' : 'PDF'}
+      </button>
+    </div>
+  );
+};
+
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>(() => loadSavedPreference('lang', 'ar'));
   const [theme, setTheme] = useState<'default' | 'nwc'>(() => loadSavedPreference('theme', 'default'));
@@ -310,7 +362,143 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const getPointsToCheck = (): GeoPoint[] => {
+  
+  const verifyEssentialAttributes = () => {
+    setLoading(true);
+    setStatusMessage(lang === 'ar' ? 'جاري فحص البيانات...' : 'Verifying attributes...');
+    
+    setTimeout(() => {
+        let missingCount = 0;
+        
+        const processPoints = (pts: GeoPoint[]) => {
+            return pts.map(pt => {
+                if (pt.type !== 'LineString') return pt;
+                if (isBlackLine(pt)) return pt;
+                
+                const descLower = (pt.description || '').toLowerCase();
+                const idLower = (String(pt.id) || '').toLowerCase();
+                const attr1Lower = (pt.attr1 || '').toLowerCase();
+                const attr2Lower = (pt.attr2 || '').toLowerCase();
+                
+                let hasDiameter = false;
+                
+                // 1. Basic regex match (number with unit)
+                const diaMatch = descLower.match(/(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة)/i) || 
+                                  idLower.match(/(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة)/i) || 
+                                  attr1Lower.match(/(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة)/i) || 
+                                  attr2Lower.match(/(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة)/i);
+                if (diaMatch) hasDiameter = true;
+                
+                // 2. Check standard diameters without units
+                const standardDias = /\b(1000|900|800|700|600|500|400|300|250|225|200|160|150|110|100|90|75|63|50)\b/;
+                if (!hasDiameter && (
+                    descLower.match(standardDias) || 
+                    idLower.match(standardDias) || 
+                    attr1Lower.match(standardDias) || 
+                    attr2Lower.match(standardDias)
+                )) {
+                    hasDiameter = true;
+                }
+
+                // 3. Check for diameter keywords followed by or containing a number
+                const diaKeywordRegex = /(diameter|innerdiameter|outerdiameter|dia|size|قطر|قطر الخط|مقاس)[\s:=_-]*(\d+(\.\d+)?)/i;
+                if (!hasDiameter && (
+                    descLower.match(diaKeywordRegex) ||
+                    idLower.match(diaKeywordRegex) ||
+                    attr1Lower.match(diaKeywordRegex) ||
+                    attr2Lower.match(diaKeywordRegex)
+                )) {
+                    hasDiameter = true;
+                }
+
+                // 4. Check extended attributes map if it exists
+                if (!hasDiameter && pt.attributes) {
+                    for (const [key, val] of Object.entries(pt.attributes)) {
+                        const keyLower = key.toLowerCase();
+                        const valString = String(val).toLowerCase();
+                        
+                        // If the key is a diameter keyword, the value MUST contain a number
+                        if (
+                            keyLower.includes('diameter') || 
+                            keyLower.includes('قطر') || 
+                            keyLower.includes('innerdiameter') || 
+                            keyLower.includes('outerdiameter') ||
+                            keyLower.includes('dia') ||
+                            keyLower.includes('size') ||
+                            keyLower.includes('مقاس')
+                        ) {
+                            if (valString.match(/\d+(\.\d+)?/) && valString.trim() !== '0') {
+                                hasDiameter = true;
+                                break;
+                            }
+                        }
+                        
+                        // Or if the value itself contains keyword + number
+                        if (valString.match(diaKeywordRegex)) {
+                            hasDiameter = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Check zone
+                let hasZone = pt.district || descLower.includes('zone') || attr1Lower.includes('zone') || attr2Lower.includes('zone') || descLower.includes('منطقة') || attr1Lower.includes('منطقة') || descLower.includes('حي') || attr1Lower.includes('حي') || attr2Lower.includes('حي');
+                
+                if (!hasZone && pt.attributes) {
+                     for (const [key, val] of Object.entries(pt.attributes)) {
+                        const keyLower = key.toLowerCase();
+                        if (
+                            keyLower.includes('zone') || 
+                            keyLower.includes('منطقة') || 
+                            keyLower.includes('district') || 
+                            keyLower.includes('حي') ||
+                            keyLower.includes('sector') ||
+                            keyLower.includes('قطاع') ||
+                            keyLower.includes('مخطط')
+                        ) {
+                            if (val && String(val).trim() !== '' && String(val).trim() !== '0') {
+                                hasZone = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!hasDiameter || !hasZone) {
+                    missingCount++;
+                    const missingParts = [];
+                    if (!hasDiameter) missingParts.push(lang === 'ar' ? 'القطر' : 'Diameter');
+                    if (!hasZone) missingParts.push(lang === 'ar' ? 'المنطقة' : 'Zone');
+                    
+                    return {
+                        ...pt,
+                        color: '#000000', // Distinctive alert color
+                        description: `${pt.description || ''}\n[MISSING: ${missingParts.join(', ')}]`.trim(),
+                        layer: `${pt.layer || 'Unknown'}_MISSING_ATTRS`
+                    };
+                }
+                
+                return pt;
+            });
+        };
+
+        if (activeFile) {
+            const nextGlobal = processPoints(globalPoints);
+            setGlobalPoints(nextGlobal);
+        } else {
+            const nextPlanned = processPoints(plannedStreets);
+            setPlannedStreets(nextPlanned);
+        }
+
+        setLoading(false);
+        setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية.` : `Highlighted ${missingCount} segments missing essential attributes.`);
+        setTimeout(() => setStatusMessage(''), 4000);
+    }, 500);
+  };
+
+
+
+const getPointsToCheck = (): GeoPoint[] => {
     if (activeTab === 'street-planner' && plannedStreets.length > 0) {
       const combined = [...globalPoints];
       for (const p of plannedStreets) {
@@ -693,11 +881,14 @@ const App: React.FC = () => {
             len = calculatePathLength(pt.path);
         }
 
-        let diameter = 'Unknown';
+        let diameter = lang === 'ar' ? 'غير محدد' : 'Unknown';
 
         if (pt.attributes) {
             // Check for diameter keys
-            const diaKey = Object.keys(pt.attributes).find(k => ['INNERDIAMETER', 'DIAMETER', 'القطر', 'diameter'].includes(k.toLowerCase()));
+            const diaKey = Object.keys(pt.attributes).find(k => {
+                const lower = k.toLowerCase();
+                return lower.includes('diameter') || lower.includes('قطر');
+            });
             if (diaKey && pt.attributes[diaKey]) diameter = String(pt.attributes[diaKey]);
         }
 
@@ -1988,30 +2179,22 @@ const App: React.FC = () => {
                                     </div>
                                 )}
 
-                                <div className="grid grid-cols-1 gap-4 mt-4">
-                                    <button
-                                        onClick={() => {
-                                            executeWithStreetFetching(globalPoints, selectedHeaders, () => {
-                                                if (converterExportAsZip && groupingMode !== 'none') {
-                                                    downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
-                                                } else {
-                                                    downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
-                                                }
-                                            });
-                                        }}
-                                        className="bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:brightness-110 active:scale-95 transition-all w-full"
-                                    >
-                                      {converterExportAsZip && groupingMode !== 'none' ? <Archive className="w-5 h-5" /> : <Download className="w-5 h-5" />}
-                                      {converterExportAsZip && groupingMode !== 'none'
-                                        ? (lang === 'ar' ? 'تصدير كمجلد مضغوط (ZIP)' : 'Export as Zipped Folders (ZIP)')
-                                        : (lang === 'ar' ? 'تصدير Google Earth (KMZ)' : 'Export Google Earth (KMZ)')
-                                      }
-                                    </button>
-                                    <button onClick={() => executeWithStreetFetching(globalPoints, selectedHeaders, downloadExcelAnalysis)} className="bg-white/5 border border-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:bg-white/10 active:scale-95 transition-all w-full">
-                                      <FileSpreadsheet className="w-5 h-5 text-green-500" />
-                                      {lang === 'ar' ? 'تصدير إكسل شامل' : 'Full Excel Export'}
-                                    </button>
-                                </div>
+                                <UniversalExportBar 
+                                  data={globalPoints} 
+                                  filename={activeFile.filename} 
+                                  lang={lang} 
+                                  isExecuting={loading}
+                                  onExcelExport={() => executeWithStreetFetching(globalPoints, selectedHeaders, downloadExcelAnalysis)}
+                                  onKmzExport={() => {
+                                      executeWithStreetFetching(globalPoints, selectedHeaders, () => {
+                                          if (converterExportAsZip && groupingMode !== 'none') {
+                                              downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
+                                          } else {
+                                              downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
+                                          }
+                                      });
+                                  }}
+                                />
                             </div>
                         )}
                     </div>
@@ -2051,7 +2234,8 @@ const App: React.FC = () => {
                       <div className="p-8 bg-[#0b2d3d]/40 rounded-[2.5rem] border border-white/5 shadow-2xl text-center space-y-4">
                           <h2 className="text-white font-black text-sm tracking-tight leading-tight uppercase tracking-widest">{lang === 'ar' ? 'استخراج بيانات من الخريطة' : 'Extract Map Data'}</h2>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          
+                            <div className="grid grid-cols-2 gap-3">
                               <button onClick={() => setIsDrawingMode(!isDrawingMode)} className={cn("p-4 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 transition-all border shadow-lg group", isDrawingMode ? "bg-accent text-primary border-accent" : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10")}><Navigation className={cn("w-5 h-5 transition-transform group-hover:scale-110", isDrawingMode ? "text-primary" : "text-white/40")} /><span className="leading-tight">{lang === 'ar' ? "ارسم مضلع" : "Draw Polygon"}</span></button>
                               <label className="p-4 bg-white/5 text-white/80 border border-white/10 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 hover:bg-white/10 transition-all shadow-lg cursor-pointer group"><input type="file" className="hidden" onChange={handleBoundaryUpload} /><FileUp className="w-5 h-5 text-accent/60 group-hover:text-accent transition-colors" /><span className="leading-tight text-center">{lang === 'ar' ? 'رفع حدود' : 'Upload Boundary'}</span></label>
                           </div>
@@ -2198,8 +2382,14 @@ const App: React.FC = () => {
                                       <span className="px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-[9px] font-black">{plannedStreets.length} {lang === 'ar' ? 'شوارع' : 'Streets'}</span>
                                    </div>
                                 </div>
-                                <button onClick={() => executeWithStreetFetching([...globalPoints, ...plannedStreets], selectedHeaders, () => { downloadKMZ([...globalPoints, ...plannedStreets], "Full_Street_Project", { mode: 'none', groupByAttribute: 'layer', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 shadow-xl transition-all"><Download className="w-5 h-5" />{lang === 'ar' ? 'تنزيل المشروع كاملاً (KMZ)' : 'Download Full KMZ'}</button>
-                                <button onClick={downloadExcelWithStreets} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><FileSpreadsheet className="w-5 h-5 text-green-500" />{lang === 'ar' ? 'تنزيل المشروع كاملاً (Excel)' : 'Download Full Excel'}</button>
+                                <UniversalExportBar
+                                    data={[...globalPoints, ...plannedStreets]}
+                                    filename={activeFile?.filename || 'Full_Street_Project'}
+                                    lang={lang}
+                                    isExecuting={loading}
+                                    onExcelExport={downloadExcelWithStreets}
+                                    onKmzExport={() => executeWithStreetFetching([...globalPoints, ...plannedStreets], selectedHeaders, () => { downloadKMZ([...globalPoints, ...plannedStreets], "Full_Street_Project", { mode: 'none', groupByAttribute: 'layer', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
+                                />
                                 <button onClick={() => { setSelectedArea(null); setPlannedStreets([]); setBoundaryPolygon(null); setIsDrawingMode(false); setActiveFile(null); setGlobalPoints([]); }} className="w-full mt-2 bg-white/5 text-white/40 font-black py-3 rounded-xl flex items-center justify-center gap-2 hover:text-red-400 transition-all text-[10px] uppercase"><Trash2 className="w-3 h-3" />{lang === 'ar' ? 'إفراغ مساحة العمل' : 'Clear Workspace'}</button>
                             </div>
                         </div>
@@ -2334,7 +2524,7 @@ const App: React.FC = () => {
                                                                 <Cell key={`cell-${index}`} fill={entry.color} />
                                                             ))}
                                                         </Pie>
-                                                        <RechartsTooltip contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} />
+                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} />
                                                     </RechartsPieChart>
                                                 </ResponsiveContainer>
                                             ) : (
@@ -2354,7 +2544,7 @@ const App: React.FC = () => {
                                                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
                                                         <XAxis dataKey="name" tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
                                                         <YAxis tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
-                                                        <RechartsTooltip contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} />
+                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} />
                                                         <Bar dataKey="value" fill="#06b6d4" radius={[4, 4, 0, 0]} />
                                                     </BarChart>
                                                 </ResponsiveContainer>
@@ -2700,15 +2890,28 @@ const App: React.FC = () => {
                             )}
 
                             <div className="h-6" />
-                            <div className="grid grid-cols-2 gap-3">
-                                <button onClick={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZ(!activeFile ? plannedStreets : globalPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })} className="border border-[#ffffff]/10 text-white/80 font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/5 transition-all text-[11px] shadow-lg"><DownloadCloud className="w-4 h-4 text-accent" />KMZ (Merged)</button>
-                                <button onClick={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, downloadExcelAnalysis)} className="border border-white/10 text-white/80 font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/5 transition-all text-[11px] shadow-lg"><FileSpreadsheet className="w-4 h-4 text-green-500" />Excel (Standard)</button>
-                            </div>
+                            <UniversalExportBar
+                                data={!activeFile ? plannedStreets : globalPoints}
+                                filename={activeFile?.filename || 'Analyzed'}
+                                lang={lang}
+                                isExecuting={loading}
+                                onExcelExport={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, downloadExcelAnalysis)}
+                                onKmzExport={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZ(!activeFile ? plannedStreets : globalPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
+                            />
                             <button onClick={downloadExcelWithStreets} className="w-full bg-[#0b2d3d] border border-accent/40 text-accent font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-sm group">
                                 <MapPinIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'تصدير إكسل مع أسماء الشوارع' : 'Export Excel with Streets'}
                             </button>
-                            <button onClick={() => generateAnalysisPPTX(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-accent text-primary font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-sm group"><Presentation className="w-6 h-6 group-hover:rotate-12 transition-transform" />{lang === 'ar' ? 'تصدير عرض تقديمي PPTX' : 'Export PPTX Presentation'}</button>
+                            
+                            <button onClick={verifyEssentialAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
+                                <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                                {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
+                            </button>
+
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={() => generateAnalysisPPTX(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-accent text-primary font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><Presentation className="w-5 h-5 group-hover:rotate-12 transition-transform" />{lang === 'ar' ? 'تصدير PPTX' : 'Export PPTX'}</button>
+                                <button onClick={() => generateAnalysisPDF(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-[#D32F2F] text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><FileText className="w-5 h-5 group-hover:scale-110 transition-transform" />{lang === 'ar' ? 'تصدير PDF' : 'Export PDF'}</button>
+                            </div>
                             <div className="bg-[#0b2d3d]/40 p-8 rounded-[3rem] border border-white/5 space-y-6">
                                 <h3 className="text-white/40 font-black text-[11px] text-center uppercase tracking-[0.2em]">{lang === 'ar' ? 'تفاصيل المجموعات المدمجة' : 'Merged Color Details'}</h3>
                                 <div className="space-y-8">{analysisData.map((item, idx) => (
@@ -3031,7 +3234,20 @@ const App: React.FC = () => {
                   <div className="space-y-8 animate-in fade-in duration-500">
                       <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4"><Shapes className="w-16 h-16 text-accent mx-auto" /><h2 className="text-white font-black text-xl">{lang === 'ar' ? 'محول المضلعات' : 'Polygon Converter'}</h2><p className="text-[10px] text-white/50 leading-relaxed font-bold uppercase">{lang === 'ar' ? 'تحويل الخطوط إلى مساحات' : 'Convert lines to areas'}</p></div>
                       <FileUploadZone id="poly-up" />
-                      {activeFile && (<div className="space-y-4 animate-in slide-in-from-bottom"><button onClick={() => { setLoading(true); setStatusMessage("جاري المعالجة..."); setTimeout(() => { const poly = globalPoints.map(p => p.path && p.path.length >= 3 ? {...p, type: 'Polygon' as const, path: [...p.path, p.path[0]]} : p); setGlobalPoints(poly); setLoading(false); setStatusMessage("تم التحويل!"); setTimeout(() => setStatusMessage(''), 2000); }, 1000); }} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><Scissors className="w-5 h-5 text-accent" />{lang === 'ar' ? 'تحويل الخطوط لمضلعات' : 'Lines to Polygons'}</button><button onClick={() => { const all: {x:number, y:number}[] = []; globalPoints.forEach(p => p.path ? p.path.forEach(pt => all.push({x:pt.x, y:pt.y})) : all.push({x:p.x, y:p.y})); const hull = calculateConvexHull(all); const bound: GeoPoint = { id: 'Boundary', x: hull[0].x, y: hull[0].y, type: 'Polygon', path: hull, color: '#ffffff', layer: 'Boundary' }; setGlobalPoints([bound]); setDataId(`boundary-gen-${Date.now()}`); }} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl"><BoxSelect className="w-5 h-5" />{lang === 'ar' ? 'إنشاء مضلع شامل (Boundary)' : 'Create Convex Boundary'}</button></div>)}
+                      {activeFile && (
+                        <div className="space-y-4 animate-in slide-in-from-bottom">
+                            <button onClick={() => { setLoading(true); setStatusMessage("جاري المعالجة..."); setTimeout(() => { const poly = globalPoints.map(p => p.path && p.path.length >= 3 ? {...p, type: 'Polygon' as const, path: [...p.path, p.path[0]]} : p); setGlobalPoints(poly); setLoading(false); setStatusMessage("تم التحويل!"); setTimeout(() => setStatusMessage(''), 2000); }, 1000); }} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><Scissors className="w-5 h-5 text-accent" />{lang === 'ar' ? 'تحويل الخطوط لمضلعات' : 'Lines to Polygons'}</button>
+                            <button onClick={() => { const all: {x:number, y:number}[] = []; globalPoints.forEach(p => p.path ? p.path.forEach(pt => all.push({x:pt.x, y:pt.y})) : all.push({x:p.x, y:p.y})); const hull = calculateConvexHull(all); const bound: GeoPoint = { id: 'Boundary', x: hull[0].x, y: hull[0].y, type: 'Polygon', path: hull, color: '#ffffff', layer: 'Boundary' }; setGlobalPoints([bound]); setDataId(`boundary-gen-${Date.now()}`); }} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl"><BoxSelect className="w-5 h-5" />{lang === 'ar' ? 'إنشاء مضلع شامل (Boundary)' : 'Create Convex Boundary'}</button>
+                            <UniversalExportBar
+                                data={globalPoints}
+                                filename={activeFile?.filename || 'Polygon_Data'}
+                                lang={lang}
+                                isExecuting={loading}
+                                onExcelExport={() => downloadExcelAnalysis()}
+                                onKmzExport={() => downloadKMZ(globalPoints, activeFile?.filename || 'Polygon_Data', { mode: 'none' }, activeFile?.headers)}
+                            />
+                        </div>
+                      )}
                   </div>
                 )}
 
@@ -3040,7 +3256,7 @@ const App: React.FC = () => {
                 )}
 
                 {activeTab === 'attribute-formatter' && (
-                  <DataFormatter
+                  <DataFormatter onVerifyMissingAttributes={verifyEssentialAttributes}
                     points={globalPoints}
                     headers={activeFile?.headers}
                     lang={lang}

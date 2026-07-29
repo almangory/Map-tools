@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
-import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2 } from 'lucide-react';
+import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2, MapPin } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GeoPoint } from '../types';
@@ -57,6 +57,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
   // Layer States
   const [showLayerMenu, setShowLayerMenu] = useState(false);
   const [baseMap, setBaseMap] = useState<BaseMapType>('satellite');
+  
+  const [showPolygons, setShowPolygons] = useState(true);
+  const [showLines, setShowLines] = useState(true);
+  const [showPoints, setShowPoints] = useState(true);
   const [showDataOverlay, setShowDataOverlay] = useState(true);
 
   const t = translations[lang];
@@ -183,6 +187,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
 
         let marker;
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {
+          if (!showPolygons) return;
           const latLngs = pt.path
             .filter(p => isValidLatLng(p.y, p.x))
             .map(p => [p.y, p.x] as [number, number]);
@@ -205,6 +210,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
             }
           }
         } else if (pt.type === 'LineString' && pt.path && Array.isArray(pt.path)) {
+          if (!showLines) return;
           const latLngs = pt.path
             .filter(p => isValidLatLng(p.y, p.x))
             .map(p => [p.y, p.x] as [number, number]);
@@ -215,6 +221,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
             });
           }
         } else {
+          if (!showPoints) return;
           if (pt.iconUrl) {
             let safeUrl = pt.iconUrl;
             if (safeUrl.startsWith('http://')) safeUrl = safeUrl.replace('http://', 'https://');
@@ -276,7 +283,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints]);
 
   const toggleDrawing = () => {
     if (isDrawing) {
@@ -392,6 +399,33 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
                         <span className="text-[11px] font-black uppercase">{t.dataOverlay}</span>
                         {showDataOverlay ? <Eye className="w-5 h-5 text-accent" /> : <EyeOff className="w-5 h-5 opacity-40" />}
                     </button>
+                    <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-slate-100">
+                        <h4 className="text-[11px] font-black uppercase text-slate-400 mb-1">{lang === 'ar' ? 'تصفية العناصر' : 'Filter Elements'}</h4>
+                        <div className="grid grid-cols-3 gap-2">
+                            <button 
+                                onClick={() => setShowPolygons(!showPolygons)}
+                                className={`py-2 px-1 rounded-xl transition-all border text-[9px] font-black uppercase flex flex-col items-center gap-1 ${showPolygons ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                            >
+                                <Square className="w-4 h-4" />
+                                {lang === 'ar' ? 'مضلعات' : 'Polygons'}
+                            </button>
+                            <button 
+                                onClick={() => setShowLines(!showLines)}
+                                className={`py-2 px-1 rounded-xl transition-all border text-[9px] font-black uppercase flex flex-col items-center gap-1 ${showLines ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                            >
+                                <Navigation2 className="w-4 h-4" />
+                                {lang === 'ar' ? 'خطوط' : 'Lines'}
+                            </button>
+                            <button 
+                                onClick={() => setShowPoints(!showPoints)}
+                                className={`py-2 px-1 rounded-xl transition-all border text-[9px] font-black uppercase flex flex-col items-center gap-1 ${showPoints ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                            >
+                                <MapPin className="w-4 h-4" />
+                                {lang === 'ar' ? 'نقاط' : 'Points'}
+                            </button>
+                        </div>
+                    </div>
+
                 </div>
             )}
         </div>
