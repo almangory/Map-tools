@@ -4,6 +4,7 @@ import { GeoPoint, OverlapResult } from '../types';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
+import { extractAllPointAttributes, parseDescriptionToAttributes, stripHtml } from '../services/parserService';
 import * as XLSX from 'xlsx';
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -94,10 +95,11 @@ interface Props {
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
   geocodingMode?: 'accurate' | 'fast';
   onVerifyMissingAttributes?: () => void;
+  onVerifyPermitSegment?: () => void;
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
 }
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes }: Props) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment }: Props) => {
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids'>('pipes');
@@ -278,11 +280,26 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     const { processedPoints, templateFields } = getProcessedPoints();
     const data = processedPoints.map(p => {
         const row: any = { ID: p.id, Type: p.type, Layer: p.layer || '', X: p.x, Y: p.y };
-        if (p.attributes) {
-            templateFields.forEach(f => {
-                row[f] = p.attributes![f] || '';
-            });
+        
+        const extracted = extractAllPointAttributes(p);
+        templateFields.forEach(f => {
+            row[f] = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
+        });
+
+        // Also add any extra extracted attributes not in templateFields
+        Object.entries(extracted).forEach(([k, v]) => {
+            if (row[k] === undefined) {
+                row[k] = v;
+            }
+        });
+
+        if (p.description) {
+            const parsed = parseDescriptionToAttributes(p.description);
+            if (Object.keys(parsed).length === 0) {
+                row['Description'] = stripHtml(p.description);
+            }
         }
+
         return row;
     });
     const ws = XLSX.utils.json_to_sheet(data);
@@ -689,6 +706,12 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             <button onClick={onVerifyMissingAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group mt-6">
                 <AlertTriangle className="w-5 h-5 group-hover:scale-110 transition-transform" />
                 {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
+            </button>
+          )}
+          {onVerifyPermitSegment && (
+            <button onClick={onVerifyPermitSegment} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group mt-3">
+                <Layers className="w-5 h-5 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
+                {lang === 'ar' ? 'فحص وتلوين عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
             </button>
           )}
 

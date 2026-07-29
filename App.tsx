@@ -22,7 +22,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 
 import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon } from './types';
 import { COMMON_EPSG } from './constants';
-import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML } from './services/parserService';
+import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, parseDescriptionToAttributes, stripHtml } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
@@ -498,7 +498,176 @@ const App: React.FC = () => {
 
 
 
-const getPointsToCheck = (): GeoPoint[] => {
+  const verifyPermitAndSegmentId = () => {
+    setLoading(true);
+    setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (segment id)...' : 'Verifying content of segment id...');
+
+    setTimeout(() => {
+      let matchedCount = 0;
+
+      const stripHtml = (html: any): string => {
+        if (!html) return '';
+        return String(html)
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&#160;/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[\s\u00A0]+/g, ' ')
+          .trim();
+      };
+
+      const isValidValue = (val: any, keyName?: string): boolean => {
+        if (val === undefined || val === null) return false;
+        
+        const cleanStr = stripHtml(val);
+        if (!cleanStr) return false;
+
+        // Must contain at least one letter or digit (alphanumeric check)
+        // If it's just dashes (-), underscores (_), dots (.), slashes (/), or symbols, it is empty/invalid
+        if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) {
+          return false;
+        }
+
+        const lower = cleanStr.toLowerCase();
+
+        // 1. Generic empty / null / blank / placeholder values
+        const emptyValues = new Set([
+          '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
+          'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
+          'no data', 'nodata', 'no_data', 'not available', 'not applicable',
+          'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
+          'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
+        ]);
+
+        if (emptyValues.has(lower)) {
+          return false;
+        }
+
+        // 2. Value repeating key name or label
+        const labelValues = new Set([
+          'segment id', 'segment_id', 'segmentid', 'segment no', 'segment_no', 'segmentno',
+          'segment number', 'segment', 'seg id', 'seg_id', 'segid', 'seg no', 'seg_no', 'segno',
+          'layer', 'شريحة', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم شريحة', 'كود شريحة',
+          'معرف شريحة', 'شريحة خريطة'
+        ]);
+
+        if (labelValues.has(lower)) {
+          return false;
+        }
+
+        if (keyName && lower === stripHtml(keyName).toLowerCase()) {
+          return false;
+        }
+
+        // 3. Auto-generated default feature names (e.g., Segment_1, Feature_12, Layer_0)
+        if (/^(segment|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) {
+          return false;
+        }
+
+        return true;
+      };
+
+      const normalizeKey = (key: string): string => key.toLowerCase().replace(/[\s_#-]/g, '');
+
+      const isSegmentKey = (key: string): boolean => {
+        const norm = normalizeKey(key);
+        // Explicit Segment ID keys ONLY (MUST NOT include generic 'شريحة' or 'segment' which mean Layer in CAD/KML)
+        const segmentKeys = new Set([
+          'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno',
+          'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+          'رقمالقطع', 'كودالقطع', 'معرفالقطع'
+        ]);
+        return segmentKeys.has(norm);
+      };
+
+      const extractSegmentIdFromDescription = (description?: string): string | null => {
+        if (!description) return null;
+
+        // A) HTML table cell match e.g. <tr><td>Segment ID</td><td>SEG-1002</td></tr>
+        const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+        const tableMatch = description.match(tableCellRegex);
+        if (tableMatch && tableMatch[1]) {
+          const val = stripHtml(tableMatch[1]);
+          if (isValidValue(val, 'segment id')) {
+            return val;
+          }
+        }
+
+        // B) Key-value pattern match e.g. "Segment ID: SEG-9912" or "رقم الشريحة: 4410"
+        const textRegex = /(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+        const textMatch = description.match(textRegex);
+        if (textMatch && textMatch[1]) {
+          const val = stripHtml(textMatch[1]);
+          if (isValidValue(val, 'segment id')) {
+            return val;
+          }
+        }
+
+        return null;
+      };
+
+      const processPoints = (pts: GeoPoint[]) => {
+        return pts.map(pt => {
+          let hasData = false;
+
+          // 1. Check attributes dictionary for explicit segment id key and non-empty valid content value
+          if (pt.attributes) {
+            for (const [key, val] of Object.entries(pt.attributes)) {
+              if (isSegmentKey(key) && isValidValue(val, key)) {
+                hasData = true;
+                break;
+              }
+            }
+          }
+
+          // 2. Check description ONLY if explicit key:value pair or HTML table for segment id exists with valid value
+          if (!hasData && pt.description) {
+            if (extractSegmentIdFromDescription(pt.description)) {
+              hasData = true;
+            }
+          }
+
+          if (hasData) {
+            matchedCount++;
+            return {
+              ...pt,
+              color: '#9000FF' // Vivid Electric Purple
+            };
+          }
+
+          return pt;
+        });
+      };
+
+      if (globalPoints.length > 0) {
+        const nextGlobal = processPoints(globalPoints);
+        setGlobalPoints(nextGlobal);
+      }
+      if (plannedStreets.length > 0) {
+        const nextPlanned = processPoints(plannedStreets);
+        setPlannedStreets(nextPlanned);
+      }
+
+      setDataId(`segment-check-${Date.now()}`);
+      setLoading(false);
+
+      if (matchedCount > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم تلوين ${matchedCount} عنصراً باللون البنفسجي لوجود محتوى في (segment id).`
+            : `Colored ${matchedCount} elements in vivid purple for having valid segment id content.`
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? 'لم يتم العثور على أي عناصر تحتوي على محتوى فعلي في (segment id).'
+            : 'No elements found containing actual content in segment id.'
+        );
+      }
+      setTimeout(() => setStatusMessage(''), 5000);
+    }, 500);
+  };
+
+  const getPointsToCheck = (): GeoPoint[] => {
     if (activeTab === 'street-planner' && plannedStreets.length > 0) {
       const combined = [...globalPoints];
       for (const p of plannedStreets) {
@@ -1164,7 +1333,7 @@ const getPointsToCheck = (): GeoPoint[] => {
             let elementLength = pt.originalLength || 0;
             if (elementLength === 0 && pt.path) elementLength = calculatePathLength(pt.path);
 
-            return {
+            const rowObj: Record<string, any> = {
                 [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
                 [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
                 [lang === 'ar' ? 'الشارع' : 'Street']: pt.street || '',
@@ -1174,10 +1343,27 @@ const getPointsToCheck = (): GeoPoint[] => {
                 [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
                 [lang === 'ar' ? 'خط العرض (Y)' : 'Latitude (Y)']: lat,
                 [lang === 'ar' ? 'خط الطول (X)' : 'Longitude (X)']: lon,
-                [lang === 'ar' ? 'الوصف' : 'Description']: pt.description || '',
                 [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
                 [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
             };
+
+            // Unpack pt.attributes and pt.description key-value pairs as individual columns
+            const extracted = extractAllPointAttributes(pt);
+            Object.entries(extracted).forEach(([k, v]) => {
+                if (rowObj[k] === undefined) {
+                    rowObj[k] = v;
+                }
+            });
+
+            // Clean residual description text if not purely key-value pairs
+            if (pt.description) {
+                const parsed = parseDescriptionToAttributes(pt.description);
+                if (Object.keys(parsed).length === 0) {
+                    rowObj[lang === 'ar' ? 'الوصف' : 'Description'] = stripHtml(pt.description);
+                }
+            }
+
+            return rowObj;
         });
 
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(detailedData), lang === 'ar' ? "بيانات العناصر" : "Elements Data");
@@ -1302,7 +1488,7 @@ const getPointsToCheck = (): GeoPoint[] => {
             let elementLength = pt.originalLength || 0;
             if (elementLength === 0 && pt.path) elementLength = calculatePathLength(pt.path);
 
-            return {
+            const rowObj: Record<string, any> = {
                 [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
                 [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
                 [lang === 'ar' ? 'الشارع' : 'Street']: street || 'غير متوفر',
@@ -1315,6 +1501,22 @@ const getPointsToCheck = (): GeoPoint[] => {
                 [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
                 [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
             };
+
+            const extracted = extractAllPointAttributes(pt);
+            Object.entries(extracted).forEach(([k, v]) => {
+                if (rowObj[k] === undefined) {
+                    rowObj[k] = v;
+                }
+            });
+
+            if (pt.description) {
+                const parsed = parseDescriptionToAttributes(pt.description);
+                if (Object.keys(parsed).length === 0) {
+                    rowObj[lang === 'ar' ? 'الوصف' : 'Description'] = stripHtml(pt.description);
+                }
+            }
+
+            return rowObj;
         }));
         results.push(...chunkResults);
     }
@@ -2907,6 +3109,10 @@ const getPointsToCheck = (): GeoPoint[] => {
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
                             </button>
+                            <button onClick={verifyPermitAndSegmentId} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group">
+                                <Layers2 className="w-6 h-6 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
+                                {lang === 'ar' ? 'فحص عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
+                            </button>
 
                             <div className="grid grid-cols-2 gap-3">
                                 <button onClick={() => generateAnalysisPPTX(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-accent text-primary font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><Presentation className="w-5 h-5 group-hover:rotate-12 transition-transform" />{lang === 'ar' ? 'تصدير PPTX' : 'Export PPTX'}</button>
@@ -3257,6 +3463,7 @@ const getPointsToCheck = (): GeoPoint[] => {
 
                 {activeTab === 'attribute-formatter' && (
                   <DataFormatter onVerifyMissingAttributes={verifyEssentialAttributes}
+                    onVerifyPermitSegment={verifyPermitAndSegmentId}
                     points={globalPoints}
                     headers={activeFile?.headers}
                     lang={lang}

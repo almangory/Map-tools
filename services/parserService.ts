@@ -113,63 +113,100 @@ const preprocessKML = (raw: string): string => {
   return cleaned;
 };
 
-const parseDescriptionToAttributes = (desc: string, attributes: Record<string, string>) => {
-    if (!desc) return;
+export const stripHtml = (html?: string): string => {
+  if (!html) return '';
+  return String(html)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#160;/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[\s\u00A0]+/g, ' ')
+    .trim();
+};
+
+export const parseDescriptionToAttributes = (desc?: string, attributes: Record<string, string> = {}): Record<string, string> => {
+    if (!desc || typeof desc !== 'string') return attributes;
     
-    // 1. Try HTML Table
-    const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    let match;
-    while ((match = trRegex.exec(desc)) !== null) {
-        const cellRegex = /<(?:td|th)[^>]*>([\s\S]*?)<\/(?:td|th)>/gi;
-        const keyMatch = cellRegex.exec(match[1]);
-        const valMatch = cellRegex.exec(match[1]);
-        if (keyMatch && valMatch) {
-            const key = keyMatch[1].replace(/<[^>]+>/g, '').trim();
-            const val = valMatch[1].replace(/<[^>]+>/g, '').trim();
-            if (key && !attributes[key]) attributes[key] = val;
+    const cleanDesc = desc.trim();
+    if (!cleanDesc) return attributes;
+
+    // 1. Parse HTML <tr><td>Key</td><td>Value</td></tr>
+    const trRegex = /<tr[^>]*>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/gi;
+    let trMatch;
+    while ((trMatch = trRegex.exec(cleanDesc)) !== null) {
+        const rawKey = stripHtml(trMatch[1]);
+        const rawVal = stripHtml(trMatch[2]);
+        const lowerK = rawKey.toLowerCase();
+        const lowerV = rawVal.toLowerCase();
+        const isHeader = (lowerK === 'key' && lowerV === 'value') ||
+                         (lowerK === 'field' && lowerV === 'value') ||
+                         (lowerK === 'attribute' && lowerV === 'value') ||
+                         (rawKey === 'الحقل' && rawVal === 'القيمة') ||
+                         (rawKey === 'العنصر' && rawVal === 'القيمة');
+        if (rawKey && !isHeader) {
+            if (!attributes[rawKey]) attributes[rawKey] = rawVal;
         }
     }
-    
-    // 2. Try Lists
+
+    // 2. Parse <li> tags
     const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
     let liMatch;
-    while ((liMatch = liRegex.exec(desc)) !== null) {
-        const text = liMatch[1].replace(/<[^>]+>/g, '').trim();
-        const parts = text.split(':');
-        if (parts.length >= 2) {
-            const key = parts.shift()?.trim();
-            const val = parts.join(':').trim();
-            if (key && !attributes[key]) attributes[key] = val;
+    while ((liMatch = liRegex.exec(cleanDesc)) !== null) {
+        const text = stripHtml(liMatch[1]);
+        const sepIdx = text.indexOf(':') !== -1 ? text.indexOf(':') : text.indexOf('=');
+        if (sepIdx > 0) {
+            const k = text.substring(0, sepIdx).trim();
+            const v = text.substring(sepIdx + 1).trim();
+            if (k && !attributes[k]) attributes[k] = v;
         }
     }
 
-    // 3. Try plain text lines (separated by <br> or \n)
-    const cleanDesc = desc.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
-    const lines = cleanDesc.split('\n');
-    lines.forEach(line => {
-        line = line.trim();
-        if (!line) return;
-        
-        let separatorIdx = line.indexOf(':');
-        if (separatorIdx === -1) separatorIdx = line.indexOf('：');
-        if (separatorIdx === -1) separatorIdx = line.indexOf('-');
-        if (separatorIdx === -1) separatorIdx = line.indexOf('=');
+    // 3. Parse <br> or line break separated Key: Value or Key = Value
+    const lines = cleanDesc
+        .split(/<br\s*\/?>|<\/p>|\r?\n/gi)
+        .map(l => stripHtml(l))
+        .filter(Boolean);
 
-        if (separatorIdx !== -1) {
-            const key = line.substring(0, separatorIdx).trim();
-            const val = line.substring(separatorIdx + 1).trim();
-            if (key && !attributes[key]) attributes[key] = val;
-        } else {
-            separatorIdx = line.indexOf(' ');
-            if (separatorIdx !== -1) {
-                const key = line.substring(0, separatorIdx).trim();
-                const val = line.substring(separatorIdx + 1).trim();
-                if (key && /^[A-Z0-9_\u0600-\u06FF]+$/i.test(key) && !attributes[key]) {
-                    attributes[key] = val;
-                }
+    for (const line of lines) {
+        if (line.includes('google.com/maps') || line.includes('http://') || line.includes('https://')) {
+            const urlMatch = line.match(/(https?:\/\/[^\s\)]+)/);
+            if (urlMatch && !attributes['Google Maps Link']) {
+                attributes['Google Maps Link'] = urlMatch[1];
+                continue;
             }
         }
-    });
+
+        const colonIdx = line.indexOf(':');
+        const equalIdx = line.indexOf('=');
+        let sepIdx = -1;
+        if (colonIdx !== -1 && equalIdx !== -1) sepIdx = Math.min(colonIdx, equalIdx);
+        else if (colonIdx !== -1) sepIdx = colonIdx;
+        else if (equalIdx !== -1) sepIdx = equalIdx;
+
+        if (sepIdx > 0 && sepIdx < line.length - 1) {
+            const k = line.substring(0, sepIdx).trim();
+            const v = line.substring(sepIdx + 1).trim();
+            if (k && k.length < 60 && !attributes[k]) {
+                attributes[k] = v;
+            }
+        }
+    }
+
+    return attributes;
+};
+
+export const extractAllPointAttributes = (pt: any): Record<string, string> => {
+    const attrs: Record<string, string> = {};
+    if (pt?.attributes) {
+        Object.entries(pt.attributes).forEach(([k, v]) => {
+            if (v !== undefined && v !== null) {
+                attrs[k] = String(v);
+            }
+        });
+    }
+    if (pt?.description) {
+        parseDescriptionToAttributes(pt.description, attrs);
+    }
+    return attrs;
 };
 
 const fallbackRegexParseKML = (kml: string): GeoPoint[] => {

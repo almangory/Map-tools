@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Layers, Map as MapIcon, CheckCircle2, Download, RefreshCw, UploadCloud, MapPin, FileUp, Square, FolderSearch, FileSpreadsheet, CloudDownload, FolderInput, Zap, PenTool, FileText } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { classifyAssetsToZones, ClassifiedAsset } from '../services/turfService';
-import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchNetworkFile } from '../services/parserService';
+import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchNetworkFile, extractAllPointAttributes, parseDescriptionToAttributes, stripHtml } from '../services/parserService';
 import { ParsedFile } from '../types';
 import { identifyPotentialCRS, transformPoints } from '../services/crs';
 import { downloadKMZ } from '../services/kmlService';
@@ -214,8 +214,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
         Longitude: r.x,
         Latitude: r.y,
         Type: r.type,
-        Layer: r.layer || '',
-        Description: r.description || ''
+        Layer: r.layer || ''
       };
       
       // If we have original headers and rows (from Excel)
@@ -227,13 +226,19 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
           });
       }
       
-      // If we have KML/GDB attributes
-      if (r.attributes) {
-          Object.keys(r.attributes).forEach(k => {
-             if (baseRow[k] === undefined) {
-                 baseRow[k] = r.attributes![k];
-             }
-          });
+      // Extract all attributes from r.attributes and r.description
+      const extracted = extractAllPointAttributes(r);
+      Object.entries(extracted).forEach(([k, v]) => {
+        if (baseRow[k] === undefined) {
+          baseRow[k] = v;
+        }
+      });
+
+      if (r.description) {
+        const parsed = parseDescriptionToAttributes(r.description);
+        if (Object.keys(parsed).length === 0) {
+          baseRow['Description'] = stripHtml(r.description);
+        }
       }
       
       return baseRow;
@@ -289,6 +294,53 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Classified");
     XLSX.writeFile(wb, "Classified_Assets.xlsx");
+  };
+
+  const downloadRawSourceExcel = () => {
+    const assetsToExport = localTargetAssets.length > 0 ? localTargetAssets : targetAssets;
+    if (assetsToExport.length === 0) {
+      alert(lang === 'ar' ? 'لا توجد بيانات مصدرية لتصديرها' : 'No source data to export');
+      return;
+    }
+
+    const exportData = assetsToExport.map((pt, idx) => {
+      const baseRow: any = {};
+      
+      if (assetsHeaders.length > 0 && pt.originalRow) {
+        assetsHeaders.forEach((h, hIdx) => {
+          baseRow[h] = pt.originalRow![hIdx] ?? '';
+        });
+      } else {
+        baseRow['#'] = idx + 1;
+        baseRow['ID'] = pt.id || `Asset_${idx + 1}`;
+        if (pt.name) baseRow['Name'] = pt.name;
+        baseRow['Type'] = pt.type || 'Point';
+        baseRow['Longitude_X'] = pt.x !== undefined ? pt.x : '';
+        baseRow['Latitude_Y'] = pt.y !== undefined ? pt.y : '';
+        if (pt.layer) baseRow['Layer'] = pt.layer;
+      }
+
+      const extracted = extractAllPointAttributes(pt);
+      Object.entries(extracted).forEach(([k, v]) => {
+        if (baseRow[k] === undefined) {
+          baseRow[k] = v;
+        }
+      });
+
+      if (pt.description) {
+        const parsed = parseDescriptionToAttributes(pt.description);
+        if (Object.keys(parsed).length === 0) {
+          baseRow['Description'] = stripHtml(pt.description);
+        }
+      }
+
+      return baseRow;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Source_Data");
+    XLSX.writeFile(wb, "Raw_Source_Data_As_Is.xlsx");
   };
 
   return (
@@ -378,6 +430,18 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
               {assetsStatus}
             </p>
           )}
+
+          {(localTargetAssets.length > 0 || targetAssets.length > 0) && (
+            <button
+              onClick={downloadRawSourceExcel}
+              className="mt-4 w-full bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-400 font-bold py-3 px-4 rounded-2xl flex items-center justify-center gap-2 text-xs transition-all shadow-md group"
+            >
+              <FileSpreadsheet className="w-4 h-4 group-hover:scale-110 transition-transform text-emerald-400" />
+              <span>
+                {lang === 'ar' ? 'تصدير بيانات الملف المصدر كما هي (Excel)' : 'Export Raw Source Data As Is (Excel)'}
+              </span>
+            </button>
+          )}
         </div>
 
         {/* Action Button */}
@@ -441,7 +505,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 )}
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6">
                 <button 
                   onClick={downloadAssetsKMZ}
                   className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
@@ -463,7 +527,17 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                   className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
                   <FileSpreadsheet className="w-5 h-5 text-[#2ecc71] group-hover:scale-110 transition-transform" />
-                  <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'إكسل' : 'Excel'}</span>
+                  <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'إكسل مدمج' : 'Merged Excel'}</span>
+                </button>
+
+                <button 
+                  onClick={downloadRawSourceExcel}
+                  className="bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
+                >
+                  <FileSpreadsheet className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
+                  <span className="text-emerald-300 font-black text-[10px] text-center leading-tight">
+                    {lang === 'ar' ? 'إكسل المصدر' : 'Source Excel'}
+                  </span>
                 </button>
 
                 <button 
