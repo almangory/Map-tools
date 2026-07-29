@@ -1,3 +1,5 @@
+import shp from 'shpjs';
+import fgdb from 'fgdb';
 
 import * as XLSX from 'xlsx';
 import DxfParser from 'dxf-parser';
@@ -509,213 +511,241 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
     return points;
 };
 
+
+export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[] => {
+    const points: GeoPoint[] = [];
+    if (!geoJson) return points;
+
+    const features = geoJson.features || (geoJson.type === 'Feature' ? [geoJson] : []);
+    
+    let counter = 1;
+    for (const feature of features) {
+        if (!feature.geometry) continue;
+        
+        const props = feature.properties || {};
+        const id = props.id || props.ID || props.OBJECTID || props.FID || props.name || props.Name || `${sourceName}_${counter++}`;
+        
+        // Build a nice description
+        let descParts = [];
+        for (const [k, v] of Object.entries(props)) {
+            if (v !== null && v !== undefined && v !== '') {
+                descParts.push(`${k}: ${v}`);
+            }
+        }
+        const description = descParts.join(' | ');
+        
+        const geomType = feature.geometry.type;
+        const coords = feature.geometry.coordinates;
+
+        // Common extraction for properties to attr1 and attr2
+        const keys = Object.keys(props);
+        let attr1 = keys.length > 0 ? `${keys[0]}: ${props[keys[0]]}` : '';
+        let attr2 = keys.length > 1 ? `${keys[1]}: ${props[keys[1]]}` : '';
+        
+        if (geomType === 'Point') {
+            points.push({
+                id: String(id),
+                x: coords[0],
+                y: coords[1],
+                type: 'Point',
+                layer: sourceName,
+                description,
+                attributes: props,
+                attr1,
+                attr2
+            });
+        } else if (geomType === 'LineString') {
+            if (!Array.isArray(coords) || coords.length === 0) continue;
+            points.push({
+                id: String(id),
+                x: coords[0][0], // use first point as representative
+                y: coords[0][1],
+                type: 'LineString',
+                layer: sourceName,
+                description,
+                attributes: props,
+                attr1,
+                attr2,
+                path: coords.map((c: any) => ({ x: c[0], y: c[1] }))
+            });
+        } else if (geomType === 'MultiLineString') {
+            for (let i = 0; i < coords.length; i++) {
+                const line = coords[i];
+                if (!Array.isArray(line) || line.length === 0) continue;
+                points.push({
+                    id: String(id) + (coords.length > 1 ? `_${i+1}` : ''),
+                    x: line[0][0],
+                    y: line[0][1],
+                    type: 'LineString',
+                    layer: sourceName,
+                    description,
+                    attributes: props,
+                    attr1,
+                    attr2,
+                    path: line.map((c: any) => ({ x: c[0], y: c[1] }))
+                });
+            }
+        } else if (geomType === 'Polygon') {
+            if (!Array.isArray(coords) || coords.length === 0) continue;
+            const ring = coords[0]; // exterior ring
+            if (!Array.isArray(ring) || ring.length === 0) continue;
+            points.push({
+                id: String(id),
+                x: ring[0][0],
+                y: ring[0][1],
+                type: 'Polygon',
+                layer: sourceName,
+                description,
+                attributes: props,
+                attr1,
+                attr2,
+                path: ring.map((c: any) => ({ x: c[0], y: c[1] }))
+            });
+        } else if (geomType === 'MultiPolygon') {
+            for (let i = 0; i < coords.length; i++) {
+                const poly = coords[i];
+                if (!Array.isArray(poly) || poly.length === 0) continue;
+                const ring = poly[0];
+                if (!Array.isArray(ring) || ring.length === 0) continue;
+                points.push({
+                    id: String(id) + (coords.length > 1 ? `_${i+1}` : ''),
+                    x: ring[0][0],
+                    y: ring[0][1],
+                    type: 'Polygon',
+                    layer: sourceName,
+                    description,
+                    attributes: props,
+                    attr1,
+                    attr2,
+                    path: ring.map((c: any) => ({ x: c[0], y: c[1] }))
+                });
+            }
+        }
+    }
+    
+    return points;
+};
+
+
 export const parseKMZ = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
   try {
     if (onProgress) onProgress(10);
     const fileName = file.name.toLowerCase();
-    let kmlContent = "";
-
+    
+    // --- 1. SHAPEFILE (.shp or .zip containing .shp) ---
+    if (fileName.endsWith('.shp')) {
+        const arrayBuffer = await file.arrayBuffer();
+        const geojson = await shp(arrayBuffer);
+        let points: GeoPoint[] = [];
+        if (Array.isArray(geojson)) {
+            geojson.forEach((gc) => {
+                points = points.concat(geoJsonToGeoPoints(gc, gc.fileName || 'Shapefile'));
+            });
+        } else {
+            points = geoJsonToGeoPoints(geojson, fileName.replace('.shp', ''));
+        }
+        if (onProgress) onProgress(100);
+        return { filename: file.name, type: 'shp', data: points, preview: [] };
+    }
+    
+    // --- 2. GEODATABASE (.gdb or .zip containing .gdb) ---
+    if (fileName.endsWith('.gdb')) {
+         // Some browsers might allow uploading .gdb folders as files, but usually it's a zip.
+         // Let's assume they zipped the .gdb.
+         // Fallthrough to zip handler.
+    }
+    
+    // --- 3. KML ---
     if (fileName.endsWith('.kml')) {
-        // إذا كان الملف KML عادي (نصي)
-        kmlContent = await file.text();
+        const kmlContent = await file.text();
         if (onProgress) onProgress(60);
-    } else if (fileName.endsWith('.zip') || fileName.endsWith('.gdb')) {
-        const zip = await JSZip.loadAsync(file);
+        const points = await parseKMLContentAsync(kmlContent, onProgress);
+        if (onProgress) onProgress(100);
+        return { filename: file.name, type: 'kml', data: points, preview: [] };
+    }
+    
+    // --- 4. ZIP (can be KMZ, SHP, GDB) ---
+    if (fileName.endsWith('.zip') || fileName.endsWith('.kmz') || fileName.endsWith('.gdb')) {
+        const arrayBuffer = await file.arrayBuffer();
+        
+        // First try to peek inside the zip without fully parsing it to see what we have
+        const zip = await JSZip.loadAsync(arrayBuffer);
         const filesList = Object.keys(zip.files);
+        
         const hasGDB = filesList.some(name => name.toLowerCase().includes('.gdb/') || name.toLowerCase().endsWith('.gdbtable'));
+        const hasSHP = filesList.some(name => name.toLowerCase().endsWith('.shp'));
+        const hasKML = filesList.some(name => name.toLowerCase().endsWith('.kml'));
         
         if (hasGDB) {
             if (onProgress) onProgress(30);
-            
-            let points: GeoPoint[] = [];
-            
-            // Analyze files inside zip to detect possible custom layer names
-            const gdbFolderNames = filesList
-                .filter(name => name.includes('.gdb/'))
-                .map(name => {
-                    const match = name.match(/([^/]+\.gdb)\//i);
-                    return match ? match[1] : '';
-                })
-                .filter(Boolean);
-            
-            const uniqueGdbFolders = Array.from(new Set(gdbFolderNames));
-            const mainGdbName = uniqueGdbFolders[0] || 'Riyadh_Network.gdb';
-            
-            // Check if there are indications of Sewer vs Water vs Streets
-            const lowerList = filesList.map(f => f.toLowerCase());
-            const hasSewer = lowerList.some(f => f.includes('sewer') || f.includes('drain') || f.includes('sew') || f.includes('صرف'));
-            
-            if (onProgress) onProgress(60);
-
-            if (hasSewer) {
-                // Generate Sewage network features around Riyadh center
-                points = [
-                    {
-                        id: 'S_GRAVITY_MAIN_200_UPVC_01',
-                        x: 46.6740,
-                        y: 24.7120,
-                        type: 'LineString',
-                        layer: 'S_GRAVITY_MAIN',
-                        description: `Sewer Gravity Mainline | Material: uPVC | Diameter: 200mm | Source GDB: ${mainGdbName}`,
-                        color: '#8b5cf6',
-                        attr1: 'Material: uPVC',
-                        attr2: 'Diameter: 200mm',
-                        path: [
-                            { x: 46.6740, y: 24.7120, z: 0 },
-                            { x: 46.6765, y: 24.7142, z: 0 },
-                            { x: 46.6795, y: 24.7160, z: 0 }
-                        ]
-                    },
-                    {
-                        id: 'S_MANHOLE_01',
-                        x: 46.6740,
-                        y: 24.7120,
-                        type: 'Point',
-                        layer: 'S_MANHOLE',
-                        description: `Sewer Manhole | Depth: 2.1m | Source GDB: ${mainGdbName}`,
-                        color: '#a78bfa',
-                        attr1: 'Type: Standard Circular',
-                        attr2: 'Depth: 2.1m'
-                    },
-                    {
-                        id: 'S_MANHOLE_02',
-                        x: 46.6765,
-                        y: 24.7142,
-                        type: 'Point',
-                        layer: 'S_MANHOLE',
-                        description: `Sewer Manhole | Depth: 2.4m | Source GDB: ${mainGdbName}`,
-                        color: '#a78bfa',
-                        attr1: 'Type: Standard Circular',
-                        attr2: 'Depth: 2.4m'
-                    },
-                    {
-                        id: 'S_MANHOLE_03',
-                        x: 46.6795,
-                        y: 24.7160,
-                        type: 'Point',
-                        layer: 'S_MANHOLE',
-                        description: `Sewer Manhole | Depth: 1.9m | Source GDB: ${mainGdbName}`,
-                        color: '#a78bfa',
-                        attr1: 'Type: Standard Circular',
-                        attr2: 'Depth: 1.9m'
-                    }
-                ];
-            } else {
-                // Default high-fidelity Water Network
-                points = [
-                    {
-                        id: 'W_MAINLINE_300_DI_01',
-                        x: 46.6753,
-                        y: 24.7136,
-                        type: 'LineString',
-                        layer: 'W_MAINLINE',
-                        description: `Geodatabase Water Mainline | Material: Ductile Iron (DI) | Diameter: 300mm | Source GDB: ${mainGdbName}`,
-                        color: '#00a8e8',
-                        attr1: 'Material: Ductile Iron (DI)',
-                        attr2: 'Diameter: 300mm',
-                        path: [
-                            { x: 46.6753, y: 24.7136, z: 0 },
-                            { x: 46.6775, y: 24.7158, z: 0 },
-                            { x: 46.6812, y: 24.7180, z: 0 },
-                            { x: 46.6850, y: 24.7195, z: 0 }
-                        ]
-                    },
-                    {
-                        id: 'W_MAINLINE_400_DI_02',
-                        x: 46.6850,
-                        y: 24.7195,
-                        type: 'LineString',
-                        layer: 'W_MAINLINE',
-                        description: `Geodatabase Water Mainline | Material: Ductile Iron (DI) | Diameter: 400mm | Source GDB: ${mainGdbName}`,
-                        color: '#00a8e8',
-                        attr1: 'Material: Ductile Iron (DI)',
-                        attr2: 'Diameter: 400mm',
-                        path: [
-                            { x: 46.6850, y: 24.7195, z: 0 },
-                            { x: 46.6910, y: 24.7215, z: 0 },
-                            { x: 46.6950, y: 24.7230, z: 0 }
-                        ]
-                    },
-                    {
-                        id: 'W_MAINLINE_200_HDPE_03',
-                        x: 46.6775,
-                        y: 24.7158,
-                        type: 'LineString',
-                        layer: 'W_MAINLINE',
-                        description: `Geodatabase Water Mainline | Material: HDPE | Diameter: 200mm | Source GDB: ${mainGdbName}`,
-                        color: '#00c8b3',
-                        attr1: 'Material: HDPE',
-                        attr2: 'Diameter: 200mm',
-                        path: [
-                            { x: 46.6775, y: 24.7158, z: 0 },
-                            { x: 46.6790, y: 24.7120, z: 0 },
-                            { x: 46.6815, y: 24.7095, z: 0 }
-                        ]
-                    },
-                    {
-                        id: 'W_VALVE_01',
-                        x: 46.6753,
-                        y: 24.7136,
-                        type: 'Point',
-                        layer: 'W_VALVE',
-                        description: `Geodatabase Air Valve | Size: 100mm | Status: Active | Source GDB: ${mainGdbName}`,
-                        color: '#34d399',
-                        attr1: 'Type: Air Valve',
-                        attr2: 'Size: 100mm'
-                    },
-                    {
-                        id: 'W_VALVE_02',
-                        x: 46.6850,
-                        y: 24.7195,
-                        type: 'Point',
-                        layer: 'W_VALVE',
-                        description: `Geodatabase Gate Valve | Size: 300mm | Status: Active | Source GDB: ${mainGdbName}`,
-                        color: '#34d399',
-                        attr1: 'Type: Gate Valve',
-                        attr2: 'Size: 300mm'
-                    }
-                ];
+            try {
+                // fgdb requires an arraybuffer
+                const gdbResult = await fgdb(arrayBuffer);
+                let points: GeoPoint[] = [];
+                for (const [layerName, geojson] of Object.entries(gdbResult)) {
+                     points = points.concat(geoJsonToGeoPoints(geojson, layerName));
+                }
+                if (onProgress) onProgress(100);
+                return { filename: file.name, type: 'gdb', data: points, preview: [] };
+            } catch (err) {
+                console.error("GDB Parsing Error:", err);
+                throw new Error("Failed to parse Geodatabase. Make sure the ZIP contains a valid .gdb folder.");
             }
-            
-            if (onProgress) onProgress(100);
-            return { filename: file.name, type: 'kmz', data: points, preview: [] };
-        } else {
-            const kmlFilename = filesList.find(name => name.toLowerCase().endsWith('.kml'));
-            if (!kmlFilename) throw new Error("Invalid GDB/ZIP: No .kml or File Geodatabase structure found inside.");
-            kmlContent = await zip.file(kmlFilename)?.async("string") || "";
-            if (onProgress) onProgress(60);
         }
-    } else {
-        // إذا كان الملف KMZ (مضغوط)
-        const zip = await JSZip.loadAsync(file);
-        const kmlFilename = Object.keys(zip.files).find(name => name.toLowerCase().endsWith('.kml'));
-        if (!kmlFilename) throw new Error("Invalid KMZ: No .kml file found inside.");
-        kmlContent = await zip.file(kmlFilename)?.async("string") || "";
         
-        // Extract images and replace in KML
-        const imageFiles = Object.keys(zip.files).filter(name => /\.(png|jpg|jpeg|gif|svg)$/i.test(name));
-        for (const imgName of imageFiles) {
-            const base64 = await zip.file(imgName)?.async("base64");
-            if (base64) {
-                const ext = imgName.split('.').pop()?.toLowerCase();
-                const mimeType = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
-                const dataURI = `data:${mimeType};base64,${base64}`;
-                const safeName = imgName.split('/').pop()?.replace(/[.*+?^$!()|[\]\\]/g, '\\$&');
-                if (safeName) {
-                    kmlContent = kmlContent.replace(new RegExp(`<href>[^<]*?${safeName}<\\/href>`, 'gi'), `<href>${dataURI}</href>`);
-                    kmlContent = kmlContent.replace(new RegExp(`src=['"][^'"]*?${safeName}['"]`, 'gi'), `src="${dataURI}"`);
+        if (hasSHP) {
+            if (onProgress) onProgress(30);
+            try {
+                const geojson = await shp(arrayBuffer);
+                let points: GeoPoint[] = [];
+                if (Array.isArray(geojson)) {
+                    geojson.forEach((gc) => {
+                        points = points.concat(geoJsonToGeoPoints(gc, gc.fileName || 'Shapefile'));
+                    });
+                } else {
+                    points = geoJsonToGeoPoints(geojson, 'Shapefile');
+                }
+                if (onProgress) onProgress(100);
+                return { filename: file.name, type: 'shp', data: points, preview: [] };
+            } catch (err) {
+                console.error("Shapefile Parsing Error:", err);
+                throw new Error("Failed to parse Shapefile. Make sure the ZIP contains .shp, .shx, and .dbf files.");
+            }
+        }
+        
+        if (hasKML) {
+            const kmlFilename = filesList.find(name => name.toLowerCase().endsWith('.kml'));
+            if (!kmlFilename) throw new Error("Invalid KMZ: No .kml file found inside.");
+            let kmlContent = await zip.file(kmlFilename)?.async("string") || "";
+            
+            // Extract images and replace in KML
+            const imageFiles = filesList.filter(name => /\.(png|jpg|jpeg|gif|svg)$/i.test(name));
+            for (const imgName of imageFiles) {
+                const base64 = await zip.file(imgName)?.async("base64");
+                if (base64) {
+                    const ext = imgName.split('.').pop()?.toLowerCase();
+                    const mimeType = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+                    const dataURI = `data:${mimeType};base64,${base64}`;
+                    const safeName = imgName.split('/').pop()?.replace(/[.*+?^$!()|[\]\\]/g, '\\$&');
+                    if (safeName) {
+                        kmlContent = kmlContent.replace(new RegExp(`<href>[^<]*?${safeName}<\/href>`, 'gi'), `<href>${dataURI}</href>`);
+                        kmlContent = kmlContent.replace(new RegExp(`src=['"][^'"]*?${safeName}['"]`, 'gi'), `src="${dataURI}"`);
+                    }
                 }
             }
+            if (onProgress) onProgress(60);
+            const points = await parseKMLContentAsync(kmlContent, onProgress);
+            if (onProgress) onProgress(100);
+            return { filename: file.name, type: 'kmz', data: points, preview: [] };
         }
         
-        if (onProgress) onProgress(60);
+        throw new Error("Invalid ZIP file: No recognizable GDB, Shapefile, or KML content found.");
     }
-    
-    const points = await parseKMLContentAsync(kmlContent);
 
-    if (onProgress) onProgress(100);
-    return { filename: file.name, type: 'kmz', data: points, preview: [] };
-  } catch (err) { throw err; }
+    throw new Error("Unsupported file format.");
+  } catch (err) { 
+    throw err; 
+  }
 };
 
 export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {

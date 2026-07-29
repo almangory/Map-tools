@@ -1409,14 +1409,14 @@ const getPointsToCheck = (): GeoPoint[] => {
       let result: ParsedFile;
       if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
-      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb')) result = await parseKMZ(selectedFile);
+      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile);
       else throw new Error(t.errors.unsupported);
 
       setActiveFile(result);
       setDataId(`${result.filename}-${Date.now()}`);
 
       let detected: string | null = null;
-      if (fName.endsWith('.dxf') || fName.endsWith('.zip') || fName.endsWith('.gdb')) {
+      if (fName.endsWith('.dxf') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) {
         detected = identifyPotentialCRS(fName.endsWith('.dxf') ? extractPointsFromDXF(result.data) : result.data);
       } else if (result.suggestedMapping?.xColumn && result.data.length > 0) {
           const xIdx = result.headers?.indexOf(result.suggestedMapping.xColumn) ?? -1;
@@ -1691,7 +1691,7 @@ const getPointsToCheck = (): GeoPoint[] => {
     try {
         const fName = selectedFile.name.toLowerCase();
         let result: ParsedFile;
-        if (fName.endsWith('.kmz') || fName.endsWith('.kml')) result = await parseKMZ(selectedFile);
+        if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile);
         else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
         else throw new Error(t.errors.unsupported);
         let pts: GeoPoint[] = [];

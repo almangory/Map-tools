@@ -189,7 +189,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         newAttrs[field] = val;
       });
 
-      if (includeUnmapped) {
+      if (retainUnmapped) {
         if (p.attributes) {
             Object.keys(p.attributes).forEach(k => {
                 if (!mappedSourceFields.has(k) && !unselectedTemplateFields.has(k)) {
