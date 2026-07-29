@@ -199,7 +199,23 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         }
       }
 
-      return { ...p, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
+            let newId = p.id;
+      if (nameSourceField) {
+         if (nameSourceField === 'الشارع (مسترجع)') {
+             if (p.street) newId = String(p.street);
+         } else if (nameSourceField === 'الحي (مسترجع)') {
+             if (p.district) newId = String(p.district);
+         } else if (newAttrs[nameSourceField] !== undefined && newAttrs[nameSourceField] !== '') {
+             newId = String(newAttrs[nameSourceField]);
+         } else if (p.attributes) {
+             const matchedKey = Object.keys(p.attributes).find(k => k.toLowerCase() === nameSourceField.toLowerCase());
+             if (matchedKey && p.attributes[matchedKey]) {
+                 newId = String(p.attributes[matchedKey]);
+             }
+         }
+      }
+
+      return { ...p, id: newId, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
     });
 
     if (overlapResults) {
