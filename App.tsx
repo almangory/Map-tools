@@ -320,6 +320,7 @@ const App: React.FC = () => {
   const [duplicateTolerance, setDuplicateTolerance] = useState<number>(() => loadSavedPreference('duplicateTolerance', 0.5));
   const [overlapResults, setOverlapResults] = useState<OverlapResult[] | null>(null);
   const [geocodingMode, setGeocodingMode] = useState<'accurate' | 'fast'>(() => loadSavedPreference('geocodingMode', 'accurate'));
+  const [mobileView, setMobileView] = useState<'panel' | 'map'>('panel');
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [overlapModalType, setOverlapModalType] = useState<'duplicates' | 'intersections'>('duplicates');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -2053,8 +2054,94 @@ const App: React.FC = () => {
         </div>
       )}
 
-      <div className="flex flex-1 h-full w-full overflow-hidden">
-        <nav className="bg-primary border-e border-slate-800 flex flex-col items-center py-4 md:py-8 w-16 sm:w-20 md:w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500 overflow-y-auto custom-scrollbar">
+      {/* Mobile Top Header & View Toggle */}
+      <div className="lg:hidden bg-primary border-b border-slate-800 p-2.5 px-3 flex items-center justify-between z-50 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-8 h-8 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center text-accent font-black text-xs shadow-sm shrink-0">
+            GIS
+          </div>
+          <div className="truncate">
+            <h1 className="text-xs font-black text-white leading-tight truncate">{t.appTitle}</h1>
+            <p className="text-[8px] text-accent font-bold uppercase truncate">{theme === 'nwc' ? t.themeNWC : t.subTitle}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => setMobileView(mobileView === 'panel' ? 'map' : 'panel')}
+            className={cn(
+              "px-3 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 transition-all shadow-md border active:scale-95",
+              mobileView === 'map'
+                ? "bg-accent text-primary border-accent"
+                : "bg-white/10 text-white border-white/20 hover:bg-white/20"
+            )}
+          >
+            {mobileView === 'panel' ? (
+              <>
+                <MapPin className="w-3.5 h-3.5 text-accent" />
+                <span>{lang === 'ar' ? 'الخريطة' : 'Map'}</span>
+                {displayPoints.length > 0 && (
+                  <span className="bg-accent text-primary px-1.5 py-0.2 rounded-full text-[9px] font-black">
+                    {displayPoints.length}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <SlidersHorizontal className="w-3.5 h-3.5 text-accent" />
+                <span>{lang === 'ar' ? 'الأدوات' : 'Tools'}</span>
+              </>
+            )}
+          </button>
+
+          <button
+            onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
+            className="px-2 py-1 bg-white/5 text-white/80 rounded-lg text-xs font-bold border border-white/10"
+          >
+            {lang.toUpperCase()}
+          </button>
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="p-1.5 bg-white/5 text-white/70 rounded-lg border border-white/10"
+          >
+            <Settings2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Mobile Tool Tabs Bar (Scrollable Horizontally) */}
+      <div className="lg:hidden bg-[#0a2330] border-b border-slate-800 px-2 py-2 flex items-center gap-1.5 overflow-x-auto custom-scrollbar shrink-0 z-40">
+        {[
+          { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
+          { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
+          { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+          { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف' : 'Classifier' },
+          { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
+          { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
+          { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق' : 'Format' },
+          { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => {
+              setActiveTab(tab.id as any);
+              setMobileView('panel');
+            }}
+            className={cn(
+              "px-3 py-1.5 rounded-xl font-black text-[11px] flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all border",
+              activeTab === tab.id
+                ? "bg-accent text-primary border-accent shadow-md"
+                : "bg-white/5 text-white/60 border-white/10 hover:bg-white/10"
+            )}
+          >
+            {React.cloneElement(tab.icon as any, { className: "w-3.5 h-3.5" })}
+            <span>{tab.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-1 h-full w-full overflow-hidden relative">
+        <nav className="hidden lg:flex bg-primary border-e border-slate-800 flex-col items-center py-8 w-20 lg:w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500 overflow-y-auto custom-scrollbar">
           <div className="flex-1 flex flex-col gap-4 md:gap-6 w-full px-1.5 sm:px-2">
              {[
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
@@ -2088,7 +2175,7 @@ const App: React.FC = () => {
           </div>
       </nav>
 
-      <aside className="bg-primary border-e border-slate-800 w-full sm:w-[360px] md:w-[420px] max-w-full flex flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden shrink-0">
+      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-[380px] xl:w-[420px]" : "hidden lg:flex lg:w-[380px] xl:w-[420px]")}>
            <div className="p-4 sm:p-6 md:p-10 pb-4 shrink-0">
                 <div className="flex items-center justify-between">
                    <div>
@@ -3480,7 +3567,7 @@ const App: React.FC = () => {
            <div className="p-8 border-t border-white/5 bg-black/10 shrink-0"><div className="space-y-2"><div className="flex items-center gap-2 text-white/40 group"><Mail className="w-3 h-3 group-hover:text-accent transition-colors" /><span className="text-[10px] font-bold">{t.contactDev}:</span><a href="mailto:oosman@nwc.com.sa" className="text-[10px] font-black text-accent hover:underline">oosman@nwc.com.sa</a></div><p className="text-[9px] font-black text-white/30 uppercase tracking-widest">{t.developedBy}</p></div></div>
       </aside>
 
-      <main className="flex-1 relative bg-[#0d1b24]">
+      <main className={cn("flex-1 relative bg-[#0d1b24]", mobileView === 'map' ? "flex w-full flex-1 h-full" : "hidden lg:flex")}>
           <MapPreview
             globalBaseMap={globalBaseMap}
             points={displayPoints}
@@ -3505,6 +3592,17 @@ const App: React.FC = () => {
             }}
          />
          {loading && (<div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center"><div className="text-center p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl"><Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" /><p className="text-white font-black text-lg">{statusMessage}</p></div></div>)}
+
+         {/* Mobile Floating Button to Return to Tools Panel */}
+         <div className="lg:hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] pointer-events-auto">
+           <button
+             onClick={() => setMobileView('panel')}
+             className="px-5 py-3 bg-[#0b2d3d] text-accent border-2 border-accent rounded-full font-black text-xs shadow-2xl flex items-center gap-2 active:scale-95 transition-all"
+           >
+             <SlidersHorizontal className="w-4 h-4" />
+             <span>{lang === 'ar' ? 'العودة بلوحة الأدوات والخيارات' : 'Back to Tools Panel'}</span>
+           </button>
+         </div>
 
 
          {showSettingsModal && (

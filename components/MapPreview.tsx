@@ -334,36 +334,36 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
         
         {/* Layer & Control Menu */}
         <div className={cn(
-            "absolute top-6 z-[600] flex flex-col gap-3 transition-all",
-            lang === 'ar' ? 'right-6' : 'left-6'
+            "absolute top-4 sm:top-6 z-[600] flex flex-col gap-2.5 sm:gap-3 transition-all",
+            lang === 'ar' ? 'right-3 sm:right-6' : 'left-3 sm:left-6'
         )}>
             <button 
                 onClick={() => setShowLayerMenu(!showLayerMenu)}
                 className={cn(
-                    "w-12 h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl flex items-center justify-center text-primary hover:bg-white transition-all border border-white/20 active:scale-95",
+                    "w-10 h-10 sm:w-12 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl flex items-center justify-center text-primary hover:bg-white transition-all border border-white/20 active:scale-95",
                     showLayerMenu && "ring-2 ring-accent border-accent/50"
                 )}
             >
-                <LayersIcon className="w-6 h-6" />
+                <LayersIcon className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
 
             <button 
                 onClick={zoomToDataExtent}
                 disabled={points.length === 0}
-                className="w-12 h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl flex items-center justify-center text-primary hover:bg-white transition-all border border-white/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-10 h-10 sm:w-12 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl flex items-center justify-center text-primary hover:bg-white transition-all border border-white/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={t.zoomToData}
             >
-                <Maximize className="w-6 h-6" />
+                <Maximize className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
             
             {showLayerMenu && (
                 <div className={cn(
-                    "absolute top-0 bg-white/98 backdrop-blur-xl rounded-[2.5rem] shadow-2xl p-7 w-72 border border-white/40 animate-in fade-in zoom-in duration-200 origin-top",
-                    lang === 'ar' ? 'right-16' : 'left-16'
+                    "absolute top-0 bg-white/98 backdrop-blur-xl rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl p-4 sm:p-7 w-64 sm:w-72 border border-white/40 animate-in fade-in zoom-in duration-200 origin-top max-h-[75vh] overflow-y-auto custom-scrollbar",
+                    lang === 'ar' ? 'right-12 sm:right-16' : 'left-12 sm:left-16'
                 )}>
-                    <div className="flex items-center gap-2 mb-5">
+                    <div className="flex items-center gap-2 mb-4 sm:mb-5">
                         <MapIcon className="w-4 h-4 text-accent" />
-                        <h4 className="text-[11px] font-black uppercase text-primary tracking-[0.2em]">{t.baseMaps}</h4>
+                        <h4 className="text-[10px] sm:text-[11px] font-black uppercase text-primary tracking-[0.2em]">{t.baseMaps}</h4>
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3 mb-8">
@@ -433,8 +433,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
         {/* Cursor Coordinates Tracker */}
         {cursorCoords && (
             <div className={cn(
-                "absolute bottom-6 z-[600] px-4 py-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200 text-[10px] font-black text-slate-600 flex gap-4 animate-in fade-in duration-300",
-                lang === 'ar' ? 'left-6' : 'right-6'
+                "absolute bottom-2 lg:bottom-6 z-[600] px-3 py-1.5 sm:px-4 sm:py-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200 text-[9px] sm:text-[10px] font-black text-slate-600 flex gap-2 sm:gap-4 animate-in fade-in duration-300 hidden sm:flex",
+                lang === 'ar' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
             )}>
                 <div className="flex items-center gap-1.5"><Navigation2 className="w-3 h-3 text-accent" /><span>LAT: {cursorCoords.lat.toFixed(6)}</span></div>
                 <div className="w-px h-3 bg-slate-300" />
@@ -442,7 +442,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
             </div>
         )}
 
-        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[500] flex flex-col items-center gap-4 w-[90%] max-w-md pointer-events-none">
+        <div className="absolute bottom-20 lg:bottom-10 left-1/2 -translate-x-1/2 z-[500] flex flex-col items-center gap-3 w-[92%] max-w-md pointer-events-none">
              {isSelectionMode && (
                 <div className="flex gap-3 pointer-events-auto animate-in slide-in-from-bottom duration-500">
                     <button onClick={toggleDrawing} className={cn(
