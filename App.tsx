@@ -2175,7 +2175,7 @@ const App: React.FC = () => {
           </div>
       </nav>
 
-      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-[380px] xl:w-[420px]" : "hidden lg:flex lg:w-[380px] xl:w-[420px]")}>
+      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]" : "hidden lg:flex lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]")}>
            <div className="p-4 sm:p-6 md:p-10 pb-4 shrink-0">
                 <div className="flex items-center justify-between">
                    <div>
@@ -4144,10 +4144,10 @@ const App: React.FC = () => {
                              <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
                                  <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
                                      <div className="p-2 bg-accent/10 rounded-xl text-accent"><RefreshCw className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '1. المحول الشامل (Converter)' : '1. Coordinate Converter'}</h3>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '1. محول الإحداثيات والبيانات (Converter)' : '1. Coordinate Converter'}</h3>
                                  </div>
                                  <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === 'ar' ? 'يهدف هذا القسم لتحويل الإحداثيات والبيانات لملفات Excel, CSV, DXF إلى KML/KMZ مباشرة.' : 'Convert points/lines from Excel, CSV, DXF to standard map presentation formats (KML/KMZ).'}
+                                     {lang === 'ar' ? 'يهدف هذا القسم لتحويل الإحداثيات والبيانات من ملفات Excel, CSV, DXF إلى KML/KMZ مباشرة.' : 'Convert points/lines from Excel, CSV, DXF to standard map presentation formats (KML/KMZ).'}
                                  </p>
                                  <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
                                      {lang === 'ar' ? (
@@ -4155,14 +4155,14 @@ const App: React.FC = () => {
                                              <li>ارفع الملف بالنقر أو السحب لمنطقة الرفع.</li>
                                              <li>اختر نظام الإحداثيات المصدر (مثل UTM Zone 37N-40N أو عين العبد).</li>
                                              <li>عّين أسماء الأعمدة في ملفك (الاسم، السيني X، الصادي Y).</li>
-                                             <li>حمل ملف KML بجودة عرض ممتازة على Google Earth.</li>
+                                             <li>حمل ملف KML أو KMZ لمشاهدة البيانات بدقة على الخريطة.</li>
                                          </>
                                      ) : (
                                          <>
                                              <li>Upload Excel/CSV/DXF coordinates easily.</li>
                                              <li>Select Source CRS (UTM Zones 37N-40N, Ain El Abd, etc.).</li>
                                              <li>Map attributes (Identifier Name, Easting X, Northing Y).</li>
-                                             <li>Download perfect full-fidelity KML/KMZ file.</li>
+                                             <li>Download perfect full-fidelity KML/KMZ files.</li>
                                          </>
                                      )}
                                  </ul>
@@ -4175,22 +4175,22 @@ const App: React.FC = () => {
                                      <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '2. مخطط الشوارع (Street Planner)' : '2. Street Planner'}</h3>
                                  </div>
                                  <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === 'ar' ? 'استخراج تلقائي دقيق لكافة خطوط ومسارات الشوارع الحقيقية من الخرائط بضغطة زر.' : 'Instantly extract real geographic street layouts and names from a selected region on the map.'}
+                                     {lang === 'ar' ? 'استخراج مسارات الشوارع الفعلية من خرائط OpenStreetMap لتخطيط شبكات المياه والصرف الصحي.' : 'Extract real geographic street layouts from OpenStreetMap for water & wastewater network planning.'}
                                  </p>
                                  <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
                                      {lang === 'ar' ? (
                                          <>
-                                             <li>انقر على زر "رسم الحدود" وارسم نطاق منطقتك على الخريطة.</li>
-                                             <li>رتب وحدد تصنيفات الشوارع المطلوبة (رئيسية، ثانوية، سكنية).</li>
-                                             <li>فعّل خيار استدلال الأسماء للحصول على أسماء الشوارع تلقائياً.</li>
-                                             <li>تصفح مسارات الشبكة وحملها كملف KML/KMZ.</li>
+                                             <li>استخدم أداة "رسم النطاق" لتحديد المنطقة المستهدفة على الخريطة.</li>
+                                             <li>اختر نوع الشبكة المطلوبة (مياه أو صرف صحي).</li>
+                                             <li>حدد أنواع الشوارع (رئيسية، فرعية، سكنية) لاستخراجها.</li>
+                                             <li>انقر على استخراج لإنشاء شبكة خطوط جاهزة مع بيانات الشوارع وتصديرها بصيغة KML.</li>
                                          </>
                                      ) : (
                                          <>
-                                             <li>Draw boundary polygon or load one dynamically.</li>
-                                             <li>Choose requested street hierarchies to filter.</li>
-                                             <li>Enable name-inferring to fetch true street names.</li>
-                                             <li>Download structured street mains as KML layers.</li>
+                                             <li>Use "Draw Polygon" to select your target area on the map.</li>
+                                             <li>Select the network type (Water or Wastewater).</li>
+                                             <li>Choose street hierarchies (primary, secondary, residential).</li>
+                                             <li>Extract to generate network lines with street names and export as KML.</li>
                                          </>
                                      )}
                                  </ul>
@@ -4200,53 +4200,165 @@ const App: React.FC = () => {
                              <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
                                  <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
                                      <div className="p-2 bg-accent/10 rounded-xl text-accent"><BarChart3 className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '3. محلل الأطوال (Length Analyzer)' : '3. Pipe Length Analyzer'}</h3>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '3. محلل الأطوال (Network Analyzer)' : '3. Network Analyzer'}</h3>
                                  </div>
                                  <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === 'ar' ? 'لوحة تحليلات ذكية لخطوط المياه والصرف الصحي، مجهزة بإحصائيات وأدوات تصدير.' : 'Fully automated intelligence panel for analysing water (W_MAINLINE) and sewer (WW_MAINLINE) networks.'}
+                                     {lang === 'ar' ? 'تحليل لبيانات وأطوال شبكات المياه والصرف الصحي المرفوعة وعرض إحصاءات شاملة.' : 'Analyze lengths and attributes of uploaded water and wastewater networks with comprehensive stats.'}
                                  </p>
                                  <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
                                      {lang === 'ar' ? (
                                          <>
-                                             <li>مخصص لقراءة أشكال الكابلات والأنابيب في ملفات KMZ/KML.</li>
-                                             <li>يعرض الأطوال الإجمالية، التقسيم بالمواد (Ductile, HDPE) وبالأقطار.</li>
-                                             <li>تصفح مخططات وعدد القطاعات الإنشائية للخطوط.</li>
-                                             <li>أزرار تصدير مخصصة لكل طبقة وتصدير تقرير PPTX لعقد الاجتماعات.</li>
+                                             <li>ارفق ملف KML/KMZ يحتوي على مسارات الشبكة المطلوبة.</li>
+                                             <li>يتعرف النظام تلقائياً على الأعمدة (DIAMETER, MATERIAL).</li>
+                                             <li>استعرض إجمالي الأطوال مقسمة حسب القطر ونوع المادة.</li>
+                                             <li>قم بتصدير البيانات كتقرير عروض تقديمية (PowerPoint - PPTX).</li>
                                          </>
                                      ) : (
                                          <>
-                                             <li>Analyze files featuring water or wastewater pipeline networks.</li>
-                                             <li>Extract breakdown metrics based on materials & pipe diameters.</li>
-                                             <li>Obtain exact section counts and average lengths per pipeline segment.</li>
-                                             <li>Generate and export tailored PPTX executive slide reports natively.</li>
+                                             <li>Upload KML/KMZ files containing network pipelines.</li>
+                                             <li>System automatically identifies attributes (DIAMETER, MATERIAL).</li>
+                                             <li>View total lengths categorized by diameter and material type.</li>
+                                             <li>Export the analysis as a Presentation Report (PPTX).</li>
                                          </>
                                      )}
                                  </ul>
                              </div>
 
-                             {/* Section 4: مقسم KML ومحول المضلعات */}
+                             {/* Section 4: مصنف الخرائط */}
                              <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
                                  <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Split className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '4. الأدوات المساعدة وحل المشكلات' : '4. Geospatial Tools & Resiliency'}</h3>
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Layers className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '4. مصنف الخرائط (Classifier)' : '4. Map Classifier'}</h3>
                                  </div>
                                  <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === 'ar' ? 'المقسم مخصص لتجزئة الملفات الضخمة، والمحول لمضلعات لتربيط خطوط المشاريع.' : 'Advanced splitter for processing large datasets and polygon converter for project tracing.'}
+                                     {lang === 'ar' ? 'تصنيف البيانات المكانية إلى طبقات متعددة وتلوينها بناءً على الخصائص (كالأقطار).' : 'Classify spatial data into multiple layers and colorize them based on attributes (like diameters).'}
                                  </p>
                                  <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
                                      {lang === 'ar' ? (
                                          <>
-                                             <li>تقسيم ملفات KML إما رقمياً أو برسم مضلع جغرافي لقص المنطقة المطلوبة.</li>
-                                             <li>محول المضلعات يجمع الخطوط المبعثرة لمضلع واحد أو ينشئ Boundary فوراً.</li>
-                                             <li>نظام معالجة قوي لتنظيف أخطاء XML في الكيلومترات (KMZ/KML) المتضررة.</li>
-                                             <li>تنبيهات فورية وإرشادات ذكية لتصحيح المدخلات.</li>
+                                             <li>ارفع ملف البيانات المكانية (KML/KMZ/DXF/GDB).</li>
+                                             <li>اختر الحقل المراد التصنيف بناءً عليه (مثلاً القطر).</li>
+                                             <li>حدد نوع الشبكة (مياه/صرف) لتطبيق لوحة الألوان المعتمدة تلقائياً.</li>
+                                             <li>النتيجة ملف مقسم إلى مجلدات أو طبقات منظمة وواضحة بصرياً.</li>
                                          </>
                                      ) : (
                                          <>
-                                             <li>Split heavy geographical datasets numerically or via drawing polygon constraints.</li>
-                                             <li>Convert dynamic trace paths to closed polygons or create bounding hulls.</li>
-                                             <li>Includes intelligent XML parsing recovery to fix error-prone KML codes.</li>
-                                             <li>Quickly resolve issues and check network geometries interactively.</li>
+                                             <li>Upload spatial data files (KML/KMZ/DXF/GDB).</li>
+                                             <li>Select the field for classification (e.g., DIAMETER).</li>
+                                             <li>Choose network type to apply standard NWC color palettes automatically.</li>
+                                             <li>Output is a cleanly structured file grouped into folders/layers.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 5: مقسم الملفات */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Split className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '5. مقسم الملفات (Splitter)' : '5. File Splitter'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'تجزئة الملفات المكانية الكبيرة إلى أجزاء أصغر إما بالعدد أو جغرافياً.' : 'Split large spatial datasets into smaller parts numerically or geographically.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>التقسيم الرقمي: قسّم الملف الضخم إلى عدد محدد من الأجزاء المتساوية لتسهيل العمل.</li>
+                                             <li>التقسيم الجغرافي: استخدم أداة رسم المضلعات لقص جزء محدد فقط من الملف ضمن النطاق.</li>
+                                             <li>إمكانية دمج وتجميع العناصر (Explode) وفصلها.</li>
+                                             <li>تصدير الملفات المقسمة كملف ZIP مجمع.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Numerical Split: Divide heavy files into equal parts for easier processing.</li>
+                                             <li>Geospatial Split: Use the polygon drawing tool to clip out data within a specific region.</li>
+                                             <li>Support for Explode options to separate grouped elements.</li>
+                                             <li>Export split items instantly as a combined ZIP file.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 6: المضلعات */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Shapes className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '6. محول المضلعات (Polygons)' : '6. Polygon Converter'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'تحويل الخطوط المتقطعة والمنفصلة إلى مضلعات هندسية مغلقة بشكل تلقائي.' : 'Automatically convert disconnected and shattered lines into closed geometric polygons.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>ارفع ملف KML/DXF يحتوي على خطوط تحدد مساحة معينة.</li>
+                                             <li>تقوم الأداة بتتبع الخطوط وربطها لإنشاء مضلع مغلق (Polygon).</li>
+                                             <li>مفيد جداً في تحويل المخططات الهندسية ونطاقات العمل إلى مضلعات (Boundaries).</li>
+                                             <li>يمكن تصديره كملف KML/KMZ جديد يحوي المساحات.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Upload a KML/DXF containing lines outlining an area.</li>
+                                             <li>The tool traces and connects lines to form a closed Polygon.</li>
+                                             <li>Extremely useful for converting CAD blueprints and work zones into Boundaries.</li>
+                                             <li>Export as a clean, colored KML/KMZ polygon file.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 7: تنسيق البيانات */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Database className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '7. تنسيق البيانات (Format Data)' : '7. Attribute Formatter'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'تنظيم وهيكلة البيانات الوصفية للعناصر وتوحيدها مع القوالب القياسية للشبكات.' : 'Organize and structure attribute data of elements and align them with standard network templates.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>ارفع الملف المعني واختر نوع الشبكة (مياه أو صرف صحي).</li>
+                                             <li>اختر قالب العنصر المستهدف (مثل Mainline, Manhole, Valve).</li>
+                                             <li>استخدم ميزة جلب الشوارع والأحياء تلقائياً من الإحداثيات باستخدام Geocoding العكسي.</li>
+                                             <li>قم بمطابقة الحقول القديمة مع الحقول القياسية الجديدة وتصدير الملف المنسق.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Upload your file and select the target network type (Water/Wastewater).</li>
+                                             <li>Select the target element template (e.g., Mainline, Manhole, Valve).</li>
+                                             <li>Utilize Reverse Geocoding to automatically populate Street and District names.</li>
+                                             <li>Map old attributes to the new standard attributes and export formatted file.</li>
+                                         </>
+                                     )}
+                                 </ul>
+                             </div>
+
+                             {/* Section 8: مقارنة الشبكات */}
+                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
+                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
+                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><GitCompare className="w-4 h-4" /></div>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === 'ar' ? '8. مقارنة البيانات (Comparator)' : '8. Data Comparator'}</h3>
+                                 </div>
+                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
+                                     {lang === 'ar' ? 'مقارنة ملفين مكانيين واكتشاف الفروقات والتداخلات والتطابق بينها.' : 'Compare two spatial files and detect differences, intersections, and identical geometries.'}
+                                 </p>
+                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
+                                     {lang === 'ar' ? (
+                                         <>
+                                             <li>ارفع الملف الأساسي (Base) والملف المقارن (Compare).</li>
+                                             <li>قم بتشغيل الفحص لاكتشاف الخطوط والنقاط المتطابقة (Duplicates).</li>
+                                             <li>اكتشف التقاطعات (Intersections) بين الشبكتين بدقة.</li>
+                                             <li>تصفح النتائج بشكل تفاعلي على الخريطة وقم بتصدير عناصر التقاطع/التطابق منفردة.</li>
+                                         </>
+                                     ) : (
+                                         <>
+                                             <li>Upload the Base file and the Compare file.</li>
+                                             <li>Run the scan to detect fully identical lines and points (Duplicates).</li>
+                                             <li>Accurately detect geometrical Intersections between the two datasets.</li>
+                                             <li>Review results interactively on the map and export intersections/duplicates separately.</li>
                                          </>
                                      )}
                                  </ul>
