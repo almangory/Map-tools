@@ -699,7 +699,7 @@ export const getPointToSegDistMeters = (
 export const isBlackLine = (pt: GeoPoint): boolean => {
   if (pt.isDuplicateOverlay) return true;
   if (!pt.color) return false;
-  const c = pt.color.trim().toLowerCase();
+  const c = String(pt.color || '').trim().toLowerCase();
   return c === '#000000' || c === '#000' || c === 'black' || c === 'rgb(0,0,0)' || c === '#000000ff';
 };
 

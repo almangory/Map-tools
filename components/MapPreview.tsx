@@ -181,9 +181,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
         const isOverlap = overlapResults?.some(o => !o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         const isIntersectionLine = overlapResults?.some(o => o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         
-        const featColor = isOverlap ? '#000000' : (pt.color || '#dcb13c').toLowerCase();
+        const featColor = isOverlap ? '#000000' : String(pt.color || '#dcb13c').toLowerCase();
         
-        if (focusedColor && featColor !== focusedColor.toLowerCase() && !isOverlap && !isIntersectionLine) return;
+        if (focusedColor && featColor !== String(focusedColor || '').toLowerCase() && !isOverlap && !isIntersectionLine) return;
 
         let marker;
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {

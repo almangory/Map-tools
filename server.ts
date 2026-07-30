@@ -33,7 +33,7 @@ async function startServer() {
       }
       
       // If it's a binary file (like kmz), we need to send as buffer
-      if (targetUrl.toLowerCase().endsWith('.kmz') || targetUrl.toLowerCase().endsWith('.zip') || (contentType && contentType.includes("application/vnd.google-earth.kmz")) || (contentType && contentType.includes("application/zip"))) {
+      if (String(targetUrl || '').toLowerCase().endsWith('.kmz') || String(targetUrl || '').toLowerCase().endsWith('.zip') || (contentType && contentType.includes("application/vnd.google-earth.kmz")) || (contentType && contentType.includes("application/zip"))) {
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           res.send(buffer);

@@ -23,7 +23,7 @@ export const InstallPwaModal: React.FC<InstallPwaModalProps> = ({
   const [installedSuccess, setInstalledSuccess] = useState(false);
 
   useEffect(() => {
-    const userAgent = window.navigator.userAgent.toLowerCase();
+    const userAgent = String(window.navigator.userAgent || '').toLowerCase();
     const iosDevice = /iphone|ipad|ipod/.test(userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     const androidDevice = /android/.test(userAgent);
     setIsIOS(iosDevice);

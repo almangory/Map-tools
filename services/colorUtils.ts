@@ -34,7 +34,7 @@ export const getCanonicalColorMap = (colors: string[], threshold: number = 45): 
   const map: Record<string, string> = {};
 
   colors.forEach(color => {
-    const upperColor = color.toUpperCase();
+    const upperColor = String(color || '').toUpperCase();
     if (map[upperColor]) return;
 
     // Check if this color is close to any existing canonical
@@ -71,7 +71,7 @@ export const STATUS_CATEGORIES: StatusCategory[] = [
 ];
 
 export const matchStatusByColor = (colorHex: string): StatusCategory => {
-  const cleanHex = (colorHex || '#DCB13C').trim().toUpperCase();
+  const cleanHex = String(colorHex || '#DCB13C').trim().toUpperCase();
   const rgb = hexToRgb(cleanHex);
   if (!rgb) return STATUS_CATEGORIES[3];
 

@@ -179,10 +179,16 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
            } else if (mapRules.sourceField === 'الحي (مسترجع)') {
                val = p.district || '';
            } else {
-               const sourceFieldLower = mapRules.sourceField.toLowerCase();
+               const sourceFieldLower = String(mapRules.sourceField || '').toLowerCase();
                if (p.attributes) {
-                   const matchedKey = Object.keys(p.attributes).find(k => k.toLowerCase() === sourceFieldLower);
-                   if (matchedKey) val = String(p.attributes[matchedKey]);
+                   const matchedKey = Object.keys(p.attributes).find(k => String(k || '').toLowerCase() === sourceFieldLower);
+                   if (matchedKey && p.attributes[matchedKey] !== undefined && p.attributes[matchedKey] !== null) val = String(p.attributes[matchedKey]);
+               }
+               if (!val && p.originalRow && headers) {
+                   const matchedIndex = headers.findIndex(h => String(h || '').toLowerCase() === sourceFieldLower);
+                   if (matchedIndex !== -1 && p.originalRow[matchedIndex] !== undefined && p.originalRow[matchedIndex] !== null) {
+                       val = String(p.originalRow[matchedIndex]);
+                   }
                }
            }
            if (val) mappedSourceFields.add(mapRules.sourceField);
@@ -195,7 +201,14 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         if (p.attributes) {
             Object.keys(p.attributes).forEach(k => {
                 if (!mappedSourceFields.has(k) && !unselectedTemplateFields.has(k)) {
-                    newAttrs[k] = String(p.attributes[k]);
+                    newAttrs[k] = String(p.attributes[k] || '');
+                }
+            });
+        }
+        if (p.originalRow && headers) {
+            headers.forEach((h, i) => {
+                if (!mappedSourceFields.has(h) && !unselectedTemplateFields.has(h) && p.originalRow![i] !== undefined && p.originalRow![i] !== null) {
+                    newAttrs[h] = String(p.originalRow![i]);
                 }
             });
         }
@@ -210,9 +223,16 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
          } else if (newAttrs[nameSourceField] !== undefined && newAttrs[nameSourceField] !== '') {
              newId = String(newAttrs[nameSourceField]);
          } else if (p.attributes) {
-             const matchedKey = Object.keys(p.attributes).find(k => k.toLowerCase() === nameSourceField.toLowerCase());
+             const matchedKey = Object.keys(p.attributes).find(k => String(k || '').toLowerCase() === String(nameSourceField || '').toLowerCase());
              if (matchedKey && p.attributes[matchedKey]) {
                  newId = String(p.attributes[matchedKey]);
+             }
+         }
+         
+         if (newId === p.id && !newAttrs[nameSourceField] && p.originalRow && headers && nameSourceField) {
+             const matchedIndex = headers.findIndex(h => String(h || '').toLowerCase() === String(nameSourceField || '').toLowerCase());
+             if (matchedIndex !== -1 && p.originalRow[matchedIndex]) {
+                 newId = String(p.originalRow[matchedIndex]);
              }
          }
       }

@@ -27,8 +27,8 @@ export const calculatePathLength = (path: {x: number, y: number}[]): number => {
 
 // --- HELPER: Create Placemark String ---
 const kmlKeyComparator = (keyA: string, keyB: string): number => {
-    const aLower = keyA.toLowerCase();
-    const bLower = keyB.toLowerCase();
+    const aLower = String(keyA || '').toLowerCase();
+    const bLower = String(keyB || '').toLowerCase();
     
     const isStreetA = ['streetname', 'street', 'الشارع'].includes(aLower);
     const isStreetB = ['streetname', 'street', 'الشارع'].includes(bLower);
@@ -85,8 +85,8 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
 
         descriptionHTML += '<div style="background-color:#fff9eb; padding:8px; border-radius:5px; border:1px solid #dcb13c; margin-bottom:10px;">';
         descriptionHTML += `<div style="font-size:11px;"><b>الإحداثيات:</b> ${lat}, ${lon}</div>`;
-        const isDistrictSelected = !selectedHeaders || selectedHeaders.some(h => ['district', 'الحي'].includes(h.toLowerCase()));
-        const isStreetSelected = !selectedHeaders || selectedHeaders.some(h => ['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(h.toLowerCase()));
+        const isDistrictSelected = !selectedHeaders || selectedHeaders.some(h => ['district', 'الحي'].includes(String(h || '').toLowerCase()));
+        const isStreetSelected = !selectedHeaders || selectedHeaders.some(h => ['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(String(h || '').toLowerCase()));
 
         if (pt.street && isStreetSelected) descriptionHTML += `<div style="font-size:11px;"><b>الشارع:</b> ${escapeXML(pt.street)}</div>`;
         if (pt.district && isDistrictSelected) descriptionHTML += `<div style="font-size:11px;"><b>الحي:</b> ${escapeXML(pt.district)}</div>`;
@@ -251,7 +251,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
 // --- HELPER: Parse Color Hex for KML ---
 export const getKMLColorParts = (colorHex: string | undefined) => {
     if (!colorHex) return { r: 'F6', g: '82', b: '3B', cleanHex: '3B82F6', hasColor: false };
-    let cleanHex = colorHex.toUpperCase().replace('#', '').trim();
+    let cleanHex = String(colorHex || '').toUpperCase().replace('#', '').trim();
     if (cleanHex.length === 3) {
         cleanHex = cleanHex[0] + cleanHex[0] + cleanHex[1] + cleanHex[1] + cleanHex[2] + cleanHex[2];
     }
@@ -384,7 +384,7 @@ ${stylesXML}`;
                   key = 'غير مصنف (Unclassified)';
               }
           } else if (options.groupByAttribute === 'color') {
-              const originalColor = (pt.color || '#3b82f6').toUpperCase();
+              const originalColor = String(pt.color || '#3b82f6').toUpperCase();
               key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
           } else if (options.groupByAttribute === 'layer') {
               key = pt.layer || 'Default';
@@ -443,7 +443,7 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
                     key = 'غير مصنف (Unclassified)';
                 }
             } else if (options.groupByAttribute === 'color') {
-                const originalColor = (pt.color || '#3b82f6').toUpperCase();
+                const originalColor = String(pt.color || '#3b82f6').toUpperCase();
                 key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
             } else if (options.groupByAttribute === 'layer') {
                 key = pt.layer || 'Default';

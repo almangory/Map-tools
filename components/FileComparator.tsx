@@ -47,7 +47,7 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
     
     setLoading(true);
     try {
-      const fileExtension = file.name.split('.').pop()?.toLowerCase();
+      const fileExtension = String(file.name.split('.').pop() || '').toLowerCase();
       const fileBuffer = await file.arrayBuffer();
       let pts: GeoPoint[] = [];
 

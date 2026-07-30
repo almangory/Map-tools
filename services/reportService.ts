@@ -140,7 +140,7 @@ export const generateAnalysisPPTX = async (
   }
 
   // Save the presentation
-  const safeName = filename.replace(/[^a-z0-9\u0600-\u06FF]/gi, '_');
+  const safeName = String(filename || '').replace(/[^a-z0-9\u0600-\u06FF]/gi, '_');
   await pptx.writeFile({ fileName: `Analysis_Report_${safeName}.pptx` });
 };
 
@@ -158,7 +158,7 @@ export const generateAnalysisPDF = (
   const lightGray: [number, number, number] = [245, 247, 250];
   
   // Clean filename for title
-  const displayTitle = filename.replace(/_/g, ' ').replace(/\.kml|\.kmz|\.xlsx|\.csv|\.dxf/i, '');
+  const displayTitle = String(filename || '').replace(/_/g, ' ').replace(/\.kml|\.kmz|\.xlsx|\.csv|\.dxf/i, '');
 
   // 1. Header Section (Dark Blue Background)
   doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
@@ -323,7 +323,7 @@ export const generateAnalysisPDF = (
       );
   }
 
-  const safeName = filename.replace(/[^a-z0-9]/gi, '_');
+  const safeName = String(filename || '').replace(/[^a-z0-9]/gi, '_');
   doc.save(`Analysis_Report_${safeName}.pdf`);
 };
 
@@ -671,7 +671,7 @@ export const generateWMainlinePPTX = async (
   });
 
   // Save the presentation file
-  const fileClean = filename.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  const fileClean = String(filename || '').replace(/[^a-z0-9]/gi, '_').toLowerCase();
   await pptx.writeFile({ fileName: `W_MAINLINE_Analysis_${fileClean}.pptx` });
 };
 
@@ -1015,7 +1015,7 @@ export const generateWWMainlinePPTX = async (
   });
 
   // Save the presentation file
-  const fileClean = filename.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+  const fileClean = String(filename || '').replace(/[^a-z0-9]/gi, '_').toLowerCase();
   await pptx.writeFile({ fileName: `WW_MAINLINE_Analysis_${fileClean}.pptx` });
 };
 

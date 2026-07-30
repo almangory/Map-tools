@@ -376,10 +376,10 @@ const App: React.FC = () => {
                 if (pt.type !== 'LineString') return pt;
                 if (isBlackLine(pt)) return pt;
                 
-                const descLower = (pt.description || '').toLowerCase();
-                const idLower = (String(pt.id) || '').toLowerCase();
-                const attr1Lower = (pt.attr1 || '').toLowerCase();
-                const attr2Lower = (pt.attr2 || '').toLowerCase();
+                const descLower = String(pt.description || '').toLowerCase();
+                const idLower = String(pt.id || '').toLowerCase();
+                const attr1Lower = String(pt.attr1 || '').toLowerCase();
+                const attr2Lower = String(pt.attr2 || '').toLowerCase();
                 
                 let hasDiameter = false;
                 
@@ -415,7 +415,7 @@ const App: React.FC = () => {
                 // 4. Check extended attributes map if it exists
                 if (!hasDiameter && pt.attributes) {
                     for (const [key, val] of Object.entries(pt.attributes)) {
-                        const keyLower = key.toLowerCase();
+                        const keyLower = String(key).toLowerCase();
                         const valString = String(val).toLowerCase();
                         
                         // If the key is a diameter keyword, the value MUST contain a number
@@ -447,7 +447,7 @@ const App: React.FC = () => {
                 
                 if (!hasZone && pt.attributes) {
                      for (const [key, val] of Object.entries(pt.attributes)) {
-                        const keyLower = key.toLowerCase();
+                        const keyLower = String(key).toLowerCase();
                         if (
                             keyLower.includes('zone') || 
                             keyLower.includes('منطقة') || 
@@ -528,7 +528,7 @@ const App: React.FC = () => {
           return false;
         }
 
-        const lower = cleanStr.toLowerCase();
+        const lower = String(cleanStr || '').toLowerCase();
 
         // 1. Generic empty / null / blank / placeholder values
         const emptyValues = new Set([
@@ -555,7 +555,7 @@ const App: React.FC = () => {
           return false;
         }
 
-        if (keyName && lower === stripHtml(keyName).toLowerCase()) {
+        if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) {
           return false;
         }
 
@@ -567,7 +567,7 @@ const App: React.FC = () => {
         return true;
       };
 
-      const normalizeKey = (key: string): string => key.toLowerCase().replace(/[\s_#-]/g, '');
+      const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
 
       const isSegmentKey = (key: string): boolean => {
         const norm = normalizeKey(key);
@@ -948,7 +948,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (activeFile && activeFile.headers) {
-      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+      const normalize = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
       const initialSelection = activeFile.headers.filter(h => {
         const normH = normalize(h);
         return defaultFields.some(df => {
@@ -1029,7 +1029,7 @@ const App: React.FC = () => {
     const rawPoints = activeTab === 'street-planner' ? [...globalPoints, ...plannedStreets] : globalPoints;
     const pointsToProcess = rawPoints.filter(p => !isBlackLine(p));
     if (pointsToProcess.length === 0) return {};
-    const colors = Array.from(new Set<string>(pointsToProcess.map(p => (p.color || '#dcb13c').toUpperCase())));
+    const colors = Array.from(new Set<string>(pointsToProcess.map(p => String(p.color || '#dcb13c').toUpperCase())));
     return getCanonicalColorMap(colors, mergeThreshold);
   }, [globalPoints, plannedStreets, activeTab, mergeThreshold]);
 
@@ -1056,7 +1056,7 @@ const App: React.FC = () => {
         if (pt.attributes) {
             // Check for diameter keys
             const diaKey = Object.keys(pt.attributes).find(k => {
-                const lower = k.toLowerCase();
+                const lower = String(k || '').toLowerCase();
                 return lower.includes('diameter') || lower.includes('قطر');
             });
             if (diaKey && pt.attributes[diaKey]) diameter = String(pt.attributes[diaKey]);
@@ -1097,7 +1097,7 @@ const App: React.FC = () => {
     let totalAllLength = 0;
 
     pointsToAnalyze.forEach(pt => {
-      const originalColor = (pt.color || '#dcb13c').toUpperCase();
+      const originalColor = String(pt.color || '#dcb13c').toUpperCase();
       const canonicalColor = canonicalColorMap[originalColor] || originalColor;
 
       if (!groups[canonicalColor]) groups[canonicalColor] = { totalLength: 0, count: 0 };
@@ -1151,7 +1151,7 @@ const App: React.FC = () => {
 
   const wMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && p.layer.toUpperCase().includes('W_MAINLINE'));
+    const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && String(p.layer || '').toUpperCase().includes('W_MAINLINE'));
 
     let totalLength = 0;
     const materialCounts: Record<string, number> = {};
@@ -1166,9 +1166,9 @@ const App: React.FC = () => {
         totalLength += len;
 
         let material = 'Ductile Iron (DI)';
-        const descLower = (pt.description || '').toLowerCase();
-        const idLower = (String(pt.id) || '').toLowerCase();
-        const attr1Lower = (pt.attr1 || '').toLowerCase();
+        const descLower = String(pt.description || '').toLowerCase();
+        const idLower = String(pt.id || '').toLowerCase();
+        const attr1Lower = String(pt.attr1 || '').toLowerCase();
 
         if (descLower.includes('hdpe') || idLower.includes('hdpe') || attr1Lower.includes('hdpe')) {
             material = 'HDPE';
@@ -1209,10 +1209,10 @@ const App: React.FC = () => {
   const wwMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
     const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && (
-        p.layer.toUpperCase().includes('WW_MAINLINE') ||
-        p.layer.toUpperCase().includes('S_GRAVITY_MAIN') ||
-        p.layer.toUpperCase().includes('SEWER') ||
-        p.layer.toUpperCase().includes('WASTEWATER')
+        String(p.layer || '').toUpperCase().includes('WW_MAINLINE') ||
+        String(p.layer || '').toUpperCase().includes('S_GRAVITY_MAIN') ||
+        String(p.layer || '').toUpperCase().includes('SEWER') ||
+        String(p.layer || '').toUpperCase().includes('WASTEWATER')
     ));
 
     let totalLength = 0;
@@ -1228,9 +1228,9 @@ const App: React.FC = () => {
         totalLength += len;
 
         let material = 'uPVC';
-        const descLower = (pt.description || '').toLowerCase();
-        const idLower = (String(pt.id) || '').toLowerCase();
-        const attr1Lower = (pt.attr1 || '').toLowerCase();
+        const descLower = String(pt.description || '').toLowerCase();
+        const idLower = String(pt.id || '').toLowerCase();
+        const attr1Lower = String(pt.attr1 || '').toLowerCase();
 
         if (descLower.includes('clay') || descLower.includes('vc') || idLower.includes('vc') || attr1Lower.includes('clay') || descLower.includes('فخار')) {
             material = 'Vitrified Clay (VC)';
@@ -1302,7 +1302,7 @@ const App: React.FC = () => {
             const rowObj: any = {};
             originalHeaders.forEach((h, i) => {
                 if (selectedHeaders.includes(h)) {
-                    const hLower = h.toLowerCase();
+                    const hLower = String(h || '').toLowerCase();
                     if (['streetname', 'street', 'الشارع'].includes(hLower) && pt && pt.street) {
                         rowObj[h] = pt.street;
                     } else {
@@ -1608,7 +1608,7 @@ const App: React.FC = () => {
     setAutoDetected(null);
     setError(null);
     try {
-      const fName = selectedFile.name.toLowerCase();
+      const fName = String(selectedFile.name || '').toLowerCase();
       let result: ParsedFile;
       if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
@@ -1783,7 +1783,7 @@ const App: React.FC = () => {
     headers: string[] | undefined,
     action: () => Promise<void> | void
   ) => {
-    const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'streetname', 'district', 'الحي'].includes(h.toLowerCase()));
+    const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'streetname', 'district', 'الحي'].includes(String(h || '').toLowerCase()));
     if (hasStreetHeader) {
       setLoading(true);
       const total = points.length;
@@ -1808,15 +1808,15 @@ const App: React.FC = () => {
                   }
               }
               if (!pt.attributes) pt.attributes = {};
-              const matchStreet = headers.find(h => h.toLowerCase() === 'street');
+              const matchStreet = headers.find(h => String(h || '').toLowerCase() === 'street');
               const matchArabic = headers.find(h => h === 'الشارع');
-              const matchStreetName = headers.find(h => h.toLowerCase() === 'streetname');
+              const matchStreetName = headers.find(h => String(h || '').toLowerCase() === 'streetname');
 
               if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
               if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
               if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
-              const matchDistrict = headers.find(h => h.toLowerCase() === 'district');
+              const matchDistrict = headers.find(h => String(h || '').toLowerCase() === 'district');
               const matchArabicDistrict = headers.find(h => h === 'الحي');
               if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
               if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
@@ -1892,7 +1892,7 @@ const App: React.FC = () => {
     if (!selectedFile) return;
     setLoading(true); setStatusMessage("جاري تحليل مضلع الحدود...");
     try {
-        const fName = selectedFile.name.toLowerCase();
+        const fName = String(selectedFile.name || '').toLowerCase();
         let result: ParsedFile;
         if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile);
         else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
@@ -2098,7 +2098,7 @@ const App: React.FC = () => {
             onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
             className="px-2 py-1 bg-white/5 text-white/80 rounded-lg text-xs font-bold border border-white/10"
           >
-            {lang.toUpperCase()}
+            {String(lang || '').toUpperCase()}
           </button>
           <button
             onClick={() => setShowSettingsModal(true)}
@@ -2168,7 +2168,7 @@ const App: React.FC = () => {
                 <span className="text-[8px] font-black text-accent">{lang === 'ar' ? 'تثبيت' : 'APP'}</span>
              </button>
              <button onClick={() => setShowManual(true)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
-             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{lang.toUpperCase()}</span></button>
+             <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{String(lang || '').toUpperCase()}</span></button>
              <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
              <button onClick={() => setShowSettingsModal(true)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Settings2 className="w-5 h-5" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'إعدادات' : 'SETTINGS'}</span></button>
 

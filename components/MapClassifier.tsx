@@ -89,7 +89,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
     setZonesStatus(lang === 'ar' ? 'جاري قراءة المضلعات...' : 'Reading Polygons...');
     
     try {
-      const fName = selectedFile.name.toLowerCase();
+      const fName = String(selectedFile.name || '').toLowerCase();
       let result: ParsedFile;
       if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
@@ -113,7 +113,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
     setAssetsStatus(lang === 'ar' ? 'جاري قراءة الأصول...' : 'Reading Assets...');
     
     try {
-      const fName = selectedFile.name.toLowerCase();
+      const fName = String(selectedFile.name || '').toLowerCase();
       let result;
       if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);

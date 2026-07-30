@@ -31,7 +31,7 @@ const kmlColorToHex = (kmlColor: string): string | undefined => {
 };
 
 const detectColumns = (headers: string[]): ColumnMapping => {
-  const lowerHeaders = headers.map(h => h.trim().toLowerCase());
+  const lowerHeaders = headers.map(h => String(h || '').trim().toLowerCase());
   const map: ColumnMapping = { xColumn: '', yColumn: '' };
   
   const linkTerms = ['location', 'map', 'link', 'url', 'site', 'google', 'موقع', 'رابط', 'الاحداثيات', 'coords', 'gps', 'geo'];
@@ -42,7 +42,7 @@ const detectColumns = (headers: string[]): ColumnMapping => {
 
   const findMatch = (terms: string[]) => {
     return headers.find(h => {
-      const lh = h.trim().toLowerCase();
+      const lh = String(h || '').trim().toLowerCase();
       return terms.some(t => lh === t || lh.startsWith(t + ' ') || lh.includes(' ' + t) || (lh.length > 1 && lh === t));
     }) || '';
   };
@@ -135,8 +135,8 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
     while ((trMatch = trRegex.exec(cleanDesc)) !== null) {
         const rawKey = stripHtml(trMatch[1]);
         const rawVal = stripHtml(trMatch[2]);
-        const lowerK = rawKey.toLowerCase();
-        const lowerV = rawVal.toLowerCase();
+        const lowerK = String(rawKey || '').toLowerCase();
+        const lowerV = String(rawVal || '').toLowerCase();
         const isHeader = (lowerK === 'key' && lowerV === 'value') ||
                          (lowerK === 'field' && lowerV === 'value') ||
                          (lowerK === 'attribute' && lowerV === 'value') ||
@@ -187,6 +187,18 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
             const v = line.substring(sepIdx + 1).trim();
             if (k && k.length < 60 && !attributes[k]) {
                 attributes[k] = v;
+            }
+        } else if (sepIdx === -1) {
+            const knownKeys = ['segment id', 'Permit No', 'ZONE', 'DIAMETER', 'SHAPE_Length', 'SHAPE', 'نوع الحفر', 'CONTRACTOR', 'PROJECTNAME', 'PROJECTID', 'Drilling type', 'Stage', 'LINENO', 'MATERIAL', 'ACTUALLENGTH', 'ASSETSTATUS', 'STREETNAME', 'DISTRICT', 'الشارع', 'الحي'];
+            for (const key of knownKeys) {
+                if (line.toLowerCase().startsWith(key.toLowerCase() + ' ')) {
+                    const k = key;
+                    const v = line.substring(key.length).trim();
+                    if (!attributes[k]) {
+                        attributes[k] = v;
+                    }
+                    break;
+                }
             }
         }
     }
@@ -398,10 +410,10 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
            let layerName = 'KML Import';
            let parent = pm.parentElement;
            while (parent) {
-               const lowerTag = (parent.localName || parent.tagName).toLowerCase();
+               const lowerTag = String(parent.localName || parent.tagName || '').toLowerCase();
                if (lowerTag === 'folder' || lowerTag === 'document') {
                    const nameNode = Array.from(parent.childNodes).find(n => {
-                       const nName = (n.localName || n.nodeName).toLowerCase();
+                       const nName = String(n.localName || n.nodeName || '').toLowerCase();
                        return nName === 'name';
                    });
                    const folderName = nameNode?.textContent;
@@ -453,7 +465,7 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
 
                         let ancestor: Node | null = tag.parentNode;
                         while (ancestor && ancestor !== pm) {
-                            const tagLower = (ancestor.nodeName || '').toLowerCase();
+                            const tagLower = String(ancestor.nodeName || '').toLowerCase();
                             if (tagLower === 'innerboundaryis') {
                                 isInnerBoundary = true;
                             }
@@ -667,7 +679,7 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
 export const parseKMZ = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
   try {
     if (onProgress) onProgress(10);
-    const fileName = file.name.toLowerCase();
+    const fileName = String(file.name || '').toLowerCase();
     
     // --- 1. SHAPEFILE (.shp or .zip containing .shp) ---
     if (fileName.endsWith('.shp')) {
@@ -709,9 +721,9 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
         const zip = await JSZip.loadAsync(arrayBuffer);
         const filesList = Object.keys(zip.files);
         
-        const hasGDB = filesList.some(name => name.toLowerCase().includes('.gdb/') || name.toLowerCase().endsWith('.gdbtable'));
-        const hasSHP = filesList.some(name => name.toLowerCase().endsWith('.shp'));
-        const hasKML = filesList.some(name => name.toLowerCase().endsWith('.kml'));
+        const hasGDB = filesList.some(name => String(name || '').toLowerCase().includes('.gdb/') || String(name || '').toLowerCase().endsWith('.gdbtable'));
+        const hasSHP = filesList.some(name => String(name || '').toLowerCase().endsWith('.shp'));
+        const hasKML = filesList.some(name => String(name || '').toLowerCase().endsWith('.kml'));
         
         if (hasGDB) {
             if (onProgress) onProgress(30);
@@ -751,7 +763,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
         }
         
         if (hasKML) {
-            const kmlFilename = filesList.find(name => name.toLowerCase().endsWith('.kml'));
+            const kmlFilename = filesList.find(name => String(name || '').toLowerCase().endsWith('.kml'));
             if (!kmlFilename) throw new Error("Invalid KMZ: No .kml file found inside.");
             let kmlContent = await zip.file(kmlFilename)?.async("string") || "";
             
@@ -760,7 +772,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
             for (const imgName of imageFiles) {
                 const base64 = await zip.file(imgName)?.async("base64");
                 if (base64) {
-                    const ext = imgName.split('.').pop()?.toLowerCase();
+                    const ext = String(imgName.split('.').pop() || '').toLowerCase();
                     const mimeType = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
                     const dataURI = `data:${mimeType};base64,${base64}`;
                     const safeName = imgName.split('/').pop()?.replace(/[.*+?^$!()|[\]\\]/g, '\\$&');
@@ -945,7 +957,7 @@ export const fetchNetworkFile = async (url: string, onProgress?: (percent: numbe
   if (onProgress) onProgress(40);
   
   const contentType = response.headers.get('content-type') || '';
-  const urlLower = url.toLowerCase();
+  const urlLower = String(url || '').toLowerCase();
   
   // Check if it is KMZ (zip) or KML (text)
   if (urlLower.endsWith('.kmz') || urlLower.endsWith('.zip') || contentType.includes('application/vnd.google-earth.kmz') || contentType.includes('application/zip')) {
