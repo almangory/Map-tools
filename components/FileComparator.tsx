@@ -1,6 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { GitCompare, FileUp, AlertTriangle, CheckCircle, Info, Trash2, XCircle, PlusCircle, PenTool, FileSpreadsheet } from 'lucide-react';
-import { cn } from 'clsx';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+
+function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); };
 import { GeoPoint, ParsedFile } from '../types';
 import { parseExcel, parseKMZ, extractPointsFromDXF, parseDXF } from '../services/parserService';
 import { identifyPotentialCRS, transformPoints } from '../services/crs';
@@ -21,7 +24,7 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
   const [idColumn1, setIdColumn1] = useState<string>('');
   const [idColumn2, setIdColumn2] = useState<string>('');
   
-  const [stats, setStats] = useState<{added: number, deleted: number, modified: number, unchanged: number} | null>(null);
+  const [stats, setStats] = useState<{added: number, deleted: number, modified: number, unchanged: number, diameterDiff?: number} | null>(null);
   const [loading, setLoading] = useState(false);
   
   // auto detect attributes for ID selection
@@ -48,18 +51,16 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
     setLoading(true);
     try {
       const fileExtension = String(file.name.split('.').pop() || '').toLowerCase();
-      const fileBuffer = await file.arrayBuffer();
       let pts: GeoPoint[] = [];
 
-      if (fileExtension === 'kmz' || fileExtension === 'kml') {
-        const parsed = await parseKMZ(fileBuffer);
+      if (['kmz', 'kml', 'zip', 'gdb', 'shp'].includes(fileExtension)) {
+        const parsed = await parseKMZ(file);
         pts = parsed.data as GeoPoint[];
       } else if (fileExtension === 'dxf') {
-        const text = new TextDecoder().decode(fileBuffer);
-        const dxfParsed = parseDXF(text);
-        pts = extractPointsFromDXF(dxfParsed);
-      } else if (fileExtension === 'xlsx' || fileExtension === 'csv' || fileExtension === 'xls') {
-        const parsed = await parseExcel(fileBuffer, file.name);
+        const parsed = await parseDXF(file);
+        pts = extractPointsFromDXF(parsed.data);
+      } else if (['xlsx', 'csv', 'xls'].includes(fileExtension)) {
+        const parsed = await parseExcel(file);
         const rows = parsed.data as any[][];
         const headers = parsed.headers || [];
         
@@ -133,9 +134,42 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
             const key = idColumn2 && p.attributes ? p.attributes[idColumn2] : p.id;
             if (key) map2.set(String(key), p);
         });
+
+        // Spatial fallback matching for unmapped elements
+        const unmatchedIn1 = new Set(map1.keys());
+        map2.forEach((p2, k) => {
+            if (unmatchedIn1.has(k)) {
+                unmatchedIn1.delete(k);
+            }
+        });
+
+        const unmapped2Keys = [];
+        map2.forEach((p2, k) => {
+            if (!map1.has(k)) unmapped2Keys.push(k);
+        });
+
+        for (const k2 of unmapped2Keys) {
+            const p2 = map2.get(k2)!;
+            let bestDist = Infinity;
+            let bestK1 = '';
+            for (const k1 of unmatchedIn1) {
+                const p1 = map1.get(k1)!;
+                const dist = Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+                // If it's a line, just matching by center/first point (which x,y represents) might be enough
+                if (dist < 0.0001 && dist < bestDist) {
+                    bestDist = dist;
+                    bestK1 = k1;
+                }
+            }
+            if (bestK1) {
+                map2.delete(k2);
+                map2.set(bestK1, p2);
+                unmatchedIn1.delete(bestK1);
+            }
+        }
         
         const resultPoints: GeoPoint[] = [];
-        let added = 0, deleted = 0, modified = 0, unchanged = 0;
+        let added = 0, deleted = 0, modified = 0, unchanged = 0, diameterDiff = 0;
         
         map2.forEach((p2, key) => {
             const p1 = map1.get(key);
@@ -145,19 +179,45 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
             } else {
                 const geomChanged = Math.abs(p1.x - p2.x) > 0.00001 || Math.abs(p1.y - p2.y) > 0.00001;
                 let attrsChanged = false;
+                let diameterChanged = false;
                 if (p1.attributes && p2.attributes) {
                     const keys = new Set([...Object.keys(p1.attributes), ...Object.keys(p2.attributes)]);
+                    
+                    // Specific diameter comparison logic across potentially different key names
+                    const getDiameter = (attrs) => {
+                        for (const k of Object.keys(attrs)) {
+                            const kLower = k.toLowerCase();
+                            if (kLower.includes('dia') || kLower.includes('قطر') || kLower.includes('size') || kLower.includes('width')) {
+                                return attrs[k];
+                            }
+                        }
+                        return null;
+                    };
+                    
+                    const dia1 = getDiameter(p1.attributes);
+                    const dia2 = getDiameter(p2.attributes);
+                    if (dia1 !== null && dia2 !== null && String(dia1).trim() !== String(dia2).trim()) {
+                        diameterChanged = true;
+                    }
+                    
                     for (let k of keys) {
                         if (p1.attributes[k] !== p2.attributes[k]) {
                             attrsChanged = true;
-                            break;
+                            // Also fallback check on the specific key if we didn't catch it with the general heuristic
+                            const kLower = k.toLowerCase();
+                            if (kLower.includes('dia') || kLower.includes('قطر') || kLower.includes('size') || kLower.includes('width')) {
+                                diameterChanged = true;
+                            }
                         }
                     }
                 } else if (p1.attributes !== p2.attributes) {
                     attrsChanged = true;
                 }
                 
-                if (geomChanged || attrsChanged) {
+                if (diameterChanged) {
+                    diameterDiff++;
+                    resultPoints.push({...p2, color: '#9c27b0', layer: lang === 'ar' ? 'اختلاف القطر' : 'Diameter Diff'}); 
+                } else if (geomChanged || attrsChanged) {
                     modified++;
                     resultPoints.push({...p2, color: '#f59e0b', layer: lang === 'ar' ? 'تعديل' : 'Modified'}); 
                 } else {
@@ -170,11 +230,11 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
         map1.forEach((p1, key) => {
             if (!map2.has(key)) {
                 deleted++;
-                resultPoints.push({...p1, color: '#ef4444', layer: lang === 'ar' ? 'حذف' : 'Deleted'}); 
+                resultPoints.push({...p1, color: '#000000', layer: lang === 'ar' ? 'نقص خطوط' : 'Missing Lines'}); 
             }
         });
         
-        setStats({ added, deleted, modified, unchanged });
+        setStats({ added, deleted, modified, unchanged, diameterDiff });
         setGlobalPoints(resultPoints);
         setDataId(`compare-${Date.now()}`);
         setLoading(false);
@@ -294,26 +354,31 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
             {stats && (
                 <div className="bg-[#0e3f53]/50 p-6 rounded-[2rem] border border-white/5 animate-in fade-in slide-in-from-bottom-4">
                     <h3 className="text-sm font-black uppercase tracking-wider mb-6 text-center">{lang === 'ar' ? 'نتائج المقارنة' : 'Comparison Results'}</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                         <div className="bg-black/30 p-4 rounded-2xl border border-green-500/20 flex flex-col items-center justify-center text-center">
                             <PlusCircle className="w-6 h-6 text-green-500 mb-2" />
                             <span className="text-2xl font-black text-green-500">{stats.added}</span>
-                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تمت إضافتها' : 'Added'}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'إضافة' : 'Added'}</span>
                         </div>
-                        <div className="bg-black/30 p-4 rounded-2xl border border-red-500/20 flex flex-col items-center justify-center text-center">
-                            <XCircle className="w-6 h-6 text-red-500 mb-2" />
-                            <span className="text-2xl font-black text-red-500">{stats.deleted}</span>
-                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تم حذفها' : 'Deleted'}</span>
+                        <div className="bg-black/30 p-4 rounded-2xl border border-black/50 flex flex-col items-center justify-center text-center shadow-lg">
+                            <XCircle className="w-6 h-6 text-white/60 mb-2" />
+                            <span className="text-2xl font-black text-white/80">{stats.deleted}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'نقص خطوط' : 'Missing'}</span>
+                        </div>
+                        <div className="bg-black/30 p-4 rounded-2xl border border-purple-500/20 flex flex-col items-center justify-center text-center">
+                            <Info className="w-6 h-6 text-purple-500 mb-2" />
+                            <span className="text-2xl font-black text-purple-500">{stats.diameterDiff || 0}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'اختلاف القطر' : 'Dia. Diff'}</span>
                         </div>
                         <div className="bg-black/30 p-4 rounded-2xl border border-orange-500/20 flex flex-col items-center justify-center text-center">
                             <PenTool className="w-6 h-6 text-orange-500 mb-2" />
                             <span className="text-2xl font-black text-orange-500">{stats.modified}</span>
-                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تم تعديلها' : 'Modified'}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'تعديل آخر' : 'Modified'}</span>
                         </div>
                         <div className="bg-black/30 p-4 rounded-2xl border border-slate-500/20 flex flex-col items-center justify-center text-center">
                             <CheckCircle className="w-6 h-6 text-slate-400 mb-2" />
                             <span className="text-2xl font-black text-slate-400">{stats.unchanged}</span>
-                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'بدون تغيير' : 'Unchanged'}</span>
+                            <span className="text-[10px] text-white/50 font-bold uppercase">{lang === 'ar' ? 'متطابق' : 'Matched'}</span>
                         </div>
                     </div>
                 </div>

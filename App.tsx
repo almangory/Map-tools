@@ -12,7 +12,8 @@ import {
   ChevronRight, ListOrdered, Locate, Zap, Navigation, FolderOpen, Package,
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
-  Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool
+  Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
+  Fingerprint
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -315,6 +316,7 @@ const App: React.FC = () => {
   const [dataId, setDataId] = useState<string>('');
   const [classifierRefZones, setClassifierRefZones] = useState<GeoPoint[]>([]);
   const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
+  const [segmentFilterQuery, setSegmentFilterQuery] = useState('');
 
   const [mergeThreshold, setMergeThreshold] = useState<number>(() => loadSavedPreference('mergeThreshold', 45));
   const [duplicateTolerance, setDuplicateTolerance] = useState<number>(() => loadSavedPreference('duplicateTolerance', 0.5));
@@ -505,6 +507,7 @@ const App: React.FC = () => {
 
     setTimeout(() => {
       let matchedCount = 0;
+      const uniqueSegmentIdsSet = new Set<string>();
 
       const stripHtml = (html: any): string => {
         if (!html) return '';
@@ -608,27 +611,26 @@ const App: React.FC = () => {
 
       const processPoints = (pts: GeoPoint[]) => {
         return pts.map(pt => {
-          let hasData = false;
+          let foundVal: string | null = null;
 
           // 1. Check attributes dictionary for explicit segment id key and non-empty valid content value
           if (pt.attributes) {
             for (const [key, val] of Object.entries(pt.attributes)) {
               if (isSegmentKey(key) && isValidValue(val, key)) {
-                hasData = true;
+                foundVal = stripHtml(val);
                 break;
               }
             }
           }
 
           // 2. Check description ONLY if explicit key:value pair or HTML table for segment id exists with valid value
-          if (!hasData && pt.description) {
-            if (extractSegmentIdFromDescription(pt.description)) {
-              hasData = true;
-            }
+          if (!foundVal && pt.description) {
+            foundVal = extractSegmentIdFromDescription(pt.description);
           }
 
-          if (hasData) {
+          if (foundVal) {
             matchedCount++;
+            uniqueSegmentIdsSet.add(foundVal.trim());
             return {
               ...pt,
               color: '#9000FF' // Vivid Electric Purple
@@ -654,8 +656,8 @@ const App: React.FC = () => {
       if (matchedCount > 0) {
         setStatusMessage(
           lang === 'ar'
-            ? `تم تلوين ${matchedCount} عنصراً باللون البنفسجي لوجود محتوى في (segment id).`
-            : `Colored ${matchedCount} elements in vivid purple for having valid segment id content.`
+            ? `تم فحص وتلوين ${matchedCount} عنصراً باللون البنفسجي لوجود محتوى في (segment id). وتم العثور على ${uniqueSegmentIdsSet.size} قيمة فريدة بدون تكرار.`
+            : `Colored ${matchedCount} elements in vivid purple for having valid segment id content. Found ${uniqueSegmentIdsSet.size} unique segment id values.`
         );
       } else {
         setStatusMessage(
@@ -1148,6 +1150,148 @@ const App: React.FC = () => {
       total: pointsToAnalyze.length
     };
   }, [activeFile, plannedStreets, globalPoints]);
+
+  const segmentIdAnalysis = useMemo(() => {
+    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    const pointsToAnalyze = rawPoints.filter(pt => !isBlackLine(pt));
+    if (pointsToAnalyze.length === 0) return null;
+
+    let validCount = 0;
+    let totalLengthWithSegmentId = 0;
+    const uniqueMap: Record<string, { idValue: string; count: number; totalLength: number; points: GeoPoint[] }> = {};
+
+    const stripHtmlLocal = (html: any): string => {
+      if (!html) return '';
+      return String(html)
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&#160;/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/[\s\u00A0]+/g, ' ')
+        .trim();
+    };
+
+    const isValidValueLocal = (val: any, keyName?: string): boolean => {
+      if (val === undefined || val === null) return false;
+      const cleanStr = stripHtmlLocal(val);
+      if (!cleanStr) return false;
+      if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) return false;
+      const lower = String(cleanStr || '').toLowerCase();
+      const emptyValues = new Set([
+        '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
+        'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
+        'no data', 'nodata', 'no_data', 'not available', 'not applicable',
+        'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
+        'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
+      ]);
+      if (emptyValues.has(lower)) return false;
+      const labelValues = new Set([
+        'segment id', 'segment_id', 'segmentid', 'segment no', 'segment_no', 'segmentno',
+        'segment number', 'segment', 'seg id', 'seg_id', 'segid', 'seg no', 'seg_no', 'segno',
+        'layer', 'شريحة', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم شريحة', 'كود شريحة',
+        'معرف شريحة', 'شريحة خريطة'
+      ]);
+      if (labelValues.has(lower)) return false;
+      if (keyName && lower === String(stripHtmlLocal(keyName) || '').toLowerCase()) return false;
+      if (/^(segment|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
+      return true;
+    };
+
+    const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
+
+    const isSegmentKey = (key: string): boolean => {
+      const norm = normalizeKey(key);
+      const segmentKeys = new Set([
+        'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno',
+        'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+        'رقمالقطع', 'كودالقطع', 'معرفالقطع'
+      ]);
+      return segmentKeys.has(norm);
+    };
+
+    const extractSegmentIdFromDesc = (description?: string): string | null => {
+      if (!description) return null;
+      const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+      const tableMatch = description.match(tableCellRegex);
+      if (tableMatch && tableMatch[1]) {
+        const val = stripHtmlLocal(tableMatch[1]);
+        if (isValidValueLocal(val, 'segment id')) return val;
+      }
+      const textRegex = /(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+      const textMatch = description.match(textRegex);
+      if (textMatch && textMatch[1]) {
+        const val = stripHtmlLocal(textMatch[1]);
+        if (isValidValueLocal(val, 'segment id')) return val;
+      }
+      return null;
+    };
+
+    pointsToAnalyze.forEach(pt => {
+      let foundVal: string | null = null;
+      if (pt.attributes) {
+        for (const [key, val] of Object.entries(pt.attributes)) {
+          if (isSegmentKey(key) && isValidValueLocal(val, key)) {
+            foundVal = stripHtmlLocal(val);
+            break;
+          }
+        }
+      }
+      if (!foundVal && pt.description) {
+        foundVal = extractSegmentIdFromDesc(pt.description);
+      }
+
+      if (foundVal) {
+        validCount++;
+        let len = pt.originalLength || 0;
+        if (len === 0 && pt.type === 'LineString' && pt.path) {
+          len = calculatePathLength(pt.path);
+        }
+        totalLengthWithSegmentId += len;
+
+        const normKey = foundVal.trim();
+        if (!uniqueMap[normKey]) {
+          uniqueMap[normKey] = { idValue: normKey, count: 0, totalLength: 0, points: [] };
+        }
+        uniqueMap[normKey].count += 1;
+        uniqueMap[normKey].totalLength += len;
+        uniqueMap[normKey].points.push(pt);
+      }
+    });
+
+    const uniqueDetails = Object.values(uniqueMap).sort((a, b) => b.count - a.count);
+
+    return {
+      totalElements: pointsToAnalyze.length,
+      validElementsCount: validCount,
+      uniqueSegmentIdsCount: uniqueDetails.length,
+      totalLengthWithSegmentId,
+      uniqueDetails
+    };
+  }, [globalPoints, plannedStreets, activeTab, activeFile]);
+
+  const highlightSpecificSegmentId = (pts: GeoPoint[]) => {
+    if (!pts || pts.length === 0) return;
+    const ptIds = new Set(pts.map(p => p.id));
+    setGlobalPoints(prev => prev.map(pt => ptIds.has(pt.id) ? { ...pt, color: '#00FFFF' } : pt));
+    setPlannedStreets(prev => prev.map(pt => ptIds.has(pt.id) ? { ...pt, color: '#00FFFF' } : pt));
+    setStatusMessage(lang === 'ar' ? `تم إبراز ${pts.length} عناصر للـ Segment ID المحدد على الخريطة باللون السماوي` : `Highlighted ${pts.length} elements for selected Segment ID in cyan`);
+  };
+
+  const exportSegmentIdReportExcel = () => {
+    if (!segmentIdAnalysis || segmentIdAnalysis.uniqueDetails.length === 0) return;
+    const rows = segmentIdAnalysis.uniqueDetails.map((item, index) => ({
+      'م': index + 1,
+      'Segment ID': item.idValue,
+      'عدد العناصر (Items Count)': item.count,
+      'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
+      'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
+      'نسبة الأطوال (%)': ((item.totalLength / (segmentIdAnalysis.totalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%'
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Segment_ID_Report');
+    XLSX.writeFile(workbook, `Segment_ID_Analysis_Report_${Date.now()}.xlsx`);
+  };
 
   const wMainlineStats = useMemo(() => {
     const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
@@ -3200,6 +3344,139 @@ const App: React.FC = () => {
                                 <Layers2 className="w-6 h-6 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
                             </button>
+
+                            {segmentIdAnalysis && segmentIdAnalysis.totalElements > 0 && (
+                              <div className="bg-[#120a21]/90 p-6 rounded-[2.5rem] border border-[#9000FF]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4">
+                                <div className="flex items-center justify-between border-b border-[#9000FF]/20 pb-3">
+                                  <div className="flex items-center gap-2">
+                                    <Fingerprint className="w-5 h-5 text-[#d8b4fe]" />
+                                    <h3 className="text-white font-black text-xs uppercase tracking-wider">
+                                      {lang === 'ar' ? 'تحليل محتوى وتكرار (Segment ID)' : 'Segment ID Content & Unique Analysis'}
+                                    </h3>
+                                  </div>
+                                  <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-[#9000FF]/20 text-[#d8b4fe] border border-[#9000FF]/40">
+                                    {lang === 'ar' ? 'نتائج الفحص' : 'Segment Results'}
+                                  </span>
+                                </div>
+
+                                {/* Metric Cards Grid */}
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                  {/* 1. Count of elements with segment id */}
+                                  <div className="bg-black/40 p-4 rounded-2xl border border-white/5 text-center flex flex-col justify-center">
+                                    <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+                                      {lang === 'ar' ? 'عناصر بها Segment ID' : 'Elements with Segment ID'}
+                                    </span>
+                                    <div className="flex items-baseline justify-center gap-1">
+                                      <span className="text-2xl font-black text-[#d8b4fe]">
+                                        {segmentIdAnalysis.validElementsCount}
+                                      </span>
+                                      <span className="text-[10px] font-bold text-white/40">
+                                        / {segmentIdAnalysis.totalElements}
+                                      </span>
+                                    </div>
+                                    <span className="text-[9px] font-black text-accent mt-1">
+                                      {((segmentIdAnalysis.validElementsCount / (segmentIdAnalysis.totalElements || 1)) * 100).toFixed(1)}% {lang === 'ar' ? 'من الإجمالي' : 'of total'}
+                                    </span>
+                                  </div>
+
+                                  {/* 2. Count of unique segment ids without duplicates */}
+                                  <div className="bg-black/40 p-4 rounded-2xl border border-accent/20 text-center flex flex-col justify-center">
+                                    <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+                                      {lang === 'ar' ? 'قيم فريدة (بدون تكرار)' : 'Unique Segment IDs'}
+                                    </span>
+                                    <span className="text-2xl font-black text-accent">
+                                      {segmentIdAnalysis.uniqueSegmentIdsCount}
+                                    </span>
+                                    <span className="text-[9px] font-bold text-white/40 mt-1">
+                                      {lang === 'ar' ? 'معرّفات غير مكررة' : 'Distinct ID values'}
+                                    </span>
+                                  </div>
+
+                                  {/* 3. Total length of segment id elements */}
+                                  <div className="bg-black/40 p-4 rounded-2xl border border-emerald-500/20 text-center flex flex-col justify-center col-span-2 md:col-span-1">
+                                    <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+                                      {lang === 'ar' ? 'إجمالي الأطوال المعرفة' : 'Total Segmented Length'}
+                                    </span>
+                                    <div className="flex items-baseline justify-center gap-1">
+                                      <span className="text-2xl font-black text-emerald-400">
+                                        {(segmentIdAnalysis.totalLengthWithSegmentId / 1000).toFixed(2)}
+                                      </span>
+                                      <span className="text-[10px] font-bold text-emerald-400/70">
+                                        {lang === 'ar' ? 'كم' : 'km'}
+                                      </span>
+                                    </div>
+                                    <span className="text-[9px] font-bold text-white/40 mt-1">
+                                      {lang === 'ar' ? 'للعناصر ذات المحتوى' : 'for valid segments'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Search & Breakdown list of unique segment IDs */}
+                                {segmentIdAnalysis.uniqueSegmentIdsCount > 0 && (
+                                  <div className="space-y-3 pt-2">
+                                    <div className="flex items-center justify-between">
+                                      <h4 className="text-[11px] font-black text-white/80 uppercase">
+                                        {lang === 'ar' ? 'تفاصيل قيم (Segment ID) الفريدة:' : 'Distinct Segment ID Breakdown:'}
+                                      </h4>
+                                      <span className="text-[9px] font-bold text-white/40">
+                                        {lang === 'ar' ? `عرض ${segmentIdAnalysis.uniqueDetails.length} قيم` : `Showing ${segmentIdAnalysis.uniqueDetails.length} values`}
+                                      </span>
+                                    </div>
+
+                                    {/* Filter input */}
+                                    <input
+                                      type="text"
+                                      placeholder={lang === 'ar' ? 'ابحث في قيم Segment ID...' : 'Filter Segment ID values...'}
+                                      value={segmentFilterQuery}
+                                      onChange={(e) => setSegmentFilterQuery(e.target.value)}
+                                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2 px-3 text-xs text-white placeholder-white/30 focus:outline-none focus:border-[#9000FF]"
+                                    />
+
+                                    {/* List of distinct values */}
+                                    <div className="max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                                      {segmentIdAnalysis.uniqueDetails
+                                        .filter(item => !segmentFilterQuery || item.idValue.toLowerCase().includes(segmentFilterQuery.toLowerCase()))
+                                        .map((item, idx) => (
+                                          <div key={idx} className="bg-black/30 hover:bg-black/50 p-3 rounded-xl border border-white/5 flex items-center justify-between gap-2 text-xs transition-colors">
+                                            <div className="flex items-center gap-2 overflow-hidden">
+                                              <span className="w-2 h-2 rounded-full bg-[#9000FF] shrink-0" />
+                                              <span className="font-mono font-bold text-[#d8b4fe] truncate dir-ltr">
+                                                {item.idValue}
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center gap-3 shrink-0">
+                                              <span className="text-[10px] font-black bg-white/10 text-white px-2 py-0.5 rounded-md">
+                                                #{item.count} {lang === 'ar' ? 'عنصر' : 'items'}
+                                              </span>
+                                              <span className="text-[10px] font-bold text-emerald-400">
+                                                {(item.totalLength / 1000).toFixed(3)} {lang === 'ar' ? 'كم' : 'km'}
+                                              </span>
+                                              <button
+                                                onClick={() => highlightSpecificSegmentId(item.points)}
+                                                className="text-[9px] bg-[#9000FF]/30 hover:bg-[#9000FF] text-white px-2 py-1 rounded-lg font-black transition-all"
+                                                title={lang === 'ar' ? 'تحديد وتكبير على الخريطة' : 'Highlight on map'}
+                                              >
+                                                {lang === 'ar' ? 'عرض' : 'View'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Export Excel for Segment ID report */}
+                                    <button
+                                      onClick={exportSegmentIdReportExcel}
+                                      className="w-full bg-[#9000FF]/20 border border-[#9000FF]/40 hover:bg-[#9000FF]/40 text-[#d8b4fe] font-black py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all mt-2"
+                                    >
+                                      <FileSpreadsheet className="w-4 h-4 text-[#d8b4fe]" />
+                                      <span>
+                                        {lang === 'ar' ? 'تصدير تقرير Segment ID إلى Excel' : 'Export Segment ID Report to Excel'}
+                                      </span>
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
 
                             <div className="grid grid-cols-2 gap-3">
                                 <button onClick={() => generateAnalysisPPTX(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-accent text-primary font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><Presentation className="w-5 h-5 group-hover:rotate-12 transition-transform" />{lang === 'ar' ? 'تصدير PPTX' : 'Export PPTX'}</button>
