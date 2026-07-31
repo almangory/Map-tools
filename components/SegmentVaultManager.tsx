@@ -15,8 +15,19 @@ import {
   RefreshCw,
   PlusCircle,
   AlertCircle,
-  FileText
+  FileText,
+  BarChart3
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Cell
+} from 'recharts';
 import {
   SavedProject,
   getAllSavedProjects,
@@ -49,6 +60,9 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
   const [customProjectName, setCustomProjectName] = useState<string>('');
   const [showSaveModal, setShowSaveModal] = useState<boolean>(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
+  const [chartMetric, setChartMetric] = useState<'length' | 'count'>('length');
+
+  const BAR_COLORS = ['#00e5ff', '#9000ff', '#10b981', '#f59e0b', '#ec4899', '#3b82f6', '#8b5cf6', '#14b8a6', '#f43f5e', '#a855f7'];
 
   const loadSavedProjectsFromDB = async () => {
     setLoading(true);
@@ -232,6 +246,22 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
       uniqueSegCount: totalUniqueSegs.size,
       totalValidItems
     };
+  }, [selectedProjectsList]);
+
+  const chartData = React.useMemo(() => {
+    return selectedProjectsList.map((p) => {
+      const lengthKm = parseFloat(((p.totalSegmentedLength || 0) / 1000).toFixed(3));
+      const lengthMeters = Math.round(p.totalSegmentedLength || 0);
+      return {
+        id: p.id,
+        shortName: p.name.length > 18 ? p.name.slice(0, 16) + '...' : p.name,
+        fullName: p.name,
+        lengthKm,
+        lengthMeters,
+        uniqueSegments: p.uniqueSegmentIdsCount || 0,
+        totalItems: p.totalElementsCount || 0
+      };
+    });
   }, [selectedProjectsList]);
 
   return (
@@ -422,6 +452,105 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
               <span className="text-base font-black text-white">{aggregatedStats.totalValidItems}</span>
             </div>
           </div>
+
+          {/* Bar Chart comparing Segment ID lengths across selected projects */}
+          {chartData.length > 0 && (
+            <div className="bg-black/40 p-5 rounded-2xl border border-white/10 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 bg-accent/20 rounded-lg text-accent border border-accent/30">
+                    <BarChart3 className="w-4 h-4" />
+                  </span>
+                  <h4 className="text-white font-black text-xs sm:text-sm">
+                    {lang === 'ar' ? 'رسم بياني مقارن لمشاريع Segment ID المحددة' : 'Selected Projects Segment ID Bar Chart'}
+                  </h4>
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-white/5 p-1 rounded-xl border border-white/10">
+                  <button
+                    onClick={() => setChartMetric('length')}
+                    className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
+                      chartMetric === 'length'
+                        ? 'bg-accent text-primary shadow-md'
+                        : 'text-white/60 hover:text-white'
+                    }`}
+                  >
+                    {lang === 'ar' ? 'مقارنة الأطوال (كم)' : 'Compare Length (km)'}
+                  </button>
+                  <button
+                    onClick={() => setChartMetric('count')}
+                    className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
+                      chartMetric === 'count'
+                        ? 'bg-[#9000FF] text-white shadow-md'
+                        : 'text-white/60 hover:text-white'
+                    }`}
+                  >
+                    {lang === 'ar' ? 'عدد الـ Segment IDs' : 'Unique Segment IDs'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="h-64 w-full pt-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 15, right: 15, left: 15, bottom: 25 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#ffffff15" vertical={false} />
+                    <XAxis
+                      dataKey="shortName"
+                      stroke="#ffffff70"
+                      fontSize={11}
+                      tickLine={false}
+                      interval={0}
+                      angle={-15}
+                      textAnchor="end"
+                    />
+                    <YAxis
+                      stroke="#ffffff70"
+                      fontSize={11}
+                      tickLine={false}
+                      unit={chartMetric === 'length' ? ' km' : ''}
+                    />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          const data = payload[0].payload;
+                          return (
+                            <div className="bg-[#031e29] border border-accent/40 p-3 rounded-2xl shadow-2xl text-xs space-y-1.5 z-[100]" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                              <p className="font-black text-white border-b border-white/10 pb-1">{data.fullName}</p>
+                              <p className="text-emerald-400 font-bold flex justify-between gap-4">
+                                <span>{lang === 'ar' ? 'إجمالي أطوال Segment IDs:' : 'Total Segment Length:'}</span>
+                                <span dir="ltr">{data.lengthKm} km ({data.lengthMeters.toLocaleString()} m)</span>
+                              </p>
+                              <p className="text-[#d8b4fe] font-bold flex justify-between gap-4">
+                                <span>{lang === 'ar' ? 'عدد Segment IDs الفريدة:' : 'Unique Segment IDs:'}</span>
+                                <span>{data.uniqueSegments}</span>
+                              </p>
+                              <p className="text-white/70 font-bold flex justify-between gap-4">
+                                <span>{lang === 'ar' ? 'إجمالي العناصر الخطية:' : 'Total Line Elements:'}</span>
+                                <span>{data.totalItems}</span>
+                              </p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar
+                      dataKey={chartMetric === 'length' ? 'lengthKm' : 'uniqueSegments'}
+                      radius={[8, 8, 0, 0]}
+                      maxBarSize={60}
+                    >
+                      {chartData.map((_, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={BAR_COLORS[index % BAR_COLORS.length]}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
 
           {/* Primary Action Button: Consolidated Excel Export */}
           <button

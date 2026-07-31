@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check } from 'lucide-react';
 import { GeoPoint, OverlapResult } from '../types';
 import { downloadKMZ } from '../services/kmlService';
@@ -128,6 +128,17 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
           }
         });
       }
+
+      if (p.description) {
+        const descAttrs = parseDescriptionToAttributes(p.description, {});
+        Object.entries(descAttrs).forEach(([k, v]) => {
+          if (!attrMap.has(k)) {
+            attrMap.set(k, String(v || '').substring(0, 30));
+          } else if (attrMap.get(k) === '' && v) {
+            attrMap.set(k, String(v).substring(0, 30));
+          }
+        });
+      }
       
       if (p.originalRow && headers) {
         headers.forEach((h, i) => {
@@ -147,6 +158,65 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   }, [points, headers]);
 
   const [mapping, setMapping] = useState<Record<string, { sourceField?: string; defaultValue?: string }>>({});
+
+  // Auto-map matching source attributes to target template fields
+  useEffect(() => {
+    if (sourceAttributes.length === 0) return;
+
+    setMapping(prev => {
+      const newMap = { ...prev };
+      let changed = false;
+
+      const findMatchingSource = (aliases: string[]) => {
+        return sourceAttributes.find(sa => {
+          const lower = sa.name.toLowerCase().trim();
+          return aliases.some(a => lower === a.toLowerCase() || lower.includes(a.toLowerCase()));
+        })?.name;
+      };
+
+      TEMPLATES[targetTemplate].fields.forEach(field => {
+        if (!newMap[field]?.sourceField) {
+          let matched: string | undefined;
+
+          if (field === 'INNERDIAMETER' || field === 'DIAMETER' || field === 'OUTERDIAMETER') {
+            matched = findMatchingSource([
+              'innerdiameter', 'outerdiameter', 'diameter', 'قطر_الخط', 'قطر الخط', 'قطر_الانبوب', 'قطر الانبوب', 'القطر', 'قطر', 'قطر_الشبكة', 'size'
+            ]);
+          } else if (field === 'MATERIAL') {
+            matched = findMatchingSource(['material', 'مادة', 'مادة_الخط', 'مادة الخط', 'نوع_الانبوب', 'نوع الانبوب']);
+          } else if (field === 'PROJECTNAME' || field === 'PROJECTID' || field === 'اسم المشروع') {
+            if (field.includes('ID') || field.includes('رقم')) {
+              matched = findMatchingSource(['projectid', 'project_id', 'رقم_المشروع', 'رقم المشروع', 'fid']);
+            } else {
+              matched = findMatchingSource(['projectname', 'project_name', 'اسم_المشروع', 'اسم المشروع']);
+            }
+          } else if (field === 'Drilling type') {
+            matched = findMatchingSource(['drilling type', 'drilling_type', 'نوع_الحفر', 'نوع الحفر']);
+          } else if (field === 'ZONE') {
+            matched = findMatchingSource(['zone_nu', 'zone', 'منطقة', 'النطاق', 'رقم_المنطقة']);
+          } else if (field === 'Permit No') {
+            matched = findMatchingSource(['permit no', 'permit_no', 'permit', 'رقم_الترخيص', 'رقم_الرخصة', 'رقم الرخصة']);
+          } else if (field === 'STREETNAME' || field === 'Street') {
+            matched = findMatchingSource(['streetname', 'street', 'الشارع', 'اسم_الشارع', 'الشارع (مسترجع)']);
+          } else if (field === 'DISTRICT') {
+            matched = findMatchingSource(['district', 'الحي', 'اسم_الحي', 'الحي (مسترجع)']);
+          } else if (field === 'CONTRACTOR') {
+            matched = findMatchingSource(['contractor', 'المقاول', 'اسم_المقاول']);
+          } else if (field === 'CONSULTANT') {
+            matched = findMatchingSource(['consultant', 'الاستشاري', 'اسم_الاستشاري']);
+          }
+
+          if (matched) {
+            newMap[field] = { ...newMap[field], sourceField: matched };
+            changed = true;
+          }
+        }
+      });
+
+      return changed ? newMap : prev;
+    });
+  }, [sourceAttributes, targetTemplate]);
+
   const [selectedFields, setSelectedFields] = useState<Record<string, string[]>>({
     pipes: [...TEMPLATES.pipes.fields],
     points: [...TEMPLATES.points.fields],
@@ -183,6 +253,13 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                if (p.attributes) {
                    const matchedKey = Object.keys(p.attributes).find(k => String(k || '').toLowerCase() === sourceFieldLower);
                    if (matchedKey && p.attributes[matchedKey] !== undefined && p.attributes[matchedKey] !== null) val = String(p.attributes[matchedKey]);
+               }
+               if (!val && p.description) {
+                   const descAttrs = parseDescriptionToAttributes(p.description, {});
+                   const matchedKey = Object.keys(descAttrs).find(k => String(k || '').toLowerCase() === sourceFieldLower);
+                   if (matchedKey && descAttrs[matchedKey] !== undefined && descAttrs[matchedKey] !== null) {
+                       val = String(descAttrs[matchedKey]);
+                   }
                }
                if (!val && p.originalRow && headers) {
                    const matchedIndex = headers.findIndex(h => String(h || '').toLowerCase() === sourceFieldLower);

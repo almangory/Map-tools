@@ -36,6 +36,107 @@
         --accent-hover: #6a9a00;
       }
 
+      body.light-mode {
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+      }
+
+      /* Comprehensive Light Mode styling overrides */
+      html.light-mode body,
+      body.light-mode {
+        background-color: #f8fafc !important;
+        color: #0f172a !important;
+      }
+
+      body.light-mode .bg-\[\#0a2633\],
+      body.light-mode .bg-\[\#0c3647\],
+      body.light-mode .bg-\[\#031e29\],
+      body.light-mode .bg-\[\#08222f\],
+      body.light-mode .bg-\[\#061e29\],
+      body.light-mode .bg-\[\#0e3f53\] {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        border-color: #cbd5e1 !important;
+      }
+
+      body.light-mode .bg-black\/40,
+      body.light-mode .bg-black\/30,
+      body.light-mode .bg-black\/20,
+      body.light-mode .bg-black\/10 {
+        background-color: #f1f5f9 !important;
+        color: #0f172a !important;
+        border-color: #cbd5e1 !important;
+      }
+
+      body.light-mode .bg-white\/5 {
+        background-color: #f8fafc !important;
+        border-color: #e2e8f0 !important;
+      }
+
+      body.light-mode .bg-white\/10 {
+        background-color: #e2e8f0 !important;
+        border-color: #cbd5e1 !important;
+      }
+
+      body.light-mode .bg-white\/20 {
+        background-color: #cbd5e1 !important;
+      }
+
+      /* Light mode text colors */
+      body.light-mode .text-white {
+        color: #0f172a !important;
+      }
+
+      body.light-mode .text-white\/90,
+      body.light-mode .text-white\/80,
+      body.light-mode .text-white\/70 {
+        color: #1e293b !important;
+      }
+
+      body.light-mode .text-white\/60,
+      body.light-mode .text-white\/50,
+      body.light-mode .text-white\/40,
+      body.light-mode .text-white\/30 {
+        color: #475569 !important;
+      }
+
+      /* Light mode borders */
+      body.light-mode .border-white\/5,
+      body.light-mode .border-white\/10,
+      body.light-mode .border-white\/15,
+      body.light-mode .border-white\/20 {
+        border-color: #cbd5e1 !important;
+      }
+
+      /* Preserve contrast for buttons with bright background colors */
+      body.light-mode button.bg-accent,
+      body.light-mode .bg-accent {
+        color: #0f172a !important;
+      }
+
+      body.light-mode button.bg-[#9000FF],
+      body.light-mode .bg-\[\#9000FF\],
+      body.light-mode button.bg-emerald-600,
+      body.light-mode .bg-emerald-600,
+      body.light-mode button.bg-red-600,
+      body.light-mode .bg-red-600 {
+        color: #ffffff !important;
+      }
+
+      /* Form inputs in light mode */
+      body.light-mode input:not([type="checkbox"]),
+      body.light-mode select,
+      body.light-mode textarea {
+        background-color: #ffffff !important;
+        color: #0f172a !important;
+        border-color: #94a3b8 !important;
+      }
+
+      body.light-mode input::placeholder,
+      body.light-mode textarea::placeholder {
+        color: #94a3b8 !important;
+      }
+
       .custom-scrollbar::-webkit-scrollbar {
         width: 4px;
       }
@@ -43,12 +144,13 @@
         background: transparent;
       }
       .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.1);
+        background: rgba(148, 163, 184, 0.3);
         border-radius: 10px;
       }
     </style>
     <script>
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             fontFamily: {

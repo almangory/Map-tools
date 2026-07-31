@@ -13,7 +13,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive
+  Fingerprint, HardDrive, Moon, Sun
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -301,7 +301,34 @@ const UniversalExportBar = ({
 const App: React.FC = () => {
   const [lang, setLang] = useState<Language>(() => loadSavedPreference('lang', 'ar'));
   const [theme, setTheme] = useState<'default' | 'nwc'>(() => loadSavedPreference('theme', 'default'));
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => loadSavedPreference('isDarkMode', true));
   const t = translations[lang];
+
+  useEffect(() => {
+    savePreference('lang', lang);
+  }, [lang]);
+
+  useEffect(() => {
+    savePreference('theme', theme);
+    if (theme === 'nwc') {
+      document.body.classList.add('theme-nwc');
+    } else {
+      document.body.classList.remove('theme-nwc');
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    savePreference('isDarkMode', isDarkMode);
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+      document.body.classList.remove('light-mode');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.body.classList.remove('dark');
+      document.body.classList.add('light-mode');
+    }
+  }, [isDarkMode]);
 
   const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault'>('converter');
   const [showManual, setShowManual] = useState(false);
@@ -2370,7 +2397,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#0a2633] font-sans overflow-hidden" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+    <div className={cn("flex flex-col h-screen w-screen font-sans overflow-hidden transition-colors duration-300", isDarkMode ? "bg-[#0a2633] text-white" : "bg-slate-100 text-slate-900")} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
       {/* Floating PWA Install Banner */}
       {showInstallBanner && !isStandalone && (
         <div className="bg-gradient-to-r from-accent via-amber-400 to-accent text-primary px-4 py-2 flex items-center justify-between text-xs font-black shadow-xl z-[1000] border-b border-white/20 shrink-0 animate-in slide-in-from-top duration-300">
@@ -2443,6 +2470,13 @@ const App: React.FC = () => {
             )}
           </button>
 
+          <button
+            onClick={() => setIsDarkMode(!isDarkMode)}
+            className="p-1.5 bg-white/10 hover:bg-white/20 text-white rounded-lg border border-white/15 transition-all active:scale-95 flex items-center justify-center"
+            title={isDarkMode ? (lang === 'ar' ? 'التحويل للوضع النهاري ☀️' : 'Light Mode ☀️') : (lang === 'ar' ? 'التحويل للوضع الليلي 🌙' : 'Dark Mode 🌙')}
+          >
+            {isDarkMode ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-cyan-300" />}
+          </button>
           <button
             onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
             className="px-2 py-1 bg-white/5 text-white/80 rounded-lg text-xs font-bold border border-white/10"
@@ -2521,6 +2555,10 @@ const App: React.FC = () => {
              <button onClick={() => setShowManual(true)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1" title={lang === 'ar' ? 'دليل المستخدم' : 'User Guide'}><FileText className="w-5 h-5 text-accent" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'الدليل' : 'GUIDE'}</span></button>
              <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Languages className="w-5 h-5" /><span className="text-[8px] font-bold">{String(lang || '').toUpperCase()}</span></button>
              <button onClick={() => setTheme(theme === 'default' ? 'nwc' : 'default')} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Palette className="w-5 h-5" /><span className="text-[8px] font-bold">THEME</span></button>
+             <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1 group" title={isDarkMode ? (lang === 'ar' ? 'التحويل للوضع النهاري ☀️' : 'Switch to Light Mode ☀️') : (lang === 'ar' ? 'التحويل للوضع الليلي 🌙' : 'Switch to Dark Mode 🌙')}>
+                {isDarkMode ? <Sun className="w-5 h-5 text-amber-300 group-hover:scale-110 transition-transform" /> : <Moon className="w-5 h-5 text-cyan-300 group-hover:scale-110 transition-transform" />}
+                <span className="text-[8px] font-bold">{isDarkMode ? (lang === 'ar' ? 'نهاري' : 'LIGHT') : (lang === 'ar' ? 'ليلي' : 'DARK')}</span>
+             </button>
              <button onClick={() => setShowSettingsModal(true)} className="p-2 sm:p-3 text-white/40 hover:text-accent transition-all flex flex-col items-center gap-1"><Settings2 className="w-5 h-5" /><span className="text-[8px] font-bold">{lang === 'ar' ? 'إعدادات' : 'SETTINGS'}</span></button>
 
           </div>
@@ -4220,7 +4258,33 @@ const App: React.FC = () => {
                              </div>
                           </div>
 
-                          {/* 2. Geocoding & Coordinate System */}
+                          {/* Dark Mode / Display Theme Mode */}
+                           <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
+                              <div className="flex items-center gap-2 text-accent">
+                                 <Palette className="w-4 h-4" />
+                                 <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'نمط الرؤية (Dark / Light Mode)' : 'Display Theme Mode'}</h3>
+                              </div>
+                              <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
+                                 <button
+                                   type="button"
+                                   onClick={() => setIsDarkMode(true)}
+                                   className={cn("flex-1 py-2.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2", isDarkMode ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
+                                 >
+                                   <Moon className="w-4 h-4" />
+                                   <span>{t.darkMode} 🌙</span>
+                                 </button>
+                                 <button
+                                   type="button"
+                                   onClick={() => setIsDarkMode(false)}
+                                   className={cn("flex-1 py-2.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2", !isDarkMode ? "bg-amber-400 text-slate-900 shadow font-extrabold" : "text-white/60 hover:text-white")}
+                                 >
+                                   <Sun className="w-4 h-4" />
+                                   <span>{t.lightMode} ☀️</span>
+                                 </button>
+                              </div>
+                           </div>
+
+                           {/* 2. Geocoding & Coordinate System */}
                           <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
                              <div className="flex items-center gap-2 text-accent">
                                 <Target className="w-4 h-4" />

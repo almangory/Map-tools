@@ -157,10 +157,17 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
             const k = text.substring(0, sepIdx).trim();
             const v = text.substring(sepIdx + 1).trim();
             if (k && !attributes[k]) attributes[k] = v;
+        } else {
+            const spaceIdx = text.indexOf(' ');
+            if (spaceIdx > 0) {
+                const k = text.substring(0, spaceIdx).trim();
+                const v = text.substring(spaceIdx + 1).trim();
+                if (k && k.length < 50 && !attributes[k]) attributes[k] = v;
+            }
         }
     }
 
-    // 3. Parse <br> or line break separated Key: Value or Key = Value
+    // 3. Parse <br> or line break separated Key: Value, Key = Value, or Key Value
     const lines = cleanDesc
         .split(/<br\s*\/?>|<\/p>|\r?\n/gi)
         .map(l => stripHtml(l))
@@ -189,15 +196,35 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                 attributes[k] = v;
             }
         } else if (sepIdx === -1) {
-            const knownKeys = ['segment id', 'Permit No', 'ZONE', 'DIAMETER', 'SHAPE_Length', 'SHAPE', 'نوع الحفر', 'CONTRACTOR', 'PROJECTNAME', 'PROJECTID', 'Drilling type', 'Stage', 'LINENO', 'MATERIAL', 'ACTUALLENGTH', 'ASSETSTATUS', 'STREETNAME', 'DISTRICT', 'الشارع', 'الحي'];
-            for (const key of knownKeys) {
+            const knownMultiWordKeys = [
+                'قطر الخط', 'قطر الأنبوب', 'قطر الانبوب', 'نوع الحفر', 'اسم المشروع', 'رقم المشروع',
+                'القطر الداخلي', 'القطر الخارجي', 'اسم الشارع', 'اسم الحي', 'سنة التركيب', 'سنة التشغيل',
+                'حالة العنصر', 'نوع الخرسانة', 'طول الخط', 'مادة الخط', 'قطر الانبوب مم', 'قطر الخط مم',
+                'segment id', 'Permit No', 'Drilling type', 'Pipe Diameter', 'Line No', 'Asset Status',
+                'Project Name', 'Project ID', 'Inner Diameter', 'Outer Diameter'
+            ];
+            
+            let matchedMulti = false;
+            for (const key of knownMultiWordKeys) {
                 if (line.toLowerCase().startsWith(key.toLowerCase() + ' ')) {
                     const k = key;
                     const v = line.substring(key.length).trim();
-                    if (!attributes[k]) {
+                    if (v && !attributes[k]) {
                         attributes[k] = v;
                     }
+                    matchedMulti = true;
                     break;
+                }
+            }
+
+            if (!matchedMulti) {
+                const spaceIdx = line.indexOf(' ');
+                if (spaceIdx > 0 && spaceIdx < line.length - 1) {
+                    const k = line.substring(0, spaceIdx).trim();
+                    const v = line.substring(spaceIdx + 1).trim();
+                    if (k && k.length < 50 && v && !attributes[k]) {
+                        attributes[k] = v;
+                    }
                 }
             }
         }
