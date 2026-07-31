@@ -1257,7 +1257,79 @@ const App: React.FC = () => {
       }
     });
 
-    const uniqueDetails = Object.values(uniqueMap).sort((a, b) => b.count - a.count);
+    const extractAttrValue = (points: GeoPoint[], keyCandidates: string[], regexCandidates: RegExp[]): string => {
+      const foundSet = new Set<string>();
+      for (const pt of points) {
+        let valFound = '';
+        if (pt.attributes) {
+          for (const [k, v] of Object.entries(pt.attributes)) {
+            if (v === undefined || v === null) continue;
+            const cleanV = String(v).replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, '').trim();
+            if (!cleanV || cleanV === 'null' || cleanV === 'undefined' || cleanV === '-' || cleanV === '0') continue;
+            const kNorm = k.toLowerCase().replace(/[\s_#-]/g, '');
+            for (const candidate of keyCandidates) {
+              if (kNorm === candidate.toLowerCase().replace(/[\s_#-]/g, '')) {
+                valFound = cleanV;
+                break;
+              }
+            }
+            if (valFound) break;
+          }
+        }
+        if (!valFound && pt.description) {
+          for (const rgx of regexCandidates) {
+            const match = pt.description.match(rgx);
+            if (match && match[1]) {
+              const cleanV = String(match[1]).replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, '').trim();
+              if (cleanV && cleanV !== 'null' && cleanV !== 'undefined' && cleanV !== '-' && cleanV !== '0') {
+                valFound = cleanV;
+                break;
+              }
+            }
+          }
+        }
+        if (valFound) {
+          foundSet.add(valFound);
+        }
+      }
+      return Array.from(foundSet).join(' / ');
+    };
+
+    const uniqueDetails = Object.values(uniqueMap).map(item => {
+      const projectName = extractAttrValue(
+        item.points,
+        ['PROJECTNAME', 'PROJECT_NAME', 'PROJECT NAME', 'ProjectName', 'اسم المشروع', 'المشروع'],
+        [
+          /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:PROJECTNAME|PROJECT_NAME|PROJECT\s*NAME|اسم\s*المشروع|المشروع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+          /(?:PROJECTNAME|PROJECT_NAME|PROJECT\s*NAME|اسم\s*المشروع|المشروع)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+        ]
+      );
+
+      const projectId = extractAttrValue(
+        item.points,
+        ['PROJECTID', 'PROJECT_ID', 'PROJECT ID', 'ProjectId', 'رقم المشروع', 'رمز المشروع', 'كود المشروع'],
+        [
+          /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:PROJECTID|PROJECT_ID|PROJECT\s*ID|رقم\s*المشروع|رمز\s*المشروع|كود\s*المشروع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+          /(?:PROJECTID|PROJECT_ID|PROJECT\s*ID|رقم\s*المشروع|رمز\s*المشروع|كود\s*المشروع)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+        ]
+      );
+
+      const contractor = extractAttrValue(
+        item.points,
+        ['CONTRACTOR', 'Contractor', 'المقاول', 'اسم المقاول', 'المقاول المنفذ', 'CONTRACTOR_NAME', 'CONTRACTORNAME'],
+        [
+          /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:CONTRACTOR|Contractor|المقاول|اسم\s*المقاول)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+          /(?:CONTRACTOR|Contractor|المقاول|اسم\s*المقاول)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+        ]
+      );
+
+      return {
+        ...item,
+        projectName,
+        projectId,
+        contractor
+      };
+    }).sort((a, b) => b.count - a.count);
 
     return {
       totalElements: pointsToAnalyze.length,
@@ -1278,18 +1350,131 @@ const App: React.FC = () => {
 
   const exportSegmentIdReportExcel = () => {
     if (!segmentIdAnalysis || segmentIdAnalysis.uniqueDetails.length === 0) return;
-    const rows = segmentIdAnalysis.uniqueDetails.map((item, index) => ({
+
+    const getMapLink = (pts: GeoPoint[]): string => {
+      if (!pts || pts.length === 0) return '';
+      const firstPt = pts[0];
+      let lat = firstPt.y;
+      let lon = firstPt.x;
+      if ((!lat || !lon) && firstPt.path && firstPt.path.length > 0) {
+        lat = firstPt.path[0].y;
+        lon = firstPt.path[0].x;
+      }
+      if (!lat || !lon) return '';
+      return `https://www.google.com/maps?q=${lat},${lon}`;
+    };
+
+    const extractAttrValueLocal = (points: GeoPoint[], keyCandidates: string[], regexCandidates: RegExp[]): string => {
+      const foundSet = new Set<string>();
+      for (const pt of points) {
+        let valFound = '';
+        if (pt.attributes) {
+          for (const [k, v] of Object.entries(pt.attributes)) {
+            if (v === undefined || v === null) continue;
+            const cleanV = String(v).replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, '').trim();
+            if (!cleanV || cleanV === 'null' || cleanV === 'undefined' || cleanV === '-' || cleanV === '0') continue;
+            const kNorm = k.toLowerCase().replace(/[\s_#-]/g, '');
+            for (const candidate of keyCandidates) {
+              if (kNorm === candidate.toLowerCase().replace(/[\s_#-]/g, '')) {
+                valFound = cleanV;
+                break;
+              }
+            }
+            if (valFound) break;
+          }
+        }
+        if (!valFound && pt.description) {
+          for (const rgx of regexCandidates) {
+            const match = pt.description.match(rgx);
+            if (match && match[1]) {
+              const cleanV = String(match[1]).replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, '').trim();
+              if (cleanV && cleanV !== 'null' && cleanV !== 'undefined' && cleanV !== '-' && cleanV !== '0') {
+                valFound = cleanV;
+                break;
+              }
+            }
+          }
+        }
+        if (valFound) {
+          foundSet.add(valFound);
+        }
+      }
+      return Array.from(foundSet).join(' / ');
+    };
+
+    // Sheet 1: Detailed / Statistical Report (Unique Segment IDs Summary)
+    const rowsSheet1 = segmentIdAnalysis.uniqueDetails.map((item, index) => ({
+      'PROJECTNAME': item.projectName || '',
+      'PROJECTID': item.projectId || '',
+      'CONTRACTOR': item.contractor || '',
       'م': index + 1,
       'Segment ID': item.idValue,
       'عدد العناصر (Items Count)': item.count,
       'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
       'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
-      'نسبة الأطوال (%)': ((item.totalLength / (segmentIdAnalysis.totalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%'
+      'نسبة الأطوال (%)': ((item.totalLength / (segmentIdAnalysis.totalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%',
+      'رابط موقع الخريطة (Google Maps Link)': getMapLink(item.points)
     }));
 
-    const worksheet = XLSX.utils.json_to_sheet(rows);
+    // Sheet 2: ALL Segment ID elements list (item by item, including all duplicates)
+    let itemCounter = 0;
+    const rowsSheet2: any[] = [];
+    segmentIdAnalysis.uniqueDetails.forEach((item) => {
+      item.points.forEach((pt) => {
+        itemCounter++;
+
+        const ptProjectName = extractAttrValueLocal(
+          [pt],
+          ['PROJECTNAME', 'PROJECT_NAME', 'PROJECT NAME', 'ProjectName', 'اسم المشروع', 'المشروع'],
+          [
+            /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:PROJECTNAME|PROJECT_NAME|PROJECT\s*NAME|اسم\s*المشروع|المشروع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+            /(?:PROJECTNAME|PROJECT_NAME|PROJECT\s*NAME|اسم\s*المشروع|المشروع)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+          ]
+        ) || item.projectName || '';
+
+        const ptProjectId = extractAttrValueLocal(
+          [pt],
+          ['PROJECTID', 'PROJECT_ID', 'PROJECT ID', 'ProjectId', 'رقم المشروع', 'رمز المشروع', 'كود المشروع'],
+          [
+            /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:PROJECTID|PROJECT_ID|PROJECT\s*ID|رقم\s*المشروع|رمز\s*المشروع|كود\s*المشروع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+            /(?:PROJECTID|PROJECT_ID|PROJECT\s*ID|رقم\s*المشروع|رمز\s*المشروع|كود\s*المشروع)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+          ]
+        ) || item.projectId || '';
+
+        const ptContractor = extractAttrValueLocal(
+          [pt],
+          ['CONTRACTOR', 'Contractor', 'المقاول', 'اسم المقاول', 'المقاول المنفذ', 'CONTRACTOR_NAME', 'CONTRACTORNAME'],
+          [
+            /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:CONTRACTOR|Contractor|المقاول|اسم\s*المقاول)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+            /(?:CONTRACTOR|Contractor|المقاول|اسم\s*المقاول)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+          ]
+        ) || item.contractor || '';
+
+        let len = pt.originalLength || 0;
+        if (len === 0 && pt.type === 'LineString' && pt.path) {
+          len = calculatePathLength(pt.path);
+        }
+
+        rowsSheet2.push({
+          'PROJECTNAME': ptProjectName,
+          'PROJECTID': ptProjectId,
+          'CONTRACTOR': ptContractor,
+          'م': itemCounter,
+          'Segment ID': item.idValue,
+          'الطول (متر)': len ? len.toFixed(2) : '0.00',
+          'رابط موقع الخريطة (Google Maps Link)': getMapLink([pt])
+        });
+      });
+    });
+
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Segment_ID_Report');
+
+    const worksheet1 = XLSX.utils.json_to_sheet(rowsSheet1);
+    XLSX.utils.book_append_sheet(workbook, worksheet1, lang === 'ar' ? 'ملخص_Segment_ID' : 'Segment_ID_Summary');
+
+    const worksheet2 = XLSX.utils.json_to_sheet(rowsSheet2);
+    XLSX.utils.book_append_sheet(workbook, worksheet2, lang === 'ar' ? 'جميع_قيم_Segment_ID' : 'All_Segment_IDs');
+
     XLSX.writeFile(workbook, `Segment_ID_Analysis_Report_${Date.now()}.xlsx`);
   };
 
@@ -3435,16 +3620,46 @@ const App: React.FC = () => {
                                     {/* List of distinct values */}
                                     <div className="max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                                       {segmentIdAnalysis.uniqueDetails
-                                        .filter(item => !segmentFilterQuery || item.idValue.toLowerCase().includes(segmentFilterQuery.toLowerCase()))
+                                        .filter(item => {
+                                          if (!segmentFilterQuery) return true;
+                                          const q = segmentFilterQuery.toLowerCase();
+                                          return (
+                                            item.idValue.toLowerCase().includes(q) ||
+                                            (item.projectName && item.projectName.toLowerCase().includes(q)) ||
+                                            (item.projectId && item.projectId.toLowerCase().includes(q)) ||
+                                            (item.contractor && item.contractor.toLowerCase().includes(q))
+                                          );
+                                        })
                                         .map((item, idx) => (
-                                          <div key={idx} className="bg-black/30 hover:bg-black/50 p-3 rounded-xl border border-white/5 flex items-center justify-between gap-2 text-xs transition-colors">
-                                            <div className="flex items-center gap-2 overflow-hidden">
-                                              <span className="w-2 h-2 rounded-full bg-[#9000FF] shrink-0" />
-                                              <span className="font-mono font-bold text-[#d8b4fe] truncate dir-ltr">
-                                                {item.idValue}
-                                              </span>
+                                          <div key={idx} className="bg-black/30 hover:bg-black/50 p-3 rounded-xl border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs transition-colors">
+                                            <div className="flex flex-col gap-1 overflow-hidden">
+                                              <div className="flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full bg-[#9000FF] shrink-0" />
+                                                <span className="font-mono font-bold text-[#d8b4fe] truncate dir-ltr">
+                                                  {item.idValue}
+                                                </span>
+                                              </div>
+                                              {(item.projectName || item.projectId || item.contractor) && (
+                                                <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-white/60 pr-4">
+                                                  {item.projectName && (
+                                                    <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-accent">
+                                                      {item.projectName}
+                                                    </span>
+                                                  )}
+                                                  {item.projectId && (
+                                                    <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-white/80">
+                                                      ID: {item.projectId}
+                                                    </span>
+                                                  )}
+                                                  {item.contractor && (
+                                                    <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-amber-300">
+                                                      {item.contractor}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              )}
                                             </div>
-                                            <div className="flex items-center gap-3 shrink-0">
+                                            <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
                                               <span className="text-[10px] font-black bg-white/10 text-white px-2 py-0.5 rounded-md">
                                                 #{item.count} {lang === 'ar' ? 'عنصر' : 'items'}
                                               </span>
@@ -3841,7 +4056,7 @@ const App: React.FC = () => {
                 )}
            </div>
 
-           <div className="p-8 border-t border-white/5 bg-black/10 shrink-0"><div className="space-y-2"><div className="flex items-center gap-2 text-white/40 group"><Mail className="w-3 h-3 group-hover:text-accent transition-colors" /><span className="text-[10px] font-bold">{t.contactDev}:</span><a href="mailto:oosman@nwc.com.sa" className="text-[10px] font-black text-accent hover:underline">oosman@nwc.com.sa</a></div><p className="text-[9px] font-black text-white/30 uppercase tracking-widest">{t.developedBy}</p></div></div>
+           <div className="p-8 border-t border-white/5 bg-black/10 shrink-0"><div className="space-y-2"><div className="flex items-center gap-2 text-white/40 group"><Mail className="w-3 h-3 group-hover:text-accent transition-colors" /><span className="text-[10px] font-bold">{t.contactDev}:</span><a href="mailto:almangoryo@gmail.com" className="text-[10px] font-black text-accent hover:underline">almangoryo@gmail.com</a></div><p className="text-[9px] font-black text-white/30 uppercase tracking-widest">{t.developedBy}</p></div></div>
       </aside>
 
       <main className={cn("flex-1 relative bg-[#0d1b24]", mobileView === 'map' ? "flex w-full flex-1 h-full" : "hidden lg:flex")}>
