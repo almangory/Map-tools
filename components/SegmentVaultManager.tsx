@@ -288,11 +288,11 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
               setShowSaveModal(true);
             }}
             disabled={activePoints.length === 0}
-            className={React.useMemo(() => {
-              return activePoints.length > 0
+            className={
+              activePoints.length > 0
                 ? "bg-[#9000FF] hover:bg-[#a62eff] text-white font-black px-5 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg hover:scale-105 active:scale-95 transition-all"
-                : "bg-white/5 text-white/30 border border-white/10 px-4 py-2.5 rounded-xl text-xs cursor-not-allowed";
-            }, [activePoints])}
+                : "bg-white/5 text-white/30 border border-white/10 px-4 py-2.5 rounded-xl text-xs cursor-not-allowed"
+            }
           >
             <Save className="w-4 h-4" />
             <span>{lang === 'ar' ? 'حفظ العمل الحالي في ذاكرة الجهاز 💾' : 'Save Active Workspace to Memory 💾'}</span>
@@ -427,11 +427,11 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
           <button
             onClick={handleExportAggregated}
             disabled={selectedIds.size === 0}
-            className={React.useMemo(() => {
-              return selectedIds.size > 0
+            className={
+              selectedIds.size > 0
                 ? "w-full bg-[#9000FF] hover:bg-[#a62eff] text-white font-black py-4 rounded-2xl text-xs sm:text-sm flex items-center justify-center gap-3 shadow-2xl hover:scale-[1.01] active:scale-95 transition-all border border-[#d8b4fe]/30"
-                : "w-full bg-white/5 text-white/20 border border-white/5 font-black py-4 rounded-2xl text-xs cursor-not-allowed";
-            }, [selectedIds.size])}
+                : "w-full bg-white/5 text-white/20 border border-white/5 font-black py-4 rounded-2xl text-xs cursor-not-allowed"
+            }
           >
             <FileSpreadsheet className="w-5 h-5 text-[#d8b4fe]" />
             <span>
@@ -474,11 +474,11 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
               return (
                 <div
                   key={proj.id}
-                  className={React.useMemo(() => {
-                    return isSelected
+                  className={
+                    isSelected
                       ? "p-5 bg-[#0c3647]/90 border-2 border-accent rounded-3xl shadow-xl transition-all space-y-4"
-                      : "p-5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-3xl transition-all space-y-4";
-                  }, [isSelected])}
+                      : "p-5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-3xl transition-all space-y-4"
+                  }
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3">
