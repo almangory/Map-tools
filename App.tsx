@@ -13,7 +13,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint
+  Fingerprint, HardDrive
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -35,6 +35,7 @@ import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
 import { FileComparator } from './components/FileComparator';
 import { MapClassifier } from './components/MapClassifier';
+import { SegmentVaultManager } from './components/SegmentVaultManager';
 import { InstallPwaModal } from './components/InstallPwaModal';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
@@ -302,7 +303,7 @@ const App: React.FC = () => {
   const [theme, setTheme] = useState<'default' | 'nwc'>(() => loadSavedPreference('theme', 'default'));
   const t = translations[lang];
 
-  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator'>('converter');
+  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault'>('converter');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -864,6 +865,25 @@ const App: React.FC = () => {
     } else {
       setOverlapResults(detectLineIntersections(checkTarget));
     }
+  };
+
+  const handleLoadSavedProjectToMap = (points: GeoPoint[], name: string) => {
+    setGlobalPoints(points);
+    setActiveFile({
+      name: name,
+      filename: name,
+      type: 'kml',
+      data: points,
+      headers: extractAllPointAttributes(points)
+    });
+    setDataId(`loaded-project-${Date.now()}`);
+    setMobileView('map');
+    setStatusMessage(
+      lang === 'ar'
+        ? `تم تحميل مشروع "${name}" بنجاح على الخريطة والجلسة النشطة!`
+        : `Successfully loaded project "${name}" to the map and active session!`
+    );
+    setTimeout(() => setStatusMessage(''), 4000);
   };
 
   const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
@@ -2444,6 +2464,7 @@ const App: React.FC = () => {
           { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
           { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
           { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+          { id: 'segment-vault', icon: <HardDrive />, label: lang === 'ar' ? 'حافظة Segment' : 'Vault' },
           { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف' : 'Classifier' },
           { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
           { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
@@ -2476,6 +2497,7 @@ const App: React.FC = () => {
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
                { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
                { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+               { id: 'segment-vault', icon: <HardDrive />, label: lang === 'ar' ? 'حافظة Segment' : 'Segment Vault' },
                { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف الخرائط' : 'Map Classifier' },
                { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
                { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
@@ -4053,6 +4075,14 @@ const App: React.FC = () => {
                 )}
                 {activeTab === 'comparator' && (
                   <FileComparator lang={lang} setGlobalPoints={setGlobalPoints} setDataId={setDataId} />
+                )}
+                {activeTab === 'segment-vault' && (
+                  <SegmentVaultManager
+                    lang={lang}
+                    activePoints={globalPoints.length > 0 ? globalPoints : plannedStreets}
+                    activeFileName={activeFile?.filename}
+                    onLoadProjectToMap={handleLoadSavedProjectToMap}
+                  />
                 )}
            </div>
 
