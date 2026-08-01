@@ -3748,9 +3748,9 @@ const App: React.FC = () => {
                                   onKmzExport={() => {
                                       executeWithStreetFetching(globalPoints, selectedHeaders, () => {
                                           if (converterExportAsZip && groupingMode !== 'none') {
-                                              downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
+                                              downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
                                           } else {
-                                              downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile.headers, selectedHeaders);
+                                              downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
                                           }
                                       });
                                   }}

@@ -1,8 +1,27 @@
 
 import JSZipModule from 'jszip';
 import { GeoPoint, KmlExportOptions, SplitterMode } from '../types';
+import { matchStatusByColor } from './colorUtils';
 
 const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule as any).default || JSZipModule;
+
+export const getEffectiveColor = (pt: GeoPoint, options?: KmlExportOptions): string => {
+    let colorHex = pt.color;
+    const type = pt.type || 'Point';
+    if (type === 'Polygon' && options?.polygonStyle?.colorHex) {
+        return options.polygonStyle.colorHex;
+    }
+    if (options?.standardizeColors) {
+        return matchStatusByColor(colorHex || '#3b82f6').color;
+    }
+    if (options?.canonicalColorMap) {
+        const upper = String(colorHex || '#3b82f6').toUpperCase();
+        if (options.canonicalColorMap[upper]) {
+            return options.canonicalColorMap[upper];
+        }
+    }
+    return colorHex || '#3b82f6';
+};
 
 
 // --- HELPER: Escaping XML characters ---
@@ -169,17 +188,17 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
         descriptionHTML += '</div>';
     }
     
-    let colorHex = pt.color;
+    const colorHex = getEffectiveColor(pt, options);
     const type = pt.type || 'Point';
-    if (type === 'Polygon' && options?.polygonStyle?.colorHex) {
-        colorHex = options.polygonStyle.colorHex;
-    }
+    const isPolygon = type === 'Polygon';
+    const isLine = !isPolygon && (type === 'LineString' || type === 'Polyline' || type === 'MultiLineString' || (pt.path && pt.path.length >= 2));
+    
     const { r, g, b, cleanHex, hasColor } = getKMLColorParts(colorHex);
     const iconHash = pt.iconUrl ? Math.abs(pt.iconUrl.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)).toString(16) : 'default';
-        const styleId = type === 'Polygon' && options?.polygonStyle ? `style_Polygon_Custom_${cleanHex}` : `style_${type}_${hasColor ? cleanHex : 'nocolor'}_${iconHash}`; // Added icon hash to styleId
+    const styleId = isPolygon && options?.polygonStyle ? `style_Polygon_Custom_${cleanHex}` : `style_${isPolygon ? 'Polygon' : isLine ? 'LineString' : 'Point'}_${hasColor ? cleanHex : 'nocolor'}_${iconHash}`;
 
     let geometryXML = '';
-    if (type === 'Polygon' && pt.path && pt.path.length > 0) {
+    if (isPolygon && pt.path && pt.path.length > 0) {
         let path = [...pt.path];
         if (path.length > 0) {
             const first = path[0];
@@ -194,7 +213,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
         <tessellate>1</tessellate>
         <outerBoundaryIs><LinearRing><coordinates>${coordsStr}</coordinates></LinearRing></outerBoundaryIs>
       </Polygon>`;
-    } else if (type === 'LineString' && pt.path && pt.path.length > 0) {
+    } else if (isLine && pt.path && pt.path.length > 0) {
         const coordsStr = pt.path.map(p => `${p.x},${p.y},${p.z || 0}`).join(' ');
         geometryXML = `
       <LineString>
@@ -277,14 +296,14 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
     </Style>\n`;
 
     points.forEach(pt => {
+        const colorHex = getEffectiveColor(pt, options);
         const type = pt.type || 'Point';
-        let colorHex = pt.color;
-        if (type === 'Polygon' && options?.polygonStyle?.colorHex) {
-            colorHex = options.polygonStyle.colorHex;
-        }
+        const isPolygon = type === 'Polygon';
+        const isLine = !isPolygon && (type === 'LineString' || type === 'Polyline' || type === 'MultiLineString' || (pt.path && pt.path.length >= 2));
+        
         const { r, g, b, cleanHex, hasColor } = getKMLColorParts(colorHex);
         const iconHash = pt.iconUrl ? Math.abs(pt.iconUrl.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)).toString(16) : 'default';
-        const styleId = type === 'Polygon' && options?.polygonStyle ? `style_Polygon_Custom_${cleanHex}` : `style_${type}_${hasColor ? cleanHex : 'nocolor'}_${iconHash}`; // Added icon hash to styleId
+        const styleId = isPolygon && options?.polygonStyle ? `style_Polygon_Custom_${cleanHex}` : `style_${isPolygon ? 'Polygon' : isLine ? 'LineString' : 'Point'}_${hasColor ? cleanHex : 'nocolor'}_${iconHash}`;
         
         if (!uniqueStyles.has(styleId)) {
             uniqueStyles.add(styleId);
@@ -294,8 +313,9 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
             const polyColor = `${polyOpacity}${b}${g}${r}`.toLowerCase();
             const polyOutline = options?.polygonStyle?.outline !== undefined ? options.polygonStyle.outline : 1;
             const polyWidth = options?.polygonStyle?.width !== undefined ? options.polygonStyle.width : 2;
+            const lineLineWidth = options?.lineStyle?.width !== undefined ? options.lineStyle.width : 3;
 
-            if (type === 'Polygon') {
+            if (isPolygon) {
                 stylesXML += `    <Style id="${styleId}">
       <LineStyle>${kmlColorStr}
         <width>${polyWidth}</width>
@@ -312,10 +332,10 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
         <text>$[description]</text>
       </BalloonStyle>
     </Style>\n`;
-            } else if (type === 'LineString') {
+            } else if (isLine) {
                 stylesXML += `    <Style id="${styleId}">
       <LineStyle>${kmlColorStr}
-        <width>${options?.lineStyle?.width !== undefined ? options.lineStyle.width : 3}</width>
+        <width>${lineLineWidth}</width>
       </LineStyle>
       <LabelStyle>
         <scale>0.85</scale>

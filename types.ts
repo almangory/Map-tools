@@ -67,6 +67,7 @@ export interface KmlExportOptions {
   groupByAttribute?: 'layer' | 'attr1' | 'attr2' | 'color' | 'street';
   groupByColumn?: string;
   canonicalColorMap?: Record<string, string>; // Mapping for merging colors
+  standardizeColors?: boolean;
   selectionPolygon?: { x: number; y: number }[];
   separateMultiGeometry?: boolean;
   splitLinesByLength?: boolean;

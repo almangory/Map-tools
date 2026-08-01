@@ -5,6 +5,7 @@ import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
 import { extractAllPointAttributes, parseDescriptionToAttributes, stripHtml, extractNumbersOnly, isNumericTargetField, cleanZoneValue, isZoneField } from '../services/parserService';
+import { matchStatusByColor } from '../services/colorUtils';
 import { calculatePathLength } from '../services/geometryService';
 import * as XLSX from 'xlsx';
 import { clsx, type ClassValue } from "clsx";
@@ -453,7 +454,14 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
          }
       }
 
-      return { ...p, id: newId, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
+      let finalColor = p.color;
+      if (standardizeColors) {
+         finalColor = matchStatusByColor(p.color || '#3b82f6').color;
+      } else if (standardizePolygonColors && (p.type === 'Polygon' || targetTemplate === 'polygons' || targetTemplate === 'boundaries')) {
+         finalColor = '#0288d1';
+      }
+
+      return { ...p, id: newId, color: finalColor, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
     });
 
     if (overlapResults) {
@@ -492,7 +500,8 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         optimizeForMyMaps: optimizeForMyMaps,
         keepOriginalDescription: keepOriginalDescription,
         removeImagesOnly: removeImagesOnly,
-        ...(targetTemplate === 'pipes' ? { lineStyle: { width: 3 } } : {}),
+        standardizeColors: standardizeColors,
+        lineStyle: { width: 3 },
         ...((targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? {
             polygonStyle: {
                 ...(standardizePolygonColors ? { colorHex: '#0288d1', opacityHex: '4d' } : {}),
