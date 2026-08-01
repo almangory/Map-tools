@@ -354,7 +354,9 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                 'قطر الخط', 'قطر الأنبوب', 'قطر الانبوب', 'نوع الحفر', 'اسم المشروع', 'رقم المشروع',
                 'القطر الداخلي', 'القطر الخارجي', 'اسم الشارع', 'اسم الحي', 'سنة التركيب', 'سنة التشغيل',
                 'حالة العنصر', 'نوع الخرسانة', 'طول الخط', 'مادة الخط', 'قطر الانبوب مم', 'قطر الخط مم',
-                'segment id', 'Permit No', 'Drilling type', 'Pipe Diameter', 'Line No', 'Asset Status',
+                'segment id', 'SEGMENT ID', 'SEGMENT_ID', 'Segment ID', 'Segment Id', 'segment_id', 'SEGMENT NO',
+                'segment no', 'SEG ID', 'seg id', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم القطاع',
+                'Permit No', 'Drilling type', 'Pipe Diameter', 'Line No', 'Asset Status',
                 'Project Name', 'Project ID', 'Inner Diameter', 'Outer Diameter', 'INNERDIAMETER',
                 'INNER_DIAMETER', 'INNER DIAMETER', 'InnerDiameter'
             ];

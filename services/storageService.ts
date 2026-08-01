@@ -147,10 +147,16 @@ export function getMapLinkForPoints(pts: GeoPoint[]): string {
   return `https://www.google.com/maps?q=${lat},${lon}`;
 }
 
-const SEGMENT_KEYS = ['SEGMENTID', 'SEGMENT_ID', 'SEGMENT ID', 'SegmentID', 'Segment Id', 'segment id', 'Segment_Id', 'SEGMENT'];
+const SEGMENT_KEYS = [
+  'SEGMENTID', 'SEGMENT_ID', 'SEGMENT ID', 'SegmentID', 'Segment Id', 'segment id', 'Segment_Id', 'segment_id',
+  'SEGMENT', 'segment', 'SEGMENTNO', 'SEGMENT_NO', 'SEGMENT NO', 'SegmentNo', 'Segment No', 'segment no',
+  'SEG ID', 'SEG_ID', 'SEGID', 'SegID', 'seg id', 'seg_id', 'segid', 'SEG', 'seg',
+  'شريحة', 'شريحه', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم شريحة', 'كود شريحة', 'معرف شريحة',
+  'رقم القطاع', 'كود القطاع', 'معرف القطاع', 'قطاع', 'رقم القطع', 'كود القطع'
+];
 const SEGMENT_REGEXES = [
-  /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:SEGMENTID|SEGMENT_ID|SEGMENT\s*ID|SegmentID|Segment\s*Id)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
-  /(?:SEGMENTID|SEGMENT_ID|SEGMENT\s*ID|SegmentID|Segment\s*Id)\s*[:=]\s*([^\r\n,;<>&|]+)/i
+  /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:SEGMENTID|SEGMENT_ID|SEGMENT\s*ID|SegmentID|Segment\s*Id|segment\s*id|segment_id|segmentid|SEGMENT|segment|SEGMENTNO|SEGMENT_NO|SEGMENT\s*NO|SEG\s*ID|SEG_ID|SEGID|SEG|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|شريحة|شريحه|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i,
+  /(?:SEGMENTID|SEGMENT_ID|SEGMENT\s*ID|SegmentID|Segment\s*Id|segment\s*id|segment_id|segmentid|SEGMENT|segment|SEGMENTNO|SEGMENT_NO|SEGMENT\s*NO|SEG\s*ID|SEG_ID|SEGID|SEG|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|شريحة|شريحه|قطاع)\s*[:=]\s*([^\r\n,;<>&|]+)/i
 ];
 
 const PROJECTNAME_KEYS = ['PROJECTNAME', 'PROJECT_NAME', 'PROJECT NAME', 'ProjectName', 'اسم المشروع', 'المشروع'];

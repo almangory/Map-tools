@@ -692,21 +692,30 @@ const App: React.FC = () => {
       const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
 
       const isSegmentKey = (key: string): boolean => {
+        if (!key) return false;
         const norm = normalizeKey(key);
-        // Explicit Segment ID keys ONLY (MUST NOT include generic 'شريحة' or 'segment' which mean Layer in CAD/KML)
+        if (!norm) return false;
         const segmentKeys = new Set([
-          'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno',
-          'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
-          'رقمالقطع', 'كودالقطع', 'معرفالقطع'
+          'segment', 'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno', 'seg',
+          'شريحة', 'شريحه', 'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+          'رقمالقطع', 'كودالقطع', 'معرفالقطع', 'قطاع', 'رقمالقطاع', 'كودالقطاع', 'معرفالقطاع'
         ]);
-        return segmentKeys.has(norm);
+        return (
+          segmentKeys.has(norm) ||
+          norm.startsWith('segment') ||
+          norm.startsWith('segid') ||
+          norm.includes('segmentid') ||
+          norm.includes('segment_id') ||
+          norm.includes('رقمالشريحة') ||
+          norm.includes('كودالشريحة')
+        );
       };
 
       const extractSegmentIdFromDescription = (description?: string): string | null => {
         if (!description) return null;
 
-        // A) HTML table cell match e.g. <tr><td>Segment ID</td><td>SEG-1002</td></tr>
-        const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+        // A) HTML table cell match e.g. <tr><td>Segment ID</td><td>SEG-1002</td></tr> or <td>SEGMENT</td><td>1002</td>
+        const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
         const tableMatch = description.match(tableCellRegex);
         if (tableMatch && tableMatch[1]) {
           const val = stripHtml(tableMatch[1]);
@@ -715,8 +724,8 @@ const App: React.FC = () => {
           }
         }
 
-        // B) Key-value pattern match e.g. "Segment ID: SEG-9912" or "رقم الشريحة: 4410"
-        const textRegex = /(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+        // B) Key-value pattern match e.g. "SEGMENT: SEG-9912" or "Segment ID: SEG-9912" or "رقم الشريحة: 4410"
+        const textRegex = /(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
         const textMatch = description.match(textRegex);
         if (textMatch && textMatch[1]) {
           const val = stripHtml(textMatch[1]);
@@ -1699,24 +1708,34 @@ const App: React.FC = () => {
     const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
 
     const isSegmentKey = (key: string): boolean => {
+      if (!key) return false;
       const norm = normalizeKey(key);
+      if (!norm) return false;
       const segmentKeys = new Set([
-        'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno',
-        'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
-        'رقمالقطع', 'كودالقطع', 'معرفالقطع'
+        'segment', 'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno', 'seg',
+        'شريحة', 'شريحه', 'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+        'رقمالقطع', 'كودالقطع', 'معرفالقطع', 'قطاع', 'رقمالقطاع', 'كودالقطاع', 'معرفالقطاع'
       ]);
-      return segmentKeys.has(norm);
+      return (
+        segmentKeys.has(norm) ||
+        norm.startsWith('segment') ||
+        norm.startsWith('segid') ||
+        norm.includes('segmentid') ||
+        norm.includes('segment_id') ||
+        norm.includes('رقمالشريحة') ||
+        norm.includes('كودالشريحة')
+      );
     };
 
     const extractSegmentIdFromDesc = (description?: string): string | null => {
       if (!description) return null;
-      const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+      const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
       const tableMatch = description.match(tableCellRegex);
       if (tableMatch && tableMatch[1]) {
         const val = stripHtmlLocal(tableMatch[1]);
         if (isValidValueLocal(val, 'segment id')) return val;
       }
-      const textRegex = /(?:segment\s*id|segment_id|segment\s*no|segment\s*number|seg\s*id|seg_id|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+      const textRegex = /(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
       const textMatch = description.match(textRegex);
       if (textMatch && textMatch[1]) {
         const val = stripHtmlLocal(textMatch[1]);
