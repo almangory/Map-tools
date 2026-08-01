@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus } from 'lucide-react';
 import { GeoPoint, OverlapResult } from '../types';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
@@ -101,6 +102,252 @@ interface Props {
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
 }
 
+interface MultiSourceFieldSelectProps {
+  selectedFields: string[];
+  onChange: (fields: string[]) => void;
+  sourceAttributes: Array<{ name: string; sample?: string }>;
+  lang: 'ar' | 'en';
+}
+
+export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
+  selectedFields,
+  onChange,
+  sourceAttributes,
+  lang
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number }>({ top: 0, left: 0, width: 360 });
+
+  const updateCoords = () => {
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      const dropdownWidth = Math.min(Math.max(rect.width, 360), window.innerWidth - 20);
+      
+      let left = rect.right - dropdownWidth;
+      if (left < 10) left = 10;
+      if (left + dropdownWidth > window.innerWidth - 10) {
+        left = window.innerWidth - dropdownWidth - 10;
+      }
+
+      let top = rect.bottom + 6;
+      if (top + 380 > window.innerHeight && rect.top > 380) {
+        top = rect.top - 380 - 6;
+      }
+
+      setCoords({ top, left, width: dropdownWidth });
+    }
+  };
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        triggerRef.current && !triggerRef.current.contains(target) &&
+        popoverRef.current && !popoverRef.current.contains(target)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      updateCoords();
+      window.addEventListener('resize', updateCoords);
+      window.addEventListener('scroll', updateCoords, true);
+    }
+    return () => {
+      window.removeEventListener('resize', updateCoords);
+      window.removeEventListener('scroll', updateCoords, true);
+    };
+  }, [isOpen]);
+
+  const specialOptions = [
+    { value: 'الشارع (مسترجع)', label: lang === 'ar' ? '🗺️ ربط اسم الشارع تلقائياً من الخريطة' : '🗺️ Auto Street Name from Map' },
+    { value: 'الحي (مسترجع)', label: lang === 'ar' ? '🏘️ ربط اسم الحي تلقائياً من الخريطة' : '🏘️ Auto District Name from Map' },
+    { value: '__MAP_LENGTH__', label: lang === 'ar' ? '📏 حساب طول العنصر تلقائياً من الخريطة (متر)' : '📏 Auto Map Length from Map (m)' }
+  ];
+
+  const filteredAttributes = useMemo(() => {
+    if (!search.trim()) return sourceAttributes;
+    const q = search.toLowerCase().trim();
+    return sourceAttributes.filter(attr => attr.name.toLowerCase().includes(q) || (attr.sample && attr.sample.toLowerCase().includes(q)));
+  }, [sourceAttributes, search]);
+
+  const toggleField = (fieldValue: string) => {
+    if (selectedFields.includes(fieldValue)) {
+      onChange(selectedFields.filter(f => f !== fieldValue));
+    } else {
+      onChange([...selectedFields, fieldValue]);
+    }
+  };
+
+  const removeField = (fieldValue: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    onChange(selectedFields.filter(f => f !== fieldValue));
+  };
+
+  return (
+    <div ref={triggerRef} className="w-full">
+      <div 
+        onClick={() => {
+          setIsOpen(!isOpen);
+          if (!isOpen) setTimeout(updateCoords, 0);
+        }}
+        className="w-full min-h-[38px] bg-[#0e3f53] border border-white/10 rounded-lg px-2.5 py-1.5 flex flex-wrap items-center gap-1.5 cursor-pointer hover:border-accent/50 transition-all text-[10px] font-bold text-white shadow-inner"
+      >
+        {selectedFields.length === 0 ? (
+          <span className="text-white/40 flex items-center justify-between w-full">
+            <span>{lang === 'ar' ? '-- بدون ربط (اضغط لاختيار بيانات متعددة) --' : '-- Unmapped (Click to select multiple) --'}</span>
+            <ChevronDown className="w-3.5 h-3.5 text-white/40 shrink-0" />
+          </span>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1 w-full justify-between">
+            <div className="flex flex-wrap items-center gap-1 max-w-[85%]">
+              {selectedFields.map(sf => {
+                const spec = specialOptions.find(o => o.value === sf);
+                const displayLabel = spec ? spec.label : sf;
+                return (
+                  <span 
+                    key={sf} 
+                    className="inline-flex items-center gap-1 bg-accent/20 text-accent border border-accent/40 px-2 py-0.5 rounded-md font-black text-[10px] shadow-sm"
+                  >
+                    <span className="truncate max-w-[110px]">{displayLabel}</span>
+                    <button 
+                      type="button" 
+                      onClick={(e) => removeField(sf, e)} 
+                      className="hover:bg-accent/30 rounded p-0.5 text-accent hover:text-white transition-colors"
+                      title={lang === 'ar' ? 'إزالة' : 'Remove'}
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-1 shrink-0 text-accent">
+              <span className="text-[9px] bg-accent/30 px-1.5 py-0.5 rounded-full font-black">{selectedFields.length}</span>
+              <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isOpen && createPortal(
+        <div 
+          ref={popoverRef}
+          style={{
+            position: 'fixed',
+            top: `${coords.top}px`,
+            left: `${coords.left}px`,
+            width: `${coords.width}px`,
+            zIndex: 999999
+          }}
+          className="bg-[#092533] border border-accent/60 rounded-xl shadow-[0_20px_60px_rgba(0,0,0,0.9)] p-3 text-white max-h-[380px] flex flex-col gap-2.5 backdrop-blur-2xl"
+        >
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute right-2.5 top-2.5 text-white/40 pointer-events-none" />
+            <input 
+              type="text"
+              placeholder={lang === 'ar' ? 'ابحث في البيانات لتحديد عدة حقول...' : 'Filter source fields...'}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full bg-black/50 border border-white/15 rounded-lg pr-8 pl-3 py-1.5 text-[11px] font-bold text-white focus:outline-none focus:border-accent placeholder-white/40"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar max-h-[260px]">
+            {!search && (
+              <div className="space-y-1 mb-2 pb-2 border-b border-white/10">
+                <div className="text-[10px] font-black text-accent/90 px-1 mb-1">
+                  {lang === 'ar' ? 'خيارات واسترجاع الخريطة:' : 'Map Auto Options:'}
+                </div>
+                {specialOptions.map(opt => {
+                  const isChecked = selectedFields.includes(opt.value);
+                  return (
+                    <div 
+                      key={opt.value}
+                      onClick={() => toggleField(opt.value)}
+                      className={cn(
+                        "flex items-center gap-2.5 p-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all",
+                        isChecked ? "bg-accent/20 border border-accent/40 text-accent" : "hover:bg-white/10 text-white/90"
+                      )}
+                    >
+                      <div className={cn("w-4 h-4 rounded flex items-center justify-center border transition-all shrink-0", isChecked ? "bg-accent text-primary border-accent" : "border-white/30")}>
+                        {isChecked && <Check className="w-3 h-3 stroke-[3px]" />}
+                      </div>
+                      <span className="leading-tight">{opt.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="text-[10px] font-black text-accent/90 px-1 mb-1">
+              {lang === 'ar' ? 'حقول وبيانات الملف المصدر:' : 'Dataset Source Fields:'}
+            </div>
+            {filteredAttributes.length === 0 ? (
+              <div className="text-[11px] text-white/40 p-3 text-center">
+                {lang === 'ar' ? 'لا توجد نتائج' : 'No fields found'}
+              </div>
+            ) : (
+              filteredAttributes.map(attr => {
+                const isChecked = selectedFields.includes(attr.name);
+                return (
+                  <div 
+                    key={attr.name}
+                    onClick={() => toggleField(attr.name)}
+                    className={cn(
+                      "flex items-center justify-between p-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all gap-2",
+                      isChecked ? "bg-accent/20 border border-accent/40 text-accent" : "hover:bg-white/10 text-white/90"
+                    )}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className={cn("w-4 h-4 rounded flex items-center justify-center border shrink-0 transition-all", isChecked ? "bg-accent text-primary border-accent" : "border-white/30")}>
+                        {isChecked && <Check className="w-3 h-3 stroke-[3px]" />}
+                      </div>
+                      <span className="truncate">{attr.name}</span>
+                    </div>
+                    {attr.sample && (
+                      <span className="text-[10px] text-white/40 font-normal truncate max-w-[140px] shrink-0 dir-ltr text-left">
+                        {lang === 'ar' ? `(مثال: ${attr.sample})` : `(e.g. ${attr.sample})`}
+                      </span>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="flex items-center justify-between pt-1.5 border-t border-white/10 text-[9px]">
+            <button 
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onChange([]); }}
+              className="text-white/40 hover:text-red-400 font-bold transition-colors"
+            >
+              {lang === 'ar' ? 'مسح الكل' : 'Clear All'}
+            </button>
+            <button 
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setIsOpen(false); }}
+              className="bg-accent text-primary font-black px-2.5 py-1 rounded-md hover:brightness-110 transition-all"
+            >
+              {lang === 'ar' ? 'تم 🗸' : 'Done 🗸'}
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+};
+
 export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment }: Props) => {
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
@@ -174,7 +421,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     return Array.from(attrMap.entries()).map(([name, sample]) => ({ name, sample }));
   }, [points, headers]);
 
-  const [mapping, setMapping] = useState<Record<string, { sourceField?: string; defaultValue?: string }>>({});
+  const [mapping, setMapping] = useState<Record<string, { sourceField?: string; sourceFields?: string[]; defaultValue?: string }>>({});
 
   // Auto-map matching source attributes to target template fields
   useEffect(() => {
@@ -184,71 +431,81 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       const newMap = { ...prev };
       let changed = false;
 
-      const findMatchingSource = (aliases: string[]) => {
-        return sourceAttributes.find(sa => {
+      const findAllMatchingSources = (aliases: string[]) => {
+        return sourceAttributes.filter(sa => {
           const lower = sa.name.toLowerCase().replace(/[\s_#-]/g, '');
           return aliases.some(a => {
             const cleanA = a.toLowerCase().replace(/[\s_#-]/g, '');
             return lower === cleanA || lower.includes(cleanA) || cleanA.includes(lower);
           });
-        })?.name;
+        }).map(sa => sa.name);
       };
 
       TEMPLATES[targetTemplate].fields.forEach(field => {
-        if (!newMap[field]?.sourceField) {
-          let matched: string | undefined;
+        const hasExisting = (newMap[field]?.sourceFields && newMap[field].sourceFields!.length > 0) || newMap[field]?.sourceField;
+        if (!hasExisting) {
+          let matchedList: string[] = [];
 
           if (field === 'INNERDIAMETER') {
-            matched = findMatchingSource([
+            matchedList = findAllMatchingSources([
               'innerdiameter', 'inner_diameter', 'inner diameter', 'القطر الداخلي', 'القطر_الداخلي', 'قطر_داخلي', 'قطر داخلي', 'قطر_الخط', 'قطر الخط', 'قطر_الانبوب', 'قطر الانبوب', 'القطر', 'قطر', 'diameter', 'size'
             ]);
           } else if (field === 'OUTERDIAMETER') {
-            matched = findMatchingSource([
+            matchedList = findAllMatchingSources([
               'outerdiameter', 'outer_diameter', 'outer diameter', 'القطر الخارجي', 'القطر_الخارجي', 'قطر_خارجي', 'قطر خارجي'
             ]);
           } else if (field === 'SHAPE_Length' || field === 'ACTUALLENGTH') {
-            matched = findMatchingSource([
+            matchedList = findAllMatchingSources([
               'shape_length', 'shapelength', 'shape length', 'actuallength', 'actual_length', 'actual length', 'طول_الخط', 'طول الخط', 'طول_العنصر', 'الاطوال', 'length'
             ]);
-            if (!matched) {
-              matched = '__MAP_LENGTH__';
+            if (matchedList.length === 0) {
+              matchedList = ['__MAP_LENGTH__'];
             }
           } else if (field === 'DIAMETER') {
-            matched = findMatchingSource([
+            matchedList = findAllMatchingSources([
               'diameter', 'قطر_الخط', 'قطر الخط', 'قطر_الانبوب', 'قطر الانبوب', 'القطر', 'قطر', 'قطر_الشبكة', 'size', 'innerdiameter'
             ]);
           } else if (field === 'MATERIAL') {
-            matched = findMatchingSource(['material', 'مادة', 'مادة_الخط', 'مادة الخط', 'نوع_الانبوب', 'نوع الانبوب']);
+            matchedList = findAllMatchingSources(['material', 'مادة', 'مادة_الخط', 'مادة الخط', 'نوع_الانبوب', 'نوع الانبوب']);
           } else if (field === 'PROJECTNAME' || field === 'PROJECTID' || field === 'اسم المشروع') {
             if (field.includes('ID') || field.includes('رقم')) {
-              matched = findMatchingSource(['projectid', 'project_id', 'رقم_المشروع', 'رقم المشروع', 'fid']);
+              matchedList = findAllMatchingSources(['projectid', 'project_id', 'رقم_المشروع', 'رقم المشروع', 'fid']);
             } else {
-              matched = findMatchingSource(['projectname', 'project_name', 'اسم_المشروع', 'اسم المشروع']);
+              matchedList = findAllMatchingSources(['projectname', 'project_name', 'اسم_المشروع', 'اسم المشروع']);
             }
           } else if (field === 'Drilling type') {
-            matched = findMatchingSource(['drilling type', 'drilling_type', 'نوع_الحفر', 'نوع الحفر']);
+            matchedList = findAllMatchingSources(['drilling type', 'drilling_type', 'نوع_الحفر', 'نوع الحفر']);
           } else if (field === 'ZONE') {
-            matched = findMatchingSource(['zone_nu', 'zone', 'منطقة', 'النطاق', 'رقم_المنطقة']);
+            matchedList = findAllMatchingSources(['zone_nu', 'zone', 'منطقة', 'النطاق', 'رقم_المنطقة']);
           } else if (field === 'Permit No') {
-            matched = findMatchingSource(['permit no', 'permit_no', 'permit', 'رقم_الترخيص', 'رقم_الرخصة', 'رقم الرخصة']);
+            matchedList = findAllMatchingSources(['permit no', 'permit_no', 'permit', 'رقم_الترخيص', 'رقم_الرخصة', 'رقم الرخصة']);
+          } else if (field === 'segment id' || field === 'SEGMENT ID' || field.toLowerCase().includes('segment')) {
+            matchedList = findAllMatchingSources([
+              'segmentid', 'segment_id', 'segment id', 'segment', 'segmentno', 'segment_no', 'segment no',
+              'segid', 'seg_id', 'seg id', 'seg', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'شريحة', 'شريحه', 'قطاع'
+            ]);
           } else if (field === 'STREETNAME' || field === 'Street' || field === 'STREET_NAME') {
-            matched = findMatchingSource(['streetname', 'street', 'الشارع', 'اسم_الشارع', 'الشارع (مسترجع)']);
-            if (!matched) {
-              matched = 'الشارع (مسترجع)';
+            matchedList = findAllMatchingSources(['streetname', 'street', 'الشارع', 'اسم_الشارع', 'الشارع (مسترجع)']);
+            if (matchedList.length === 0) {
+              matchedList = ['الشارع (مسترجع)'];
             }
           } else if (field === 'DISTRICT' || field === 'District') {
-            matched = findMatchingSource(['district', 'الحي', 'اسم_الحي', 'الحي (مسترجع)']);
-            if (!matched) {
-              matched = 'الحي (مسترجع)';
+            matchedList = findAllMatchingSources(['district', 'الحي', 'اسم_الحي', 'الحي (مسترجع)']);
+            if (matchedList.length === 0) {
+              matchedList = ['الحي (مسترجع)'];
             }
           } else if (field === 'CONTRACTOR') {
-            matched = findMatchingSource(['contractor', 'المقاول', 'اسم_المقاول']);
+            matchedList = findAllMatchingSources(['contractor', 'المقاول', 'اسم_المقاول']);
           } else if (field === 'CONSULTANT') {
-            matched = findMatchingSource(['consultant', 'الاستشاري', 'اسم_الاستشاري']);
+            matchedList = findAllMatchingSources(['consultant', 'الاستشاري', 'اسم_الاستشاري']);
           }
 
-          if (matched) {
-            newMap[field] = { ...newMap[field], sourceField: matched };
+          if (matchedList.length > 0) {
+            newMap[field] = {
+              ...newMap[field],
+              sourceField: matchedList[0],
+              sourceFields: matchedList
+            };
             changed = true;
           }
         }
@@ -305,54 +562,72 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
       templateFields.forEach(field => {
         const mapRules = mapping[field];
+        const selectedSources = (mapRules?.sourceFields && mapRules.sourceFields.length > 0)
+          ? mapRules.sourceFields
+          : (mapRules?.sourceField ? [mapRules.sourceField] : []);
+
         let val = '';
 
-        const isLengthTarget = (fName: string) => {
-          const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
-          return lower === 'shapelength' || lower === 'actuallength' || lower === 'length' || lower === 'طولالخط' || lower === 'طولالعنصر';
-        };
+        // Check selected source fields in order until a non-empty value is found
+        for (const sf of selectedSources) {
+          if (!sf) continue;
 
-        const isStreetTarget = (fName: string) => {
-          const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
-          return lower === 'streetname' || lower === 'street' || lower === 'street_name' || lower === 'اسمالشارع' || lower === 'الشارع';
-        };
-
-        const isDistrictTarget = (fName: string) => {
-          const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
-          return lower === 'district' || lower === 'اسمالحي' || lower === 'الحي';
-        };
-
-        if (mapRules?.sourceField === '__MAP_LENGTH__') {
+          if (sf === '__MAP_LENGTH__') {
             const calcLen = (p.path && p.path.length >= 2) ? calculatePathLength(p.path) : (p.originalLength || 0);
             if (calcLen > 0) {
-                val = calcLen.toFixed(2);
+              val = calcLen.toFixed(2);
+              mappedSourceFields.add(sf);
+              break;
             }
-        } else if (mapRules?.sourceField) {
-           if (mapRules.sourceField === 'الشارع (مسترجع)') {
-               val = p.street || '';
-           } else if (mapRules.sourceField === 'الحي (مسترجع)') {
-               val = p.district || '';
-           } else {
-               const sourceFieldLower = String(mapRules.sourceField || '').toLowerCase();
-               if (p.attributes) {
-                   const matchedKey = Object.keys(p.attributes).find(k => String(k || '').toLowerCase() === sourceFieldLower);
-                   if (matchedKey && p.attributes[matchedKey] !== undefined && p.attributes[matchedKey] !== null) val = String(p.attributes[matchedKey]);
-               }
-               if (!val && p.description) {
-                   const descAttrs = parseDescriptionToAttributes(p.description, {});
-                   const matchedKey = Object.keys(descAttrs).find(k => String(k || '').toLowerCase() === sourceFieldLower);
-                   if (matchedKey && descAttrs[matchedKey] !== undefined && descAttrs[matchedKey] !== null) {
-                       val = String(descAttrs[matchedKey]);
-                   }
-               }
-               if (!val && p.originalRow && headers) {
-                   const matchedIndex = headers.findIndex(h => String(h || '').toLowerCase() === sourceFieldLower);
-                   if (matchedIndex !== -1 && p.originalRow[matchedIndex] !== undefined && p.originalRow[matchedIndex] !== null) {
-                       val = String(p.originalRow[matchedIndex]);
-                   }
-               }
-           }
-           if (val) mappedSourceFields.add(mapRules.sourceField);
+          } else if (sf === 'الشارع (مسترجع)') {
+            if (p.street) {
+              val = p.street;
+              mappedSourceFields.add(sf);
+              break;
+            }
+          } else if (sf === 'الحي (مسترجع)') {
+            if (p.district) {
+              val = p.district;
+              mappedSourceFields.add(sf);
+              break;
+            }
+          } else {
+            const sourceFieldLower = String(sf || '').toLowerCase().trim();
+            if (p.attributes) {
+              const matchedKey = Object.keys(p.attributes).find(k => String(k || '').toLowerCase().trim() === sourceFieldLower);
+              if (matchedKey && p.attributes[matchedKey] !== undefined && p.attributes[matchedKey] !== null) {
+                const str = String(p.attributes[matchedKey]).trim();
+                if (str) {
+                  val = str;
+                  mappedSourceFields.add(sf);
+                  break;
+                }
+              }
+            }
+            if (!val && p.description) {
+              const descAttrs = parseDescriptionToAttributes(p.description, {});
+              const matchedKey = Object.keys(descAttrs).find(k => String(k || '').toLowerCase().trim() === sourceFieldLower);
+              if (matchedKey && descAttrs[matchedKey] !== undefined && descAttrs[matchedKey] !== null) {
+                const str = String(descAttrs[matchedKey]).trim();
+                if (str) {
+                  val = str;
+                  mappedSourceFields.add(sf);
+                  break;
+                }
+              }
+            }
+            if (!val && p.originalRow && headers) {
+              const matchedIndex = headers.findIndex(h => String(h || '').toLowerCase().trim() === sourceFieldLower);
+              if (matchedIndex !== -1 && p.originalRow[matchedIndex] !== undefined && p.originalRow[matchedIndex] !== null) {
+                const str = String(p.originalRow[matchedIndex]).trim();
+                if (str) {
+                  val = str;
+                  mappedSourceFields.add(sf);
+                  break;
+                }
+              }
+            }
+          }
         }
 
         // Fallback: If val is still empty and this is a length field (e.g. SHAPE_Length), auto-fill from map geometry length
@@ -946,27 +1221,25 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                     </span>
                   </div>
                   <div className="w-full md:w-1/3">
-                    <select 
-                      value={mapping[field]?.sourceField || ''} 
-                      onChange={e => setMapping(prev => ({ ...prev, [field]: { ...prev[field], sourceField: e.target.value } }))}
-                      className="w-full bg-[#0e3f53] border border-white/10 rounded-lg px-3 py-2 text-[10px] font-bold text-white focus:outline-none focus:border-accent"
-                    >
-                      <option value="">{lang === 'ar' ? '-- بدون ربط --' : '-- Unmapped --'}</option>
-                      <option value="الشارع (مسترجع)">
-                        {lang === 'ar' ? '🗺️ ربط اسم الشارع تلقائياً من الخريطة' : '🗺️ Auto Street Name from Map'}
-                      </option>
-                      <option value="الحي (مسترجع)">
-                        {lang === 'ar' ? '🏘️ ربط اسم الحي تلقائياً من الخريطة' : '🏘️ Auto District Name from Map'}
-                      </option>
-                      <option value="__MAP_LENGTH__">
-                        {lang === 'ar' ? '📏 حساب طول العنصر تلقائياً من الخريطة (متر)' : '📏 Auto Map Length from Map (m)'}
-                      </option>
-                      {sourceAttributes.map(attr => (
-                        <option key={attr.name} value={attr.name}>
-                          {attr.name} {attr.sample ? (lang === 'ar' ? `(مثال: ${attr.sample})` : `(e.g. ${attr.sample})`) : ''}
-                        </option>
-                      ))}
-                    </select>
+                    <MultiSourceFieldSelect
+                      selectedFields={
+                        mapping[field]?.sourceFields && mapping[field]!.sourceFields!.length > 0
+                          ? mapping[field]!.sourceFields!
+                          : (mapping[field]?.sourceField ? [mapping[field]!.sourceField!] : [])
+                      }
+                      onChange={(selected) => {
+                        setMapping(prev => ({
+                          ...prev,
+                          [field]: {
+                            ...prev[field],
+                            sourceFields: selected,
+                            sourceField: selected[0] || ''
+                          }
+                        }));
+                      }}
+                      sourceAttributes={sourceAttributes}
+                      lang={lang}
+                    />
                   </div>
                   <div className="w-full md:w-1/3">
                     <input 
