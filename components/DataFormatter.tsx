@@ -556,6 +556,21 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       TEMPLATES[targetTemplate].fields.filter(f => !templateFields.includes(f))
     );
 
+    const isLengthTarget = (fName: string) => {
+      const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
+      return lower === 'shapelength' || lower === 'actuallength' || lower === 'length' || lower === 'طولالخط' || lower === 'طولالعنصر';
+    };
+
+    const isStreetTarget = (fName: string) => {
+      const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
+      return lower === 'streetname' || lower === 'street' || lower === 'street_name' || lower === 'اسمالشارع' || lower === 'الشارع';
+    };
+
+    const isDistrictTarget = (fName: string) => {
+      const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
+      return lower === 'district' || lower === 'اسمالحي' || lower === 'الحي';
+    };
+
     const processedPoints = points.map(p => {
       const newAttrs: Record<string, string> = {};
       const mappedSourceFields = new Set<string>();
