@@ -257,6 +257,28 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     });
   }, [sourceAttributes, targetTemplate]);
 
+  // Auto-set nameSourceField for polygons template if not set
+  useEffect(() => {
+    if (targetTemplate === 'polygons' && !nameSourceField) {
+      const findMatchingSource = (aliases: string[]) => {
+        return sourceAttributes.find(sa => {
+          const lower = sa.name.toLowerCase().replace(/[\s_#-]/g, '');
+          return aliases.some(a => {
+            const cleanA = a.toLowerCase().replace(/[\s_#-]/g, '');
+            return lower === cleanA || lower.includes(cleanA) || cleanA.includes(lower);
+          });
+        })?.name;
+      };
+
+      const matchedZone = findMatchingSource(['zone_nu', 'zone', 'منطقة', 'النطاق', 'رقم_المنطقة', 'ZONE']);
+      if (matchedZone) {
+        setNameSourceField(matchedZone);
+      } else {
+        setNameSourceField('ZONE');
+      }
+    }
+  }, [targetTemplate, sourceAttributes]);
+
   const [selectedFields, setSelectedFields] = useState<Record<string, string[]>>({
     pipes: [...TEMPLATES.pipes.fields],
     points: [...TEMPLATES.points.fields],
@@ -403,6 +425,31 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
              if (matchedIndex !== -1 && p.originalRow[matchedIndex]) {
                  newId = String(p.originalRow[matchedIndex]);
              }
+         }
+      }
+
+      // Format element name as "Zone <Number>" when targetTemplate is polygons or when nameSourceField is a zone field
+      if (targetTemplate === 'polygons' || (nameSourceField && isZoneField(nameSourceField))) {
+         let valToFormat = newId;
+         if (!nameSourceField || newId === p.id) {
+            valToFormat = newAttrs['ZONE'] || p.attributes?.['ZONE'] || p.attributes?.['zone_nu'] || p.attributes?.['zone'] || p.attributes?.['منطقة'] || p.id;
+         }
+         if (valToFormat) {
+            const cleaned = cleanZoneValue(valToFormat);
+            if (cleaned) {
+                const numOnly = extractNumbersOnly(cleaned);
+                if (numOnly) {
+                    newId = `Zone ${numOnly}`;
+                } else if (/^zone\s*/i.test(cleaned)) {
+                    newId = cleaned.replace(/^zone\s*/i, 'Zone ');
+                } else {
+                    newId = `Zone ${cleaned}`;
+                }
+            } else if (String(valToFormat).trim()) {
+                const strVal = String(valToFormat).trim();
+                const numInStr = extractNumbersOnly(strVal);
+                newId = numInStr ? `Zone ${numInStr}` : (strVal.startsWith('Zone ') ? strVal : `Zone ${strVal}`);
+            }
          }
       }
 
@@ -804,7 +851,11 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
           <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'مصدر اسم العنصر (اختياري)' : 'Element Name Source (Optional)'}</h4>
-              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'اختر حقلاً ليكون هو اسم العنصر الذي يظهر على الخريطة.' : 'Choose a field to be used as the element name shown on the map.'}</p>
+              <p className="text-white/50 text-[10px] mt-1">
+                {lang === 'ar' 
+                  ? (targetTemplate === 'polygons' ? 'في تنظيم النطاقات، يتم تنسيق اسم العنصر تلقائياً كـ (Zone 1, Zone 2, Zone 3...) بالاعتماد على رقم النطاق المستخرج.' : 'اختر حقلاً ليكون هو اسم العنصر الذي يظهر على الخريطة.') 
+                  : (targetTemplate === 'polygons' ? 'For Polygons, element names are automatically formatted as Zone 1, Zone 2, Zone 3... based on the extracted zone number.' : 'Choose a field to be used as the element name shown on the map.')}
+              </p>
             </div>
             <select
               value={nameSourceField}
