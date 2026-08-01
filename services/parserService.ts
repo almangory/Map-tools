@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 import DxfParser from 'dxf-parser';
 import JSZipModule from 'jszip';
 import { ParsedFile, GeoPoint, ColumnMapping } from '../types';
+import { calculatePathLength } from './geometryService';
 
 const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule as any).default || JSZipModule;
 
@@ -54,6 +55,59 @@ const detectColumns = (headers: string[]): ColumnMapping => {
   map.linkColumn = findMatch(linkTerms);
   
   return map;
+};
+
+export const isWaterPoint = (pt: any): boolean => {
+  if (!pt) return false;
+  const layerUpper = String(pt.layer || '').toUpperCase();
+  const descUpper = String(pt.description || '').toUpperCase();
+  const idUpper = String(pt.id || '').toUpperCase();
+  const attr1Upper = String(pt.attr1 || '').toUpperCase();
+  const attr2Upper = String(pt.attr2 || '').toUpperCase();
+  const attrStr = JSON.stringify(pt.attributes || {}).toUpperCase();
+  const fullText = `${layerUpper} ${descUpper} ${idUpper} ${attr1Upper} ${attr2Upper} ${attrStr}`;
+
+  return (
+    layerUpper.includes('W_MAINLINE') ||
+    fullText.includes('WATER') ||
+    fullText.includes('WTR') ||
+    fullText.includes('POTABLE') ||
+    fullText.includes('MOW') ||
+    fullText.includes('ماء') ||
+    fullText.includes('مياه') ||
+    fullText.includes('شرب') ||
+    pt.color === '#00c8b3' ||
+    pt.color === '#0000ff' ||
+    pt.color === '#00a8e8' ||
+    pt.color === '#00b0ff'
+  );
+};
+
+export const isSewerPoint = (pt: any): boolean => {
+  if (!pt) return false;
+  const layerUpper = String(pt.layer || '').toUpperCase();
+  const descUpper = String(pt.description || '').toUpperCase();
+  const idUpper = String(pt.id || '').toUpperCase();
+  const attr1Upper = String(pt.attr1 || '').toUpperCase();
+  const attr2Upper = String(pt.attr2 || '').toUpperCase();
+  const attrStr = JSON.stringify(pt.attributes || {}).toUpperCase();
+  const fullText = `${layerUpper} ${descUpper} ${idUpper} ${attr1Upper} ${attr2Upper} ${attrStr}`;
+
+  return (
+    layerUpper.includes('WW_MAINLINE') ||
+    layerUpper.includes('S_GRAVITY_MAIN') ||
+    fullText.includes('SEWER') ||
+    fullText.includes('SAN') ||
+    fullText.includes('WW') ||
+    fullText.includes('DRAIN') ||
+    fullText.includes('WASTEWATER') ||
+    fullText.includes('صرف') ||
+    fullText.includes('مجاري') ||
+    pt.color === '#d946ef' ||
+    pt.color === '#a78bfa' ||
+    pt.color === '#9000ff' ||
+    pt.color === '#800080'
+  );
 };
 
 export const parseExcel = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
@@ -123,27 +177,123 @@ export const stripHtml = (html?: string): string => {
     .trim();
 };
 
+export const extractNumbersOnly = (val: any): string => {
+  if (val === undefined || val === null) return '';
+  let str = String(val).trim();
+  if (!str) return '';
+
+  // 1. Convert Eastern Arabic numerals (٠-٩) to standard English digits (0-9)
+  str = str.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+
+  // 2. Normalize comma decimal separator between digits (e.g., "100,5" -> "100.5")
+  str = str.replace(/(\d+),(\d+)/g, '$1.$2');
+
+  // 3. Remove all non-digit and non-dot characters
+  let cleaned = str.replace(/[^\d.]/g, '');
+
+  // 4. Ensure at most one decimal point exists
+  const parts = cleaned.split('.');
+  if (parts.length > 2) {
+    cleaned = parts[0] + '.' + parts.slice(1).join('');
+  }
+
+  return cleaned;
+};
+
+export const isNumericTargetField = (fieldName: string): boolean => {
+  if (!fieldName) return false;
+  const normalized = fieldName.toLowerCase().replace(/[\s_#-]/g, '');
+  const numericKeywords = [
+    'zone', 'zonenu', 'zoneno', 'منطقة', 'المنطقة', 'رقمالمنطقة', 'النطاق', 'زون', 'رقمالزون',
+    'permitno', 'permit', 'رقمالترخيص', 'رقمالرخصة', 'رقمالرخصه', 'رقمالتصريح',
+    'innerdiameter', 'القطرالداخلي', 'قطرداخلي',
+    'outerdiameter', 'القطرالخارجي', 'قطرخارجي',
+    'shapelength', 'actuallength', 'طولالخط', 'طولالعنصر', 'الاطوال'
+  ];
+  return numericKeywords.some(nk => normalized === nk || normalized.includes(nk));
+};
+
+export const isZoneField = (fieldName: string): boolean => {
+  if (!fieldName) return false;
+  const normalized = fieldName.toLowerCase().replace(/[\s_#-]/g, '');
+  const zoneKeywords = ['zone', 'zonenu', 'zoneno', 'منطقة', 'المنطقة', 'رقمالمنطقة', 'النطاق', 'زون', 'رقمالزون'];
+  return zoneKeywords.some(zk => normalized === zk || normalized.includes(zk));
+};
+
+export const cleanZoneValue = (val: any): string => {
+  if (val === undefined || val === null) return '';
+  let str = String(val).trim();
+  if (!str) return '';
+
+  if (str.includes('|') || str.includes('/') || str.includes(',')) {
+    const parts = str.split(/([|/,])/);
+    return parts.map(p => {
+      if (p === '|' || p === '/' || p === ',') return p;
+      return cleanZoneValue(p.trim());
+    }).join('');
+  }
+
+  str = str.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d).toString());
+
+  let numStr = extractNumbersOnly(str);
+  if (!numStr) {
+    return str.replace(/\b0+(\d+)\b/g, '$1').trim();
+  }
+
+  if (/^0+\d+$/.test(numStr)) {
+    numStr = numStr.replace(/^0+/, '');
+  } else if (/^0+$/.test(numStr)) {
+    numStr = '0';
+  } else if (/^0+/.test(numStr) && !numStr.startsWith('0.')) {
+    numStr = numStr.replace(/^0+/, '') || '0';
+  }
+
+  return numStr;
+};
+
+const cleanAttributeValue = (key: string, rawVal: string): string => {
+  if (isZoneField(key)) return cleanZoneValue(rawVal);
+  if (isNumericTargetField(key)) return extractNumbersOnly(rawVal);
+  return rawVal;
+};
+
 export const parseDescriptionToAttributes = (desc?: string, attributes: Record<string, string> = {}): Record<string, string> => {
     if (!desc || typeof desc !== 'string') return attributes;
     
     const cleanDesc = desc.trim();
     if (!cleanDesc) return attributes;
 
-    // 1. Parse HTML <tr><td>Key</td><td>Value</td></tr>
-    const trRegex = /<tr[^>]*>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/gi;
+    // 1. Parse HTML <tr> blocks dynamically
+    const trBlockRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let trMatch;
-    while ((trMatch = trRegex.exec(cleanDesc)) !== null) {
-        const rawKey = stripHtml(trMatch[1]);
-        const rawVal = stripHtml(trMatch[2]);
-        const lowerK = String(rawKey || '').toLowerCase();
-        const lowerV = String(rawVal || '').toLowerCase();
-        const isHeader = (lowerK === 'key' && lowerV === 'value') ||
-                         (lowerK === 'field' && lowerV === 'value') ||
-                         (lowerK === 'attribute' && lowerV === 'value') ||
-                         (rawKey === 'الحقل' && rawVal === 'القيمة') ||
-                         (rawKey === 'العنصر' && rawVal === 'القيمة');
-        if (rawKey && !isHeader) {
-            if (!attributes[rawKey]) attributes[rawKey] = rawVal;
+    while ((trMatch = trBlockRegex.exec(cleanDesc)) !== null) {
+        const rowContent = trMatch[1];
+        const cellRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+        const cells: string[] = [];
+        let cellMatch;
+        while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+            cells.push(stripHtml(cellMatch[1]).trim());
+        }
+        if (cells.length >= 2) {
+            let rawKey = cells[0];
+            let rawVal = cells[1];
+            if (cells.length >= 3 && /^\d+$/.test(rawKey)) {
+                rawKey = cells[1];
+                rawVal = cells[2];
+            }
+            const lowerK = String(rawKey || '').toLowerCase();
+            const lowerV = String(rawVal || '').toLowerCase();
+            const isHeader = (lowerK === 'key' && lowerV === 'value') ||
+                             (lowerK === 'field' && lowerV === 'value') ||
+                             (lowerK === 'attribute' && lowerV === 'value') ||
+                             (rawKey === 'الحقل' && rawVal === 'القيمة') ||
+                             (rawKey === 'العنصر' && rawVal === 'القيمة') ||
+                             (rawKey === 'اسم الحقل' && rawVal === 'القيمة');
+            if (rawKey && !isHeader) {
+                if (!attributes[rawKey]) {
+                    attributes[rawKey] = cleanAttributeValue(rawKey, rawVal);
+                }
+            }
         }
     }
 
@@ -156,13 +306,17 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
         if (sepIdx > 0) {
             const k = text.substring(0, sepIdx).trim();
             const v = text.substring(sepIdx + 1).trim();
-            if (k && !attributes[k]) attributes[k] = v;
+            if (k && !attributes[k]) {
+                attributes[k] = cleanAttributeValue(k, v);
+            }
         } else {
             const spaceIdx = text.indexOf(' ');
             if (spaceIdx > 0) {
                 const k = text.substring(0, spaceIdx).trim();
                 const v = text.substring(spaceIdx + 1).trim();
-                if (k && k.length < 50 && !attributes[k]) attributes[k] = v;
+                if (k && k.length < 50 && !attributes[k]) {
+                    attributes[k] = cleanAttributeValue(k, v);
+                }
             }
         }
     }
@@ -193,7 +347,7 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
             const k = line.substring(0, sepIdx).trim();
             const v = line.substring(sepIdx + 1).trim();
             if (k && k.length < 60 && !attributes[k]) {
-                attributes[k] = v;
+                attributes[k] = cleanAttributeValue(k, v);
             }
         } else if (sepIdx === -1) {
             const knownMultiWordKeys = [
@@ -201,7 +355,8 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                 'القطر الداخلي', 'القطر الخارجي', 'اسم الشارع', 'اسم الحي', 'سنة التركيب', 'سنة التشغيل',
                 'حالة العنصر', 'نوع الخرسانة', 'طول الخط', 'مادة الخط', 'قطر الانبوب مم', 'قطر الخط مم',
                 'segment id', 'Permit No', 'Drilling type', 'Pipe Diameter', 'Line No', 'Asset Status',
-                'Project Name', 'Project ID', 'Inner Diameter', 'Outer Diameter'
+                'Project Name', 'Project ID', 'Inner Diameter', 'Outer Diameter', 'INNERDIAMETER',
+                'INNER_DIAMETER', 'INNER DIAMETER', 'InnerDiameter'
             ];
             
             let matchedMulti = false;
@@ -210,7 +365,7 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                     const k = key;
                     const v = line.substring(key.length).trim();
                     if (v && !attributes[k]) {
-                        attributes[k] = v;
+                        attributes[k] = cleanAttributeValue(k, v);
                     }
                     matchedMulti = true;
                     break;
@@ -223,7 +378,7 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                     const k = line.substring(0, spaceIdx).trim();
                     const v = line.substring(spaceIdx + 1).trim();
                     if (k && k.length < 50 && v && !attributes[k]) {
-                        attributes[k] = v;
+                        attributes[k] = cleanAttributeValue(k, v);
                     }
                 }
             }
@@ -238,14 +393,51 @@ export const extractAllPointAttributes = (pt: any): Record<string, string> => {
     if (pt?.attributes) {
         Object.entries(pt.attributes).forEach(([k, v]) => {
             if (v !== undefined && v !== null) {
-                attrs[k] = String(v);
+                const valStr = String(v);
+                attrs[k] = cleanAttributeValue(k, valStr);
             }
         });
     }
     if (pt?.description) {
         parseDescriptionToAttributes(pt.description, attrs);
     }
+    // Clean all target numeric/zone fields
+    Object.keys(attrs).forEach(k => {
+        if (attrs[k]) {
+            attrs[k] = cleanAttributeValue(k, attrs[k]);
+        }
+    });
+
+    // Auto-populate SHAPE_Length if missing and pt has geometry
+    const hasShapeLength = Object.keys(attrs).some(k => {
+        const lower = k.toLowerCase().replace(/[\s_#-]/g, '');
+        return lower === 'shapelength' || lower === 'actuallength';
+    });
+    if (!hasShapeLength && pt) {
+        const calcLen = (pt.path && pt.path.length >= 2) ? calculatePathLength(pt.path) : (pt.originalLength || 0);
+        if (calcLen > 0) {
+            attrs['SHAPE_Length'] = calcLen.toFixed(2);
+        }
+    }
     return attrs;
+};
+
+export const extractHeadersFromPoints = (points: GeoPoint[]): string[] => {
+    const keysSet = new Set<string>();
+    points.forEach(p => {
+        if (p?.attributes) {
+            Object.keys(p.attributes).forEach(k => {
+                if (k && typeof k === 'string' && k.trim()) keysSet.add(k.trim());
+            });
+        }
+        if (p?.description) {
+            const descAttrs = parseDescriptionToAttributes(p.description, {});
+            Object.keys(descAttrs).forEach(k => {
+                if (k && typeof k === 'string' && k.trim()) keysSet.add(k.trim());
+            });
+        }
+    });
+    return Array.from(keysSet);
 };
 
 const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
@@ -623,7 +815,7 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
     for (const feature of features) {
         if (!feature.geometry) continue;
         
-        const props = feature.properties || {};
+        const props = { ...(feature.properties || {}) };
         const id = props.id || props.ID || props.OBJECTID || props.FID || props.name || props.Name || `${sourceName}_${counter++}`;
         
         // Build a nice description
@@ -746,7 +938,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
             points = geoJsonToGeoPoints(geojson, fileName.replace('.shp', ''));
         }
         if (onProgress) onProgress(100);
-        return { filename: file.name, type: 'shp', data: points, preview: [] };
+        return { filename: file.name, type: 'shp', data: points, headers: extractHeadersFromPoints(points), preview: [] };
     }
     
     // --- 2. GEODATABASE (.gdb or .zip containing .gdb) ---
@@ -762,7 +954,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
         if (onProgress) onProgress(60);
         const points = await parseKMLContentAsync(kmlContent, onProgress);
         if (onProgress) onProgress(100);
-        return { filename: file.name, type: 'kml', data: points, preview: [] };
+        return { filename: file.name, type: 'kml', data: points, headers: extractHeadersFromPoints(points), preview: [] };
     }
     
     // --- 4. ZIP (can be KMZ, SHP, GDB) ---
@@ -787,7 +979,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
                      points = points.concat(geoJsonToGeoPoints(geojson, layerName));
                 }
                 if (onProgress) onProgress(100);
-                return { filename: file.name, type: 'gdb', data: points, preview: [] };
+                return { filename: file.name, type: 'gdb', data: points, headers: extractHeadersFromPoints(points), preview: [] };
             } catch (err) {
                 console.error("GDB Parsing Error:", err);
                 throw new Error("Failed to parse Geodatabase. Make sure the ZIP contains a valid .gdb folder.");
@@ -807,7 +999,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
                     points = geoJsonToGeoPoints(geojson, 'Shapefile');
                 }
                 if (onProgress) onProgress(100);
-                return { filename: file.name, type: 'shp', data: points, preview: [] };
+                return { filename: file.name, type: 'shp', data: points, headers: extractHeadersFromPoints(points), preview: [] };
             } catch (err) {
                 console.error("Shapefile Parsing Error:", err);
                 throw new Error("Failed to parse Shapefile. Make sure the ZIP contains .shp, .shx, and .dbf files.");
@@ -837,7 +1029,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
             if (onProgress) onProgress(60);
             const points = await parseKMLContentAsync(kmlContent, onProgress);
             if (onProgress) onProgress(100);
-            return { filename: file.name, type: 'kmz', data: points, preview: [] };
+            return { filename: file.name, type: 'kmz', data: points, headers: extractHeadersFromPoints(points), preview: [] };
         }
         
         throw new Error("Invalid ZIP file: No recognizable GDB, Shapefile, or KML content found.");
@@ -1028,6 +1220,7 @@ export const fetchNetworkFile = async (url: string, onProgress?: (percent: numbe
         filename: "network_file.kml",
         type: 'kmz',
         data: points,
+        headers: extractHeadersFromPoints(points),
         preview: []
      };
   }

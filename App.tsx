@@ -13,7 +13,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -23,7 +23,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 
 import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon } from './types';
 import { COMMON_EPSG } from './constants';
-import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, parseDescriptionToAttributes, stripHtml } from './services/parserService';
+import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
@@ -33,9 +33,12 @@ import { downloadDataPDF } from './services/pdfExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
+import { SegmentLengthChart } from './components/SegmentLengthChart';
+import { PermitLengthChart } from './components/PermitLengthChart';
 import { FileComparator } from './components/FileComparator';
 import { MapClassifier } from './components/MapClassifier';
 import { SegmentVaultManager } from './components/SegmentVaultManager';
+import { SbcValidator } from './components/SbcValidator';
 import { InstallPwaModal } from './components/InstallPwaModal';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
@@ -330,9 +333,10 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
-  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault'>('converter');
+  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault' | 'sbc-checker'>('converter');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [progressPercent, setProgressPercent] = useState<number | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [autoDetected, setAutoDetected] = useState<string | null>(null);
@@ -345,6 +349,10 @@ const App: React.FC = () => {
   const [classifierRefZones, setClassifierRefZones] = useState<GeoPoint[]>([]);
   const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
   const [segmentFilterQuery, setSegmentFilterQuery] = useState('');
+  const [permitFilterQuery, setPermitFilterQuery] = useState('');
+  const [permitStatusFilter, setPermitStatusFilter] = useState<'all' | 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining'>('all');
+  const [permitSortBy, setPermitSortBy] = useState<'count-desc' | 'length-desc' | 'color-status' | 'name'>('count-desc');
+  const [analyzerNetworkType, setAnalyzerNetworkType] = useState<'all' | 'water' | 'sewer'>('all');
 
   const [mergeThreshold, setMergeThreshold] = useState<number>(() => loadSavedPreference('mergeThreshold', 45));
   const [duplicateTolerance, setDuplicateTolerance] = useState<number>(() => loadSavedPreference('duplicateTolerance', 0.5));
@@ -354,6 +362,19 @@ const App: React.FC = () => {
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [overlapModalType, setOverlapModalType] = useState<'duplicates' | 'intersections'>('duplicates');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+
+  // Auto-Alert states for Spatial Overlaps upon import
+  const [autoAlertInfo, setAutoAlertInfo] = useState<{
+    fileId: string;
+    filename: string;
+    duplicatesCount: number;
+    intersectionsCount: number;
+    totalCount: number;
+    dups: OverlapResult[];
+    intersections: OverlapResult[];
+  } | null>(null);
+  const [showAutoAlertModal, setShowAutoAlertModal] = useState(false);
+  const lastAlertedFileRef = useRef<string>('');
   const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>(() => loadSavedPreference('globalBaseMap', 'satellite'));
 
   // PWA Mobile App Installation state
@@ -396,9 +417,11 @@ const App: React.FC = () => {
   
   const verifyEssentialAttributes = () => {
     setLoading(true);
+    setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? 'جاري فحص البيانات...' : 'Verifying attributes...');
     
     setTimeout(() => {
+        setProgressPercent(50);
         let missingCount = 0;
         
         const processPoints = (pts: GeoPoint[]) => {
@@ -521,16 +544,19 @@ const App: React.FC = () => {
             setPlannedStreets(nextPlanned);
         }
 
+        setProgressPercent(100);
         setLoading(false);
+        setProgressPercent(null);
         setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية.` : `Highlighted ${missingCount} segments missing essential attributes.`);
         setTimeout(() => setStatusMessage(''), 4000);
-    }, 500);
+    }, 300);
   };
 
 
 
   const verifyPermitAndSegmentId = () => {
     setLoading(true);
+    setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (segment id)...' : 'Verifying content of segment id...');
 
     setTimeout(() => {
@@ -679,7 +705,9 @@ const App: React.FC = () => {
       }
 
       setDataId(`segment-check-${Date.now()}`);
+      setProgressPercent(100);
       setLoading(false);
+      setProgressPercent(null);
 
       if (matchedCount > 0) {
         setStatusMessage(
@@ -698,200 +726,531 @@ const App: React.FC = () => {
     }, 500);
   };
 
+  const verifyPermitNo = () => {
+    setLoading(true);
+    setProgressPercent(10);
+    setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (Permit No)...' : 'Verifying content of Permit No...');
+
+    setTimeout(() => {
+      let matchedCount = 0;
+      const uniquePermitSet = new Set<string>();
+
+      const stripHtml = (html: any): string => {
+        if (!html) return '';
+        return String(html)
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&#160;/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[\s\u00A0]+/g, ' ')
+          .trim();
+      };
+
+      const isValidValue = (val: any, keyName?: string): boolean => {
+        if (val === undefined || val === null) return false;
+        const cleanStr = stripHtml(val);
+        if (!cleanStr) return false;
+        if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) return false;
+        const lower = String(cleanStr || '').toLowerCase();
+        const emptyValues = new Set([
+          '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
+          'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
+          'no data', 'nodata', 'no_data', 'not available', 'not applicable',
+          'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
+          'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
+        ]);
+        if (emptyValues.has(lower)) return false;
+
+        const labelValues = new Set([
+          'permit no', 'permit_no', 'permitno', 'permit', 'permit id', 'permit_id', 'permitid',
+          'رقم الترخيص', 'رقم ترخيص', 'الترخيص', 'رقم الرخصة', 'رقم رخصة', 'الرخصة', 'ترخيص'
+        ]);
+        if (labelValues.has(lower)) return false;
+
+        if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) return false;
+        if (/^(permit|license|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
+        return true;
+      };
+
+      const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
+
+      const isPermitKey = (key: string): boolean => {
+        const norm = normalizeKey(key);
+        const permitKeys = new Set([
+          'permitno', 'permitid', 'permit_no', 'permit_id', 'permit', 'permitnumber',
+          'رقمالترخيص', 'رقمترخيص', 'الترخيص', 'رقمالرخصة', 'رقمرخصة', 'كودالترخيص', 'معرفالترخيص'
+        ]);
+        return permitKeys.has(norm);
+      };
+
+      const extractPermitNoFromDescription = (description?: string): string | null => {
+        if (!description) return null;
+        const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:permit\s*no|permit_no|permit\s*id|permit|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+        const tableMatch = description.match(tableCellRegex);
+        if (tableMatch && tableMatch[1]) {
+          const val = stripHtml(tableMatch[1]);
+          if (isValidValue(val, 'permit no')) return val;
+        }
+        const textRegex = /(?:permit\s*no|permit_no|permit\s*id|permit|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+        const textMatch = description.match(textRegex);
+        if (textMatch && textMatch[1]) {
+          const val = stripHtml(textMatch[1]);
+          if (isValidValue(val, 'permit no')) return val;
+        }
+        return null;
+      };
+
+      const processPoints = (pts: GeoPoint[]) => {
+        return pts.map(pt => {
+          let foundVal: string | null = null;
+          if (pt.attributes) {
+            for (const [key, val] of Object.entries(pt.attributes)) {
+              if (isPermitKey(key) && isValidValue(val, key)) {
+                foundVal = stripHtml(val);
+                break;
+              }
+            }
+          }
+          if (!foundVal && pt.description) {
+            foundVal = extractPermitNoFromDescription(pt.description);
+          }
+
+          if (foundVal) {
+            matchedCount++;
+            uniquePermitSet.add(foundVal.trim());
+            return {
+              ...pt,
+              color: '#FF6D00' // Vivid Neon Orange
+            };
+          }
+          return pt;
+        });
+      };
+
+      if (globalPoints.length > 0) {
+        setGlobalPoints(processPoints(globalPoints));
+      }
+      if (plannedStreets.length > 0) {
+        setPlannedStreets(processPoints(plannedStreets));
+      }
+
+      setDataId(`permit-check-${Date.now()}`);
+      setProgressPercent(100);
+      setLoading(false);
+      setProgressPercent(null);
+
+      if (matchedCount > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم فحص وتلوين ${matchedCount} عنصراً باللون البرتقالي لوجود رقم ترخيص (Permit No). وتم العثور على ${uniquePermitSet.size} رقم ترخيص فريد.`
+            : `Colored ${matchedCount} elements in neon orange for having valid Permit No. Found ${uniquePermitSet.size} unique permit numbers.`
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? 'لم يتم العثور على أي عناصر تحتوي على محتوى فعلي في (Permit No).'
+            : 'No elements found containing actual content in Permit No.'
+        );
+      }
+      setTimeout(() => setStatusMessage(''), 5000);
+    }, 500);
+  };
+
   const getPointsToCheck = (): GeoPoint[] => {
-    if (activeTab === 'street-planner' && plannedStreets.length > 0) {
-      const combined = [...globalPoints];
-      for (const p of plannedStreets) {
-        if (!combined.some(item => String(item.id) === String(p.id))) {
+    const safeGlobal = Array.isArray(globalPoints) ? globalPoints : [];
+    const safePlanned = Array.isArray(plannedStreets) ? plannedStreets : [];
+
+    let basePoints: GeoPoint[] = [];
+
+    if (activeTab === 'street-planner' && safePlanned.length > 0) {
+      const combined = [...safeGlobal];
+      for (const p of safePlanned) {
+        if (p && !combined.some(item => item && String(item.id) === String(p.id))) {
           combined.push(p);
         }
       }
-      return combined;
+      basePoints = combined;
+    } else {
+      basePoints = safeGlobal.length > 0 ? safeGlobal : safePlanned;
     }
-    return globalPoints.length > 0 ? globalPoints : plannedStreets;
+
+    if (activeTab === 'analyzer' && analyzerNetworkType !== 'all') {
+      const waterPts = basePoints.filter(p => isWaterPoint(p));
+      const sewerPts = basePoints.filter(p => isSewerPoint(p));
+      if (analyzerNetworkType === 'water') {
+        return waterPts.length > 0 ? waterPts : basePoints.filter(p => !isSewerPoint(p));
+      } else if (analyzerNetworkType === 'sewer') {
+        return sewerPts.length > 0 ? sewerPts : basePoints.filter(p => !isWaterPoint(p));
+      }
+    }
+
+    return basePoints;
   };
 
   // ==========================================
   // 1. التطابق (Duplicate Lines - خط فوق خط)
   // ==========================================
   const handleCheckDuplicates = () => {
-    const pointsToCheck = getPointsToCheck();
-    const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
-    setOverlapResults(dups);
-    setOverlapModalType('duplicates');
-    setShowOverlapModal(true);
-    if (dups.length === 0) {
-      setStatusMessage(
-        lang === 'ar'
-          ? `لم يتم العثور على أي عناصر متطابقة (خط فوق خط) ضمن مسافة ${duplicateTolerance}m.`
-          : `No exact duplicate lines found within ${duplicateTolerance}m.`
-      );
-      setTimeout(() => setStatusMessage(''), 3000);
-    }
+    setLoading(true);
+    setProgressPercent(15);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري فحص التداخل الجغرافي والتطابق المكاني...'
+        : 'Checking spatial duplicates...'
+    );
+
+    setTimeout(async () => {
+      setProgressPercent(40);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      try {
+        const pointsToCheck = getPointsToCheck();
+        setProgressPercent(70);
+        const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
+        setProgressPercent(95);
+        setOverlapResults(dups);
+        setOverlapModalType('duplicates');
+        setShowOverlapModal(true);
+        if (dups.length === 0) {
+          setStatusMessage(
+            lang === 'ar'
+              ? `لم يتم العثور على أي عناصر متطابقة (خط فوق خط) ضمن مسافة ${duplicateTolerance}m.`
+              : `No exact duplicate lines found within ${duplicateTolerance}m.`
+          );
+          setTimeout(() => setStatusMessage(''), 3000);
+        } else {
+          setStatusMessage('');
+        }
+      } catch (e) {
+        console.error('Error in handleCheckDuplicates:', e);
+      } finally {
+        setProgressPercent(100);
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 100);
   };
 
   const handleColorDuplicatesBlack = () => {
-    const pointsToCheck = getPointsToCheck();
-    const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
-
-    if (dups.length === 0) {
-      setStatusMessage(
-        lang === 'ar'
-          ? `لم يتم العثور على خطوط متطابقة لتلوينها بالأسود ضمن مسافة ${duplicateTolerance}m.`
-          : `No duplicate lines found to color black within ${duplicateTolerance}m.`
-      );
-      setTimeout(() => setStatusMessage(''), 3000);
-      return;
-    }
-
-    const dupIds = new Set<string>();
-    dups.forEach(d => {
-      dupIds.add(String(d.id1));
-      dupIds.add(String(d.id2));
-    });
-
-    let coloredCount = 0;
-    const updateList = (list: GeoPoint[]) => list.map(pt => {
-      if (dupIds.has(String(pt.id))) {
-        coloredCount++;
-        return { ...pt, color: '#000000' };
-      }
-      return pt;
-    });
-
-    setGlobalPoints(prev => updateList(prev));
-    setPlannedStreets(prev => updateList(prev));
-
-    setOverlapResults(dups);
-    setOverlapModalType('duplicates');
-    setShowOverlapModal(true);
-    setDataId(`colored-black-${Date.now()}`);
-
+    setLoading(true);
+    setProgressPercent(15);
     setStatusMessage(
       lang === 'ar'
-        ? `تم تلوين ${coloredCount} خط متطابق (خط فوق خط) باللون الأسود ⬛ بنجاح!`
-        : `Successfully colored ${coloredCount} duplicate lines in black ⬛!`
+        ? 'جاري تلوين الخطوط المتطابقة باللون الأسود ⬛...'
+        : 'Coloring duplicate lines in black ⬛...'
     );
-    setTimeout(() => setStatusMessage(''), 5000);
+
+    setTimeout(async () => {
+      setProgressPercent(40);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      try {
+        const pointsToCheck = getPointsToCheck();
+        setProgressPercent(70);
+        const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
+
+        if (dups.length === 0) {
+          setStatusMessage(
+            lang === 'ar'
+              ? `لم يتم العثور على خطوط متطابقة لتلوينها بالأسود ضمن مسافة ${duplicateTolerance}m.`
+              : `No duplicate lines found to color black within ${duplicateTolerance}m.`
+          );
+          setTimeout(() => setStatusMessage(''), 3000);
+          return;
+        }
+
+        setProgressPercent(85);
+        const dupIds = new Set<string>();
+        dups.forEach(d => {
+          dupIds.add(String(d.id1));
+          dupIds.add(String(d.id2));
+        });
+
+        let coloredCount = 0;
+        const updateList = (list: GeoPoint[]) => list.map(pt => {
+          if (dupIds.has(String(pt.id))) {
+            coloredCount++;
+            return { ...pt, color: '#000000' };
+          }
+          return pt;
+        });
+
+        setGlobalPoints(prev => updateList(prev));
+        setPlannedStreets(prev => updateList(prev));
+
+        setOverlapResults(dups);
+        setOverlapModalType('duplicates');
+        setShowOverlapModal(true);
+        setDataId(`colored-black-${Date.now()}`);
+
+        setProgressPercent(100);
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم تلوين ${coloredCount} خط متطابق (خط فوق خط) باللون الأسود ⬛ بنجاح!`
+            : `Successfully colored ${coloredCount} duplicate lines in black ⬛!`
+        );
+        setTimeout(() => setStatusMessage(''), 5000);
+      } catch (e) {
+        console.error('Error in handleColorDuplicatesBlack:', e);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 100);
   };
 
   const handleResolveDuplicates = () => {
-    let totalRemoved = 0;
-    let nextGlobal = [...globalPoints];
-    let nextPlanned = [...plannedStreets];
-
-    if (nextGlobal.length > 0) {
-      const { cleanedPoints, removedCount } = resolveExactDuplicates(nextGlobal, duplicateTolerance);
-      totalRemoved += removedCount;
-      nextGlobal = cleanedPoints;
-    }
-
-    if (nextPlanned.length > 0) {
-      const { cleanedPoints: cleanedStreets, removedCount: count2 } = resolveExactDuplicates(nextPlanned, duplicateTolerance);
-      totalRemoved += count2;
-      nextPlanned = cleanedStreets;
-    }
-
-    setGlobalPoints(nextGlobal);
-    setPlannedStreets(nextPlanned);
-
-    if (activeFile) {
-      setActiveFile(prev => prev ? { ...prev, data: nextGlobal } : null);
-    }
-
-    setDataId(`resolved-dups-${Date.now()}`);
-
-    const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
-    const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
-    setOverlapResults(remainingDups);
-    setOverlapModalType('duplicates');
-
+    setLoading(true);
+    setProgressPercent(15);
     setStatusMessage(
       lang === 'ar'
-        ? `تم حذف ${totalRemoved} عنصر مكرر ومتطابق تماماً بنجاح!`
-        : `Successfully deleted ${totalRemoved} exact duplicate elements!`
+        ? 'جاري حذف وتصفية العناصر المكررة والمتطابقة 🗑️...'
+        : 'Deleting duplicate elements 🗑️...'
     );
-    setTimeout(() => setStatusMessage(''), 5000);
+
+    setTimeout(async () => {
+      setProgressPercent(40);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      try {
+        let totalRemoved = 0;
+        let nextGlobal = [...globalPoints];
+        let nextPlanned = [...plannedStreets];
+
+        if (nextGlobal.length > 0) {
+          const { cleanedPoints, removedCount } = resolveExactDuplicates(nextGlobal, duplicateTolerance);
+          totalRemoved += removedCount;
+          nextGlobal = cleanedPoints;
+        }
+
+        setProgressPercent(70);
+        if (nextPlanned.length > 0) {
+          const { cleanedPoints: cleanedStreets, removedCount: count2 } = resolveExactDuplicates(nextPlanned, duplicateTolerance);
+          totalRemoved += count2;
+          nextPlanned = cleanedStreets;
+        }
+
+        setGlobalPoints(nextGlobal);
+        setPlannedStreets(nextPlanned);
+
+        if (activeFile) {
+          setActiveFile(prev => prev ? { ...prev, data: nextGlobal } : null);
+        }
+
+        setDataId(`resolved-dups-${Date.now()}`);
+
+        const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
+        const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
+        const remainingIntersections = detectLineIntersections(checkTarget);
+        const remainingTotal = remainingDups.length + remainingIntersections.length;
+
+        setOverlapResults(remainingDups);
+        setOverlapModalType('duplicates');
+
+        if (remainingTotal === 0) {
+          setAutoAlertInfo(null);
+          setShowAutoAlertModal(false);
+        } else {
+          setAutoAlertInfo(prev => prev ? {
+            ...prev,
+            duplicatesCount: remainingDups.length,
+            intersectionsCount: remainingIntersections.length,
+            totalCount: remainingTotal,
+            dups: remainingDups,
+            intersections: remainingIntersections
+          } : null);
+        }
+
+        setProgressPercent(100);
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم حذف ${totalRemoved} عنصر مكرر ومتطابق تماماً بنجاح!`
+            : `Successfully deleted ${totalRemoved} exact duplicate elements!`
+        );
+        setTimeout(() => setStatusMessage(''), 5000);
+      } catch (e) {
+        console.error('Error in handleResolveDuplicates:', e);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 100);
   };
 
   // ==========================================
   // 2. التقاطعات (Line Intersections - نقاط التلاقي والعبور)
   // ==========================================
   const handleCheckIntersections = () => {
-    const pointsToCheck = getPointsToCheck();
-    const intersections = detectLineIntersections(pointsToCheck);
-    setOverlapResults(intersections);
-    setOverlapModalType('intersections');
-    setShowOverlapModal(true);
-    if (intersections.length === 0) {
-      setStatusMessage(
-        lang === 'ar'
-          ? 'لم يتم العثور على أي تقاطعات أو نقاط عبور بين الخطوط.'
-          : 'No intersecting lines found.'
-      );
-      setTimeout(() => setStatusMessage(''), 3000);
-    }
+    setLoading(true);
+    setProgressPercent(15);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري فحص التداخل الجغرافي وتقاطعات الخطوط...'
+        : 'Checking spatial overlaps and line intersections...'
+    );
+
+    setTimeout(async () => {
+      setProgressPercent(40);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      try {
+        const pointsToCheck = getPointsToCheck();
+        setProgressPercent(70);
+        const intersections = detectLineIntersections(pointsToCheck);
+        setProgressPercent(95);
+        setOverlapResults(intersections);
+        setOverlapModalType('intersections');
+        setShowOverlapModal(true);
+        if (intersections.length === 0) {
+          setStatusMessage(
+            lang === 'ar'
+              ? 'لم يتم العثور على أي تقاطعات أو نقاط عبور بين الخطوط.'
+              : 'No intersecting lines found.'
+          );
+          setTimeout(() => setStatusMessage(''), 3000);
+        } else {
+          setStatusMessage('');
+        }
+      } catch (e) {
+        console.error('Error in handleCheckIntersections:', e);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 100);
   };
 
   const handleTrimIntersections = () => {
-    let totalTrimmed = 0;
-    let nextGlobal = [...globalPoints];
-    let nextPlanned = [...plannedStreets];
-
-    if (nextGlobal.length > 0) {
-      const { cleanedPoints, trimmedCount } = trimLinesAtIntersections(nextGlobal);
-      totalTrimmed += trimmedCount;
-      nextGlobal = cleanedPoints;
-    }
-
-    if (nextPlanned.length > 0) {
-      const { cleanedPoints: cleanedStreets, trimmedCount: count2 } = trimLinesAtIntersections(nextPlanned);
-      totalTrimmed += count2;
-      nextPlanned = cleanedStreets;
-    }
-
-    setGlobalPoints(nextGlobal);
-    setPlannedStreets(nextPlanned);
-
-    if (activeFile) {
-      setActiveFile(prev => prev ? { ...prev, data: nextGlobal } : null);
-    }
-
-    setDataId(`trimmed-inters-${Date.now()}`);
-
-    const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
-    const remainingIntersections = detectLineIntersections(checkTarget);
-    setOverlapResults(remainingIntersections);
-    setOverlapModalType('intersections');
-
+    setLoading(true);
+    setProgressPercent(15);
     setStatusMessage(
       lang === 'ar'
-        ? `تم تقليم ${totalTrimmed} خط عند نقاط التقاطع بنجاح!`
-        : `Successfully trimmed ${totalTrimmed} lines at intersections!`
+        ? 'جاري تقليم الخطوط والمسارات عند نقاط التقاطع ✂️...'
+        : 'Trimming lines at intersections ✂️...'
     );
-    setTimeout(() => setStatusMessage(''), 5000);
+
+    setTimeout(async () => {
+      setProgressPercent(40);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      try {
+        let totalTrimmed = 0;
+        let nextGlobal = [...globalPoints];
+        let nextPlanned = [...plannedStreets];
+
+        if (nextGlobal.length > 0) {
+          const { cleanedPoints, trimmedCount } = trimLinesAtIntersections(nextGlobal);
+          totalTrimmed += trimmedCount;
+          nextGlobal = cleanedPoints;
+        }
+
+        setProgressPercent(70);
+        if (nextPlanned.length > 0) {
+          const { cleanedPoints: cleanedStreets, trimmedCount: count2 } = trimLinesAtIntersections(nextPlanned);
+          totalTrimmed += count2;
+          nextPlanned = cleanedStreets;
+        }
+
+        setGlobalPoints(nextGlobal);
+        setPlannedStreets(nextPlanned);
+
+        if (activeFile) {
+          setActiveFile(prev => prev ? { ...prev, data: nextGlobal } : null);
+        }
+
+        setDataId(`trimmed-inters-${Date.now()}`);
+
+        const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
+        const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
+        const remainingIntersections = detectLineIntersections(checkTarget);
+        const remainingTotal = remainingDups.length + remainingIntersections.length;
+
+        setOverlapResults(remainingIntersections);
+        setOverlapModalType('intersections');
+
+        if (remainingTotal === 0) {
+          setAutoAlertInfo(null);
+          setShowAutoAlertModal(false);
+        } else {
+          setAutoAlertInfo(prev => prev ? {
+            ...prev,
+            duplicatesCount: remainingDups.length,
+            intersectionsCount: remainingIntersections.length,
+            totalCount: remainingTotal,
+            dups: remainingDups,
+            intersections: remainingIntersections
+          } : null);
+        }
+
+        setProgressPercent(100);
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم تقليم ${totalTrimmed} خط عند نقاط التقاطع بنجاح!`
+            : `Successfully trimmed ${totalTrimmed} lines at intersections!`
+        );
+        setTimeout(() => setStatusMessage(''), 5000);
+      } catch (e) {
+        console.error('Error in handleTrimIntersections:', e);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 100);
   };
 
   const handleDeleteDuplicateItem = (targetId: string | number) => {
-    const filterFn = (p: GeoPoint) => String(p.id) !== String(targetId);
+    setLoading(true);
+    setProgressPercent(20);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري حذف العنصر وإعادة حساب التداخل الجغرافي...'
+        : 'Deleting element and re-evaluating spatial overlaps...'
+    );
 
-    const nextGlobal = globalPoints.filter(filterFn);
-    const nextPlanned = plannedStreets.filter(filterFn);
+    setTimeout(async () => {
+      setProgressPercent(60);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      try {
+        const filterFn = (p: GeoPoint) => String(p.id) !== String(targetId);
 
-    setGlobalPoints(nextGlobal);
-    setPlannedStreets(nextPlanned);
+        const nextGlobal = globalPoints.filter(filterFn);
+        const nextPlanned = plannedStreets.filter(filterFn);
 
-    if (activeFile) {
-      setActiveFile(fPrev => fPrev ? { ...fPrev, data: nextGlobal } : null);
-    }
+        setGlobalPoints(nextGlobal);
+        setPlannedStreets(nextPlanned);
 
-    setDataId(`deleted-${Date.now()}`);
-    const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
-    if (overlapModalType === 'duplicates') {
-      setOverlapResults(detectExactDuplicates(checkTarget, duplicateTolerance));
-    } else {
-      setOverlapResults(detectLineIntersections(checkTarget));
-    }
+        if (activeFile) {
+          setActiveFile(fPrev => fPrev ? { ...fPrev, data: nextGlobal } : null);
+        }
+
+        setDataId(`deleted-${Date.now()}`);
+        const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
+        const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
+        const remainingIntersections = detectLineIntersections(checkTarget);
+        const remainingTotal = remainingDups.length + remainingIntersections.length;
+
+        if (overlapModalType === 'duplicates') {
+          setOverlapResults(remainingDups);
+        } else {
+          setOverlapResults(remainingIntersections);
+        }
+
+        if (remainingTotal === 0) {
+          setAutoAlertInfo(null);
+          setShowAutoAlertModal(false);
+        } else {
+          setAutoAlertInfo(prev => prev ? {
+            ...prev,
+            duplicatesCount: remainingDups.length,
+            intersectionsCount: remainingIntersections.length,
+            totalCount: remainingTotal,
+            dups: remainingDups,
+            intersections: remainingIntersections
+          } : null);
+        }
+        setProgressPercent(100);
+        setStatusMessage('');
+      } catch (e) {
+        console.error('Error in handleDeleteDuplicateItem:', e);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 100);
   };
 
   const handleLoadSavedProjectToMap = (points: GeoPoint[], name: string) => {
@@ -901,7 +1260,7 @@ const App: React.FC = () => {
       filename: name,
       type: 'kml',
       data: points,
-      headers: extractAllPointAttributes(points)
+      headers: extractHeadersFromPoints(points)
     });
     setDataId(`loaded-project-${Date.now()}`);
     setMobileView('map');
@@ -1084,8 +1443,21 @@ const App: React.FC = () => {
 
 
   const { executionStatusDistribution, diameterDistribution } = useMemo(() => {
-    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
-    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString' && !isBlackLine(pt));
+    let rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile))
+      ? (Array.isArray(plannedStreets) ? plannedStreets : [])
+      : (Array.isArray(globalPoints) ? globalPoints : []);
+
+    if (activeTab === 'analyzer' && analyzerNetworkType !== 'all') {
+      const waterPts = rawPoints.filter(p => isWaterPoint(p));
+      const sewerPts = rawPoints.filter(p => isSewerPoint(p));
+      if (analyzerNetworkType === 'water') {
+        rawPoints = waterPts.length > 0 ? waterPts : rawPoints.filter(p => !isSewerPoint(p));
+      } else if (analyzerNetworkType === 'sewer') {
+        rawPoints = sewerPts.length > 0 ? sewerPts : rawPoints.filter(p => !isWaterPoint(p));
+      }
+    }
+
+    const pointsToAnalyze = rawPoints.filter(pt => pt && pt.type === 'LineString' && !isBlackLine(pt));
     const statusTotals: Record<string, number> = {
       'executed_water': 0,
       'executed_sewer': 0,
@@ -1134,12 +1506,25 @@ const App: React.FC = () => {
       .sort((a, b) => b.value - a.value);
 
     return { executionStatusDistribution: statusData, diameterDistribution: diaData };
-  }, [globalPoints, plannedStreets, activeTab, activeFile, lang]);
+  }, [globalPoints, plannedStreets, activeTab, activeFile, lang, analyzerNetworkType]);
 
   const analysisData = useMemo(() => {
-    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
+    let rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile))
+      ? (Array.isArray(plannedStreets) ? plannedStreets : [])
+      : (Array.isArray(globalPoints) ? globalPoints : []);
+
+    if (activeTab === 'analyzer' && analyzerNetworkType !== 'all') {
+      const waterPts = rawPoints.filter(p => isWaterPoint(p));
+      const sewerPts = rawPoints.filter(p => isSewerPoint(p));
+      if (analyzerNetworkType === 'water') {
+        rawPoints = waterPts.length > 0 ? waterPts : rawPoints.filter(p => !isSewerPoint(p));
+      } else if (analyzerNetworkType === 'sewer') {
+        rawPoints = sewerPts.length > 0 ? sewerPts : rawPoints.filter(p => !isWaterPoint(p));
+      }
+    }
+
     // Exclude Points, Polygons, and duplicate black-colored lines!
-    const pointsToAnalyze = rawPoints.filter(pt => pt.type === 'LineString' && !isBlackLine(pt));
+    const pointsToAnalyze = rawPoints.filter(pt => pt && pt.type === 'LineString' && !isBlackLine(pt));
     if (pointsToAnalyze.length === 0) return [];
 
     const groups: Record<string, { totalLength: number, count: number }> = {};
@@ -1172,10 +1557,11 @@ const App: React.FC = () => {
         percentage: totalAllLength > 0 ? (stats.totalLength / totalAllLength) * 100 : 0
       };
     }).sort((a, b) => b.totalLength - a.totalLength);
-  }, [globalPoints, plannedStreets, activeTab, canonicalColorMap, activeFile, lang]);
+  }, [globalPoints, plannedStreets, activeTab, canonicalColorMap, activeFile, lang, analyzerNetworkType]);
 
   const placemarksSummary = useMemo(() => {
-    const pointsToAnalyze = (!activeFile ? plannedStreets : globalPoints).filter(pt => !isBlackLine(pt));
+    const rawPoints = (!activeFile ? plannedStreets : globalPoints) || [];
+    const pointsToAnalyze = (Array.isArray(rawPoints) ? rawPoints : []).filter(pt => pt && !isBlackLine(pt));
     let pointsCount = 0;
     let linesCount = 0;
     let polygonsCount = 0;
@@ -1199,8 +1585,10 @@ const App: React.FC = () => {
   }, [activeFile, plannedStreets, globalPoints]);
 
   const segmentIdAnalysis = useMemo(() => {
-    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile)) ? plannedStreets : globalPoints;
-    const pointsToAnalyze = rawPoints.filter(pt => !isBlackLine(pt));
+    const rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile))
+      ? (Array.isArray(plannedStreets) ? plannedStreets : [])
+      : (Array.isArray(globalPoints) ? globalPoints : []);
+    const pointsToAnalyze = rawPoints.filter(pt => pt && !isBlackLine(pt));
     if (pointsToAnalyze.length === 0) return null;
 
     let validCount = 0;
@@ -1385,7 +1773,7 @@ const App: React.FC = () => {
       totalLengthWithSegmentId,
       uniqueDetails
     };
-  }, [globalPoints, plannedStreets, activeTab, activeFile]);
+  }, [globalPoints, plannedStreets, activeTab, activeFile, analyzerNetworkType]);
 
   const highlightSpecificSegmentId = (pts: GeoPoint[]) => {
     if (!pts || pts.length === 0) return;
@@ -1525,9 +1913,326 @@ const App: React.FC = () => {
     XLSX.writeFile(workbook, `Segment_ID_Analysis_Report_${Date.now()}.xlsx`);
   };
 
+  const permitNoAnalysis = useMemo(() => {
+    const pointsToAnalyze = getPointsToCheck();
+    if (!pointsToAnalyze || pointsToAnalyze.length === 0) return null;
+
+    const stripHtml = (html: any): string => {
+      if (!html) return '';
+      return String(html)
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&#160;/gi, ' ')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/[\s\u00A0]+/g, ' ')
+        .trim();
+    };
+
+    const isValidValue = (val: any, keyName?: string): boolean => {
+      if (val === undefined || val === null) return false;
+      const cleanStr = stripHtml(val);
+      if (!cleanStr) return false;
+      if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) return false;
+      const lower = String(cleanStr || '').toLowerCase();
+      const emptyValues = new Set([
+        '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
+        'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
+        'no data', 'nodata', 'no_data', 'not available', 'not applicable',
+        'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
+        'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
+      ]);
+      if (emptyValues.has(lower)) return false;
+
+      const labelValues = new Set([
+        'permit no', 'permit_no', 'permitno', 'permit', 'permit id', 'permit_id', 'permitid',
+        'رقم الترخيص', 'رقم ترخيص', 'الترخيص', 'رقم الرخصة', 'رقم رخصة', 'الرخصة', 'ترخيص',
+        'رقم التصريح', 'رقم تصريح', 'التصريح', 'تصريح'
+      ]);
+      if (labelValues.has(lower)) return false;
+
+      if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) return false;
+      if (/^(feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
+      return true;
+    };
+
+    const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
+
+    const isPermitKey = (key: string): boolean => {
+      const norm = normalizeKey(key);
+      if (!norm) return false;
+      const permitKeys = new Set([
+        'permitno', 'permitid', 'permit_no', 'permit_id', 'permit', 'permitnumber', 'permitnum', 'permitcode', 'permitref',
+        'licenseno', 'licenceno', 'license', 'licence', 'licenseid', 'licenceid',
+        'رقمالترخيص', 'رقمترخيص', 'الترخيص', 'رقمالرخصة', 'رقمرخصة', 'كودالترخيص', 'معرفالترخيص',
+        'رقمالتصريح', 'رقمتصريح', 'التصريح', 'تصريح', 'ترخيص', 'رخصة'
+      ]);
+      if (permitKeys.has(norm)) return true;
+      return (
+        norm.includes('permit') ||
+        norm.includes('license') ||
+        norm.includes('licence') ||
+        norm.includes('ترخيص') ||
+        norm.includes('رخصة') ||
+        norm.includes('تصريح')
+      );
+    };
+
+    const extractPermitNoFromDescription = (description?: string): string | null => {
+      if (!description) return null;
+      const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+      const tableMatch = description.match(tableCellRegex);
+      if (tableMatch && tableMatch[1]) {
+        const val = stripHtml(tableMatch[1]);
+        if (isValidValue(val, 'permit no')) return val;
+      }
+      const textRegex = /(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+      const textMatch = description.match(textRegex);
+      if (textMatch && textMatch[1]) {
+        const val = stripHtml(textMatch[1]);
+        if (isValidValue(val, 'permit no')) return val;
+      }
+      return null;
+    };
+
+    const mapByPermitId = new Map<string, {
+      count: number;
+      totalLength: number;
+      points: GeoPoint[];
+      projectNames: Set<string>;
+      projectIds: Set<string>;
+      contractors: Set<string>;
+    }>();
+
+    let validCount = 0;
+    let totalLengthWithPermitNo = 0;
+
+    for (const pt of pointsToAnalyze) {
+      let foundVal: string | null = null;
+      if (pt.attributes) {
+        for (const [key, val] of Object.entries(pt.attributes)) {
+          if (isPermitKey(key) && isValidValue(val, key)) {
+            foundVal = stripHtml(val);
+            break;
+          }
+        }
+      }
+      if (!foundVal && pt.description) {
+        foundVal = extractPermitNoFromDescription(pt.description);
+      }
+
+      if (foundVal) {
+        const cleanedId = foundVal.trim();
+        validCount++;
+        const len = calculatePathLength(pt.path, pt.attributes) || 0;
+        totalLengthWithPermitNo += len;
+
+        let entry = mapByPermitId.get(cleanedId);
+        if (!entry) {
+          entry = {
+            count: 0,
+            totalLength: 0,
+            points: [],
+            projectNames: new Set(),
+            projectIds: new Set(),
+            contractors: new Set()
+          };
+          mapByPermitId.set(cleanedId, entry);
+        }
+        entry.count++;
+        entry.totalLength += len;
+        entry.points.push(pt);
+
+        if (pt.attributes) {
+          for (const [k, v] of Object.entries(pt.attributes)) {
+            const kn = String(k).toLowerCase();
+            const strV = String(v).trim();
+            if (!strV) continue;
+            if (kn.includes('project_name') || kn.includes('projectname') || kn.includes('اسم_المشروع') || kn.includes('المشروع')) {
+              entry.projectNames.add(strV);
+            }
+            if (kn.includes('project_id') || kn.includes('projectid') || kn.includes('رقم_المشروع')) {
+              entry.projectIds.add(strV);
+            }
+            if (kn.includes('contractor') || kn.includes('مقاول') || kn.includes('المقاول')) {
+              entry.contractors.add(strV);
+            }
+          }
+        }
+      }
+    }
+
+    const uniqueDetails = Array.from(mapByPermitId.entries()).map(([idValue, data]) => {
+      const statusBreakdown: Record<string, { count: number; totalLength: number }> = {
+        executed_water: { count: 0, totalLength: 0 },
+        executed_sewer: { count: 0, totalLength: 0 },
+        in_progress: { count: 0, totalLength: 0 },
+        remaining: { count: 0, totalLength: 0 },
+      };
+
+      data.points.forEach(pt => {
+        const len = calculatePathLength(pt.path, pt.attributes) || 0;
+        const statusCat = matchStatusByColor(pt.color || '#a52714');
+        if (statusBreakdown[statusCat.key]) {
+          statusBreakdown[statusCat.key].count++;
+          statusBreakdown[statusCat.key].totalLength += len;
+        }
+      });
+
+      let primaryCat = STATUS_CATEGORIES[3];
+      let maxLen = -1;
+      for (const cat of STATUS_CATEGORIES) {
+        if (statusBreakdown[cat.key].totalLength > maxLen) {
+          maxLen = statusBreakdown[cat.key].totalLength;
+          primaryCat = cat;
+        }
+      }
+      if (maxLen <= 0 && data.points.length > 0) {
+        primaryCat = matchStatusByColor(data.points[0].color || '#a52714');
+      }
+
+      return {
+        idValue,
+        count: data.count,
+        totalLength: data.totalLength,
+        points: data.points,
+        projectName: Array.from(data.projectNames).join(', '),
+        projectId: Array.from(data.projectIds).join(', '),
+        contractor: Array.from(data.contractors).join(', '),
+        primaryColor: primaryCat.color,
+        primaryStatusKey: primaryCat.key,
+        primaryStatusNameAr: primaryCat.nameAr,
+        primaryStatusNameEn: primaryCat.nameEn,
+        statusBreakdown
+      };
+    }).sort((a, b) => b.count - a.count);
+
+    return {
+      totalElements: pointsToAnalyze.length,
+      validElementsCount: validCount,
+      uniquePermitNosCount: uniqueDetails.length,
+      totalLengthWithPermitNo,
+      uniqueDetails
+    };
+  }, [globalPoints, plannedStreets, activeTab, activeFile, analyzerNetworkType]);
+
+  const highlightSpecificPermitNo = (pts: GeoPoint[]) => {
+    if (!pts || pts.length === 0) return;
+    const ptIds = new Set(pts.map(p => p.id));
+    setGlobalPoints(prev => prev.map(pt => ptIds.has(pt.id) ? { ...pt, color: '#FFD700' } : pt));
+    setPlannedStreets(prev => prev.map(pt => ptIds.has(pt.id) ? { ...pt, color: '#FFD700' } : pt));
+    setStatusMessage(lang === 'ar' ? `تم إبراز ${pts.length} عناصر لرقم الترخيص (Permit No) المحدد على الخريطة باللون الذهبي` : `Highlighted ${pts.length} elements for selected Permit No in gold`);
+  };
+
+  const exportPermitNoReportExcel = () => {
+    if (!permitNoAnalysis || permitNoAnalysis.uniqueDetails.length === 0) return;
+
+    const getMapLink = (pts: GeoPoint[]): string => {
+      if (!pts || pts.length === 0) return '';
+      const firstPt = pts[0];
+      let lat = firstPt.y;
+      let lon = firstPt.x;
+      if ((!lat || !lon) && firstPt.path && firstPt.path.length > 0) {
+        lat = firstPt.path[0].y;
+        lon = firstPt.path[0].x;
+      }
+      if (!lat || !lon) return '';
+      return `https://www.google.com/maps?q=${lat},${lon}`;
+    };
+
+    const extractAttrValueLocal = (points: GeoPoint[], keyCandidates: string[], regexCandidates: RegExp[]): string => {
+      const foundSet = new Set<string>();
+      for (const pt of points) {
+        if (pt.attributes) {
+          for (const [k, v] of Object.entries(pt.attributes)) {
+            const kn = String(k).toLowerCase();
+            if (keyCandidates.some(c => kn.includes(c))) {
+              const strV = String(v).trim();
+              if (strV) foundSet.add(strV);
+            }
+          }
+        }
+        if (pt.description) {
+          for (const rx of regexCandidates) {
+            const m = pt.description.match(rx);
+            if (m && m[1]) {
+              const val = String(m[1]).replace(/<[^>]+>/g, '').trim();
+              if (val) foundSet.add(val);
+            }
+          }
+        }
+      }
+      return Array.from(foundSet).join(' | ');
+    };
+
+    const rowsSheet1 = permitNoAnalysis.uniqueDetails.map((item, index) => {
+      const pName = item.projectName || extractAttrValueLocal(item.points, ['project_name', 'projectname', 'اسم_المشروع', 'المشروع'], [/اسم\s*المشروع\s*[:=]\s*([^<\r\n]+)/i]);
+      const pId = item.projectId || extractAttrValueLocal(item.points, ['project_id', 'projectid', 'رقم_المشروع'], [/رقم\s*المشروع\s*[:=]\s*([^<\r\n]+)/i]);
+      const contractor = item.contractor || extractAttrValueLocal(item.points, ['contractor', 'مقاول', 'المقاول'], [/المقاول\s*[:=]\s*([^<\r\n]+)/i]);
+      const zone = cleanZoneValue(extractAttrValueLocal(item.points, ['zone', 'المنطقة', 'منطقة'], [/المنطقة\s*[:=]\s*([^<\r\n]+)/i]));
+      const street = extractAttrValueLocal(item.points, ['street', 'الشارع', 'streetname'], [/الشارع\s*[:=]\s*([^<\r\n]+)/i]);
+      const mapUrl = getMapLink(item.points);
+
+      return {
+        '#': index + 1,
+        'Permit No': item.idValue,
+        [lang === 'ar' ? 'عدد العناصر' : 'Items Count']: item.count,
+        [lang === 'ar' ? 'إجمالي الطول (متر)' : 'Total Length (m)']: Math.round(item.totalLength),
+        [lang === 'ar' ? 'إجمالي الطول (كم)' : 'Total Length (km)']: Number((item.totalLength / 1000).toFixed(3)),
+        [lang === 'ar' ? 'اسم المشروع' : 'Project Name']: pName || '-',
+        [lang === 'ar' ? 'رقم المشروع' : 'Project ID']: pId || '-',
+        [lang === 'ar' ? 'المقاول' : 'Contractor']: contractor || '-',
+        [lang === 'ar' ? 'المنطقة' : 'Zone']: zone || '-',
+        [lang === 'ar' ? 'الشارع' : 'Street']: street || '-',
+        [lang === 'ar' ? 'رابط الموقع على الخريطة' : 'Map Link']: mapUrl
+      };
+    });
+
+    const allPointsWithPermit = getPointsToCheck().filter(pt => {
+      if (pt.attributes) {
+        for (const [k, v] of Object.entries(pt.attributes)) {
+          if (String(k).toLowerCase().replace(/[\s_#-]/g, '').includes('permit') && String(v).trim()) return true;
+        }
+      }
+      return pt.description && /permit/i.test(pt.description);
+    });
+
+    const rowsSheet2 = allPointsWithPermit.map((pt, index) => {
+      let permitVal = '';
+      if (pt.attributes) {
+        for (const [k, v] of Object.entries(pt.attributes)) {
+          if (String(k).toLowerCase().replace(/[\s_#-]/g, '').includes('permit') && String(v).trim()) {
+            permitVal = String(v).trim();
+            break;
+          }
+        }
+      }
+      const len = calculatePathLength(pt.path, pt.attributes) || 0;
+
+      return {
+        '#': index + 1,
+        [lang === 'ar' ? 'اسم العنصر' : 'Name']: pt.name || `Point ${index + 1}`,
+        'Permit No': permitVal,
+        [lang === 'ar' ? 'النوع' : 'Type']: pt.type || 'LineString',
+        [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: Math.round(len),
+        [lang === 'ar' ? 'الشارع' : 'Street']: pt.street || pt.attributes?.STREETNAME || pt.attributes?.street || '-',
+        [lang === 'ar' ? 'الحي' : 'District']: pt.district || pt.attributes?.DISTRICT || pt.attributes?.district || '-',
+        [lang === 'ar' ? 'الرابط' : 'Link']: `https://www.google.com/maps?q=${pt.y},${pt.x}`
+      };
+    });
+
+    const workbook = XLSX.utils.book_new();
+
+    const worksheet1 = XLSX.utils.json_to_sheet(rowsSheet1);
+    XLSX.utils.book_append_sheet(workbook, worksheet1, lang === 'ar' ? 'ملخص_Permit_No' : 'Permit_No_Summary');
+
+    const worksheet2 = XLSX.utils.json_to_sheet(rowsSheet2);
+    XLSX.utils.book_append_sheet(workbook, worksheet2, lang === 'ar' ? 'جميع_قيم_Permit_No' : 'All_Permit_Nos');
+
+    XLSX.writeFile(workbook, `Permit_No_Analysis_Report_${Date.now()}.xlsx`);
+  };
+
   const wMainlineStats = useMemo(() => {
-    const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && String(p.layer || '').toUpperCase().includes('W_MAINLINE'));
+    const pointsToProcess = (!activeFile ? (plannedStreets || []) : (globalPoints || []));
+    const segments = pointsToProcess.filter(p => p && p.type === 'LineString' && !isBlackLine(p) && p.layer && String(p.layer || '').toUpperCase().includes('W_MAINLINE'));
 
     let totalLength = 0;
     const materialCounts: Record<string, number> = {};
@@ -1583,8 +2288,8 @@ const App: React.FC = () => {
   }, [activeFile, plannedStreets, globalPoints]);
 
   const wwMainlineStats = useMemo(() => {
-    const pointsToProcess = !activeFile ? plannedStreets : globalPoints;
-    const segments = pointsToProcess.filter(p => p.type === 'LineString' && !isBlackLine(p) && p.layer && (
+    const pointsToProcess = (!activeFile ? (plannedStreets || []) : (globalPoints || []));
+    const segments = pointsToProcess.filter(p => p && p.type === 'LineString' && !isBlackLine(p) && p.layer && (
         String(p.layer || '').toUpperCase().includes('WW_MAINLINE') ||
         String(p.layer || '').toUpperCase().includes('S_GRAVITY_MAIN') ||
         String(p.layer || '').toUpperCase().includes('SEWER') ||
@@ -1960,18 +2665,82 @@ const App: React.FC = () => {
 
       // 3. التحويل النهائي باستخدام نظام الإحداثيات المختار
       const sourceDef = COMMON_EPSG.find(e => e.code === sourceEPSG)?.def || sourceEPSG;
-      setGlobalPoints(transformPoints(points, sourceDef));
-      setDataId(Date.now().toString());
+      const transformed = transformPoints(points, sourceDef);
+      setGlobalPoints(transformed);
+      const newFileId = `${activeFile.filename}-${Date.now()}`;
+      setDataId(newFileId);
+
+      // Auto-Alert for Spatial Overlaps upon file import before starting processing
+      const currentFileName = activeFile.filename || 'imported_file';
+      if (lastAlertedFileRef.current !== currentFileName && transformed.length > 0) {
+        lastAlertedFileRef.current = currentFileName;
+        setLoading(true);
+        setProgressPercent(15);
+        setStatusMessage(
+          lang === 'ar'
+            ? 'جاري فحص التداخل الجغرافي والتطابق المكاني...'
+            : 'Checking spatial overlaps...'
+        );
+
+        setTimeout(async () => {
+          setProgressPercent(45);
+          await new Promise(resolve => setTimeout(resolve, 80));
+          try {
+            const dups = detectExactDuplicates(transformed, duplicateTolerance);
+            setProgressPercent(80);
+            const intersections = detectLineIntersections(transformed);
+            const totalOverlaps = dups.length + intersections.length;
+            setProgressPercent(100);
+
+            if (totalOverlaps > 0) {
+              const info = {
+                fileId: newFileId,
+                filename: currentFileName,
+                duplicatesCount: dups.length,
+                intersectionsCount: intersections.length,
+                totalCount: totalOverlaps,
+                dups,
+                intersections
+              };
+              setAutoAlertInfo(info);
+              setShowAutoAlertModal(true);
+              setOverlapResults(dups.length > 0 ? dups : intersections);
+              setOverlapModalType(dups.length > 0 ? 'duplicates' : 'intersections');
+              setStatusMessage(
+                lang === 'ar'
+                  ? `⚠️ تنبيه تلقائي: تم كشف ${totalOverlaps} تداخل مكاني غير محلول في الملف المستورد (${currentFileName})!`
+                  : `⚠️ Auto-Alert: Detected ${totalOverlaps} unresolved spatial overlaps in imported file (${currentFileName})!`
+              );
+            } else {
+              setAutoAlertInfo(null);
+              setStatusMessage(
+                lang === 'ar'
+                  ? 'تم فحص التداخل الجغرافي بنجاح - لا يوجد تداخلات'
+                  : 'Spatial overlap check complete - No overlaps found'
+              );
+              setTimeout(() => setStatusMessage(''), 2500);
+            }
+          } catch (e) {
+            console.error('Error during auto spatial overlap detection:', e);
+          } finally {
+            setLoading(false);
+            setProgressPercent(null);
+          }
+        }, 100);
+      }
     };
     processData();
   }, [activeFile, mapping, sourceEPSG, swapXY, refreshKey]);
 
   const handleRefreshPreview = () => {
     setLoading(true);
+    setProgressPercent(20);
     setStatusMessage(lang === 'ar' ? 'جاري تحديث المعاينة...' : 'Refreshing preview...');
     setTimeout(() => {
         setRefreshKey(prev => prev + 1);
+        setProgressPercent(100);
         setLoading(false);
+        setProgressPercent(null);
         setStatusMessage('');
     }, 400);
   };
@@ -1980,17 +2749,20 @@ const App: React.FC = () => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
     setLoading(true);
+    setProgressPercent(5);
     setStatusMessage(t.parsing);
     setAutoDetected(null);
     setError(null);
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
       let result: ParsedFile;
-      if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
-      else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
-      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile);
+      const onProg = (pct: number) => setProgressPercent(pct);
+      if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile, onProg);
+      else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
+      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile, onProg);
       else throw new Error(t.errors.unsupported);
 
+      setProgressPercent(100);
       setActiveFile(result);
       setDataId(`${result.filename}-${Date.now()}`);
 
@@ -2007,7 +2779,7 @@ const App: React.FC = () => {
       }
       if (detected) { setSourceEPSG(detected); setAutoDetected(COMMON_EPSG.find(c => c.code === detected)?.name || detected); }
       if (result.suggestedMapping) setMapping(prev => ({ ...prev, ...result.suggestedMapping }));
-    } catch (err: any) { setError(err.message); } finally { setLoading(false); }
+    } catch (err: any) { setError(err.message); } finally { setLoading(false); setProgressPercent(null); }
   };
 
   const handleLoadMyMapsLink = async () => {
@@ -2166,9 +2938,12 @@ const App: React.FC = () => {
       const batchSize = geocodingMode === 'accurate' ? 4 : 10;
 
       for (let i = 0; i < total; i += batchSize) {
+          const processed = Math.min(i + batchSize, total);
+          const pct = Math.round((processed / total) * 100);
+          setProgressPercent(pct);
           setStatusMessage(lang === 'ar'
-              ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})`
-              : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
+              ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${processed} من ${total})`
+              : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${processed} of ${total})`
           );
           const chunk = points.slice(i, i + batchSize);
           await Promise.all(chunk.map(async (pt) => {
@@ -2183,7 +2958,7 @@ const App: React.FC = () => {
                       street = "";
                   }
               }
-              if (!pt.attributes) pt.attributes = {};
+              pt.attributes = { ...(pt.attributes || {}) };
               const matchStreet = headers.find(h => String(h || '').toLowerCase() === 'street');
               const matchArabic = headers.find(h => h === 'الشارع');
               const matchStreetName = headers.find(h => String(h || '').toLowerCase() === 'streetname');
@@ -2199,7 +2974,8 @@ const App: React.FC = () => {
           }));
       }
       setLoading(false);
-      setStatusMessage(null);
+      setProgressPercent(null);
+      setStatusMessage('');
     }
     await action();
   };
@@ -2498,6 +3274,7 @@ const App: React.FC = () => {
           { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
           { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
           { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+          { id: 'sbc-checker', icon: <ShieldCheck />, label: lang === 'ar' ? 'الكود السعودي (تحت التطوير)' : 'SBC Code (In Dev)' },
           { id: 'segment-vault', icon: <HardDrive />, label: lang === 'ar' ? 'حافظة Segment' : 'Vault' },
           { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف' : 'Classifier' },
           { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
@@ -2531,6 +3308,7 @@ const App: React.FC = () => {
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
                { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
                { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+               { id: 'sbc-checker', icon: <ShieldCheck />, label: lang === 'ar' ? 'الكود السعودي (تحت التطوير)' : 'SBC Code (In Dev)' },
                { id: 'segment-vault', icon: <HardDrive />, label: lang === 'ar' ? 'حافظة Segment' : 'Segment Vault' },
                { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف الخرائط' : 'Map Classifier' },
                { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
@@ -2591,6 +3369,69 @@ const App: React.FC = () => {
 
            <div className="flex-1 overflow-y-auto custom-scrollbar px-4 sm:px-6 md:px-10 pb-8 pt-4">
                 {error && (<div className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-in slide-in-from-top"><X className="w-4 h-4 text-red-400 shrink-0 mt-1 cursor-pointer" onClick={() => setError(null)} /><p className="text-[10px] text-red-400 font-bold leading-relaxed">{error}</p></div>)}
+
+                {/* Persistent Auto-Alert Banner for Unresolved Spatial Overlaps */}
+                {autoAlertInfo && autoAlertInfo.totalCount > 0 && (
+                  <div className="bg-gradient-to-r from-amber-500/20 via-red-500/20 to-amber-500/20 border-2 border-amber-500/60 p-4 rounded-2xl mb-6 shadow-xl animate-pulse flex flex-col gap-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 animate-bounce" />
+                        <div>
+                          <h4 className="text-amber-300 font-black text-xs leading-snug">
+                            {lang === 'ar' ? 'تنبيه تلقائي: تم كشف تداخلات مكانية غير محلولة!' : 'Auto-Alert: Unresolved Spatial Overlaps Detected!'}
+                          </h4>
+                          <p className="text-[10px] text-white/80 font-bold mt-0.5 leading-relaxed">
+                            {lang === 'ar'
+                              ? `الملف المستورد يحتوي على ${autoAlertInfo.totalCount} تداخلات مكانية (${autoAlertInfo.duplicatesCount} متطابقة | ${autoAlertInfo.intersectionsCount} تقاطعات)`
+                              : `Imported file contains ${autoAlertInfo.totalCount} spatial overlaps (${autoAlertInfo.duplicatesCount} duplicates | ${autoAlertInfo.intersectionsCount} intersections)`}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAutoAlertInfo(null)}
+                        className="p-1 text-white/50 hover:text-white rounded-lg transition-colors shrink-0"
+                        title={lang === 'ar' ? 'تجاهل الإشعار' : 'Dismiss Alert'}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-amber-500/20">
+                      {autoAlertInfo.duplicatesCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleResolveDuplicates}
+                          className="px-3 py-1.5 bg-red-500/30 hover:bg-red-500/40 text-red-200 border border-red-500/40 rounded-xl text-[10px] font-black transition-all flex items-center gap-1 active:scale-95 shadow"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 text-red-300" />
+                          <span>{lang === 'ar' ? 'حذف المتطابقة تلقائياً 🗑️' : 'Auto-Delete Duplicates'}</span>
+                        </button>
+                      )}
+                      {autoAlertInfo.intersectionsCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleTrimIntersections}
+                          className="px-3 py-1.5 bg-cyan-500/30 hover:bg-cyan-500/40 text-cyan-200 border border-cyan-500/40 rounded-xl text-[10px] font-black transition-all flex items-center gap-1 active:scale-95 shadow"
+                        >
+                          <Scissors className="w-3.5 h-3.5 text-cyan-300" />
+                          <span>{lang === 'ar' ? 'تقليم التقاطعات ✂️' : 'Trim Intersections'}</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOverlapResults(autoAlertInfo.duplicatesCount > 0 ? autoAlertInfo.dups : autoAlertInfo.intersections);
+                          setOverlapModalType(autoAlertInfo.duplicatesCount > 0 ? 'duplicates' : 'intersections');
+                          setShowOverlapModal(true);
+                        }}
+                        className="px-3 py-1.5 bg-accent text-primary font-black rounded-xl text-[10px] hover:brightness-110 transition-all flex items-center gap-1 active:scale-95 shadow"
+                      >
+                        <GitBranch className="w-3.5 h-3.5" />
+                        <span>{lang === 'ar' ? 'معاينة المعالجة ⚡' : 'Review & Resolve ⚡'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {activeTab === 'converter' && (
                     <div className="space-y-8 animate-in fade-in duration-500">
@@ -3097,6 +3938,69 @@ const App: React.FC = () => {
                           <div className="space-y-1"><h2 className="text-white font-black text-2xl tracking-tight leading-tight">{lang === 'ar' ? 'نتائج تحليل الملف' : 'File Analysis Results'}</h2><p className="text-[10px] text-white/40 font-bold uppercase tracking-widest leading-relaxed max-w-[250px] mx-auto">{activeFile?.filename || (lang === 'ar' ? 'تحليل المخطط الحالي' : 'Analyzing Planned Streets')}</p></div>
                       </div>
 
+                      {/* Network Type Filter Selector for Water vs Sewer separation */}
+                      <div className="bg-[#0b2d3d]/90 p-5 rounded-[2.5rem] border border-accent/30 space-y-3 shadow-xl animate-in slide-in-from-top">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <SlidersHorizontal className="w-4 h-4 text-accent" />
+                            <h3 className="text-white font-black text-xs uppercase tracking-wider">
+                              {lang === 'ar' ? 'نوع الشبكة في التقرير' : 'Network Type Filter'}
+                            </h3>
+                          </div>
+                          <span className="text-[10px] font-black text-accent bg-accent/20 px-2.5 py-1 rounded-full border border-accent/30">
+                            {analyzerNetworkType === 'water'
+                              ? (lang === 'ar' ? '💧 مياه الشرب' : '💧 Water')
+                              : analyzerNetworkType === 'sewer'
+                              ? (lang === 'ar' ? '🟣 الصرف الصحي' : '🟣 Sewer')
+                              : (lang === 'ar' ? '🌐 جميع الشبكات' : '🌐 All Networks')}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAnalyzerNetworkType('all')}
+                            className={cn(
+                              "py-3 px-2 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-1.5 border",
+                              analyzerNetworkType === 'all'
+                                ? "bg-accent text-primary border-accent shadow-lg scale-[1.02]"
+                                : "bg-white/5 text-white/60 border-white/10 hover:bg-white/10 hover:text-white"
+                            )}
+                          >
+                            <Layers className="w-4 h-4" />
+                            <span>{lang === 'ar' ? 'الكل' : 'All'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setAnalyzerNetworkType('water')}
+                            className={cn(
+                              "py-3 px-2 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-1.5 border",
+                              analyzerNetworkType === 'water'
+                                ? "bg-[#00c8b3] text-[#032330] border-[#00c8b3] shadow-lg scale-[1.02]"
+                                : "bg-[#00c8b3]/10 text-[#00c8b3] border-[#00c8b3]/30 hover:bg-[#00c8b3]/20"
+                            )}
+                          >
+                            <Droplet className="w-4 h-4" />
+                            <span>{lang === 'ar' ? 'مياه' : 'Water'}</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setAnalyzerNetworkType('sewer')}
+                            className={cn(
+                              "py-3 px-2 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-1.5 border",
+                              analyzerNetworkType === 'sewer'
+                                ? "bg-[#d946ef] text-[#160b2d] border-[#d946ef] shadow-lg scale-[1.02]"
+                                : "bg-[#d946ef]/10 text-[#d946ef] border-[#d946ef]/30 hover:bg-[#d946ef]/20"
+                            )}
+                          >
+                            <Droplet className="w-4 h-4 rotate-180" />
+                            <span>{lang === 'ar' ? 'صرف صحي' : 'Sewer'}</span>
+                          </button>
+                        </div>
+                      </div>
+
                       {analysisData.length > 0 && (
                         <div className="bg-accent/10 p-6 rounded-[2.5rem] border border-accent/20 space-y-4 animate-in slide-in-from-top">
                            <div className="flex items-center justify-between mb-2">
@@ -3197,7 +4101,7 @@ const App: React.FC = () => {
                                             {executionStatusDistribution.length > 0 ? (
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <RechartsPieChart>
-                                                        <Pie data={executionStatusDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({name, percent}) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                                                        <Pie data={executionStatusDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={(entry: any) => entry && entry.name ? `${entry.name} (${(((entry.percent || 0) * 100)).toFixed(0)}%)` : ''}>
                                                             {executionStatusDistribution.map((entry, index) => (
                                                                 <Cell key={`cell-${index}`} fill={entry.color} />
                                                             ))}
@@ -3589,6 +4493,14 @@ const App: React.FC = () => {
                                 <Layers2 className="w-6 h-6 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
                             </button>
+                            <button onClick={verifyPermitNo} className="w-full bg-[#3d1e0b] border border-[#FF6D00]/50 text-[#ffc499] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF6D00] hover:text-white transition-all text-sm group">
+                                <FileText className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF6D00] group-hover:text-white" />
+                                {lang === 'ar' ? 'فحص رقم الترخيص (Permit No) برتقالي' : 'Highlight Permit No (Neon Orange)'}
+                            </button>
+                            <button onClick={() => setActiveTab('sbc-checker')} className="w-full bg-[#0b281d] border border-emerald-500/50 text-emerald-300 font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-emerald-500 hover:text-black transition-all text-sm group">
+                                <ShieldCheck className="w-6 h-6 group-hover:scale-110 transition-transform text-emerald-400 group-hover:text-black" />
+                                {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC - تحت التطوير)' : 'Saudi Building Code (SBC) Compliance Audit (In Dev)'}
+                            </button>
 
                             {segmentIdAnalysis && segmentIdAnalysis.totalElements > 0 && (
                               <div className="bg-[#120a21]/90 p-6 rounded-[2.5rem] border border-[#9000FF]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4">
@@ -3748,14 +4660,191 @@ const App: React.FC = () => {
                                         {lang === 'ar' ? 'تصدير تقرير Segment ID إلى Excel' : 'Export Segment ID Report to Excel'}
                                       </span>
                                     </button>
+
+                                    {/* Recharts Bar Chart for Total Length per Segment ID */}
+                                    <SegmentLengthChart
+                                      segmentDetails={segmentIdAnalysis.uniqueDetails}
+                                      lang={lang}
+                                      onHighlightSegment={highlightSpecificSegmentId}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {permitNoAnalysis && permitNoAnalysis.totalElements > 0 && (
+                              <div className="bg-[#1f0f05]/90 p-6 rounded-[2.5rem] border border-[#FF6D00]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4">
+                                <div className="flex items-center justify-between border-b border-[#FF6D00]/20 pb-3">
+                                  <div className="flex items-center gap-2">
+                                    <FileText className="w-5 h-5 text-[#ffc499]" />
+                                    <h3 className="text-white font-black text-xs uppercase tracking-wider">
+                                      {lang === 'ar' ? 'تحليل محتوى وتكرار رقم الترخيص (Permit No)' : 'Permit No Content & Unique Analysis'}
+                                    </h3>
+                                  </div>
+                                  <span className="text-[10px] font-black px-2.5 py-1 rounded-full bg-[#FF6D00]/20 text-[#ffc499] border border-[#FF6D00]/40">
+                                    {lang === 'ar' ? 'نتائج التراخيص' : 'Permit Results'}
+                                  </span>
+                                </div>
+
+                                {/* Metric Cards Grid */}
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                  {/* 1. Count of elements with permit no */}
+                                  <div className="bg-black/40 p-4 rounded-2xl border border-white/5 text-center flex flex-col justify-center">
+                                    <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+                                      {lang === 'ar' ? 'عناصر بها رقم ترخيص' : 'Elements with Permit No'}
+                                    </span>
+                                    <div className="flex items-baseline justify-center gap-1">
+                                      <span className="text-2xl font-black text-[#ffc499]">
+                                        {permitNoAnalysis.validElementsCount}
+                                      </span>
+                                      <span className="text-[10px] font-bold text-white/40">
+                                        / {permitNoAnalysis.totalElements}
+                                      </span>
+                                    </div>
+                                    <span className="text-[9px] font-black text-amber-400 mt-1">
+                                      {((permitNoAnalysis.validElementsCount / (permitNoAnalysis.totalElements || 1)) * 100).toFixed(1)}% {lang === 'ar' ? 'من الإجمالي' : 'of total'}
+                                    </span>
+                                  </div>
+
+                                  {/* 2. Count of unique permit nos without duplicates */}
+                                  <div className="bg-black/40 p-4 rounded-2xl border border-amber-500/20 text-center flex flex-col justify-center">
+                                    <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+                                      {lang === 'ar' ? 'تراخيص فريدة (بدون تكرار)' : 'Unique Permit Numbers'}
+                                    </span>
+                                    <span className="text-2xl font-black text-amber-400">
+                                      {permitNoAnalysis.uniquePermitNosCount}
+                                    </span>
+                                    <span className="text-[9px] font-bold text-white/40 mt-1">
+                                      {lang === 'ar' ? 'أرقام تراخيص غير مكررة' : 'Distinct Permit values'}
+                                    </span>
+                                  </div>
+
+                                  {/* 3. Total length of permit no elements */}
+                                  <div className="bg-black/40 p-4 rounded-2xl border border-emerald-500/20 text-center flex flex-col justify-center col-span-2 md:col-span-1">
+                                    <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+                                      {lang === 'ar' ? 'إجمالي أطوال التراخيص' : 'Total Permitted Length'}
+                                    </span>
+                                    <div className="flex items-baseline justify-center gap-1">
+                                      <span className="text-2xl font-black text-emerald-400">
+                                        {(permitNoAnalysis.totalLengthWithPermitNo / 1000).toFixed(2)}
+                                      </span>
+                                      <span className="text-[10px] font-bold text-emerald-400/70">
+                                        {lang === 'ar' ? 'كم' : 'km'}
+                                      </span>
+                                    </div>
+                                    <span className="text-[9px] font-bold text-white/40 mt-1">
+                                      {lang === 'ar' ? 'للعناصر ذات التراخيص' : 'for valid permits'}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Search & Breakdown list of unique permit Nos */}
+                                {permitNoAnalysis.uniquePermitNosCount > 0 && (
+                                  <div className="space-y-3 pt-2">
+                                    <div className="flex items-center justify-between">
+                                      <h4 className="text-[11px] font-black text-white/80 uppercase">
+                                        {lang === 'ar' ? 'تفاصيل أرقام الترخيص (Permit No) الفريدة:' : 'Distinct Permit No Breakdown:'}
+                                      </h4>
+                                      <span className="text-[9px] font-bold text-white/40">
+                                        {lang === 'ar' ? `عرض ${permitNoAnalysis.uniqueDetails.length} قيم` : `Showing ${permitNoAnalysis.uniqueDetails.length} values`}
+                                      </span>
+                                    </div>
+
+                                    {/* Filter input */}
+                                    <input
+                                      type="text"
+                                      placeholder={lang === 'ar' ? 'ابحث في أرقام التراخيص...' : 'Filter Permit No values...'}
+                                      value={permitFilterQuery}
+                                      onChange={(e) => setPermitFilterQuery(e.target.value)}
+                                      className="w-full bg-white/5 border border-white/10 rounded-xl py-2 px-3 text-xs text-white placeholder-white/30 focus:outline-none focus:border-[#FF6D00]"
+                                    />
+
+                                    {/* List of distinct values */}
+                                    <div className="max-h-56 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                                      {permitNoAnalysis.uniqueDetails
+                                        .filter(item => {
+                                          if (!permitFilterQuery) return true;
+                                          const q = permitFilterQuery.toLowerCase();
+                                          return (
+                                            item.idValue.toLowerCase().includes(q) ||
+                                            (item.projectName && item.projectName.toLowerCase().includes(q)) ||
+                                            (item.projectId && item.projectId.toLowerCase().includes(q)) ||
+                                            (item.contractor && item.contractor.toLowerCase().includes(q))
+                                          );
+                                        })
+                                        .map((item, idx) => (
+                                          <div key={idx} className="bg-black/30 hover:bg-black/50 p-3 rounded-xl border border-white/5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs transition-colors">
+                                            <div className="flex flex-col gap-1 overflow-hidden">
+                                              <div className="flex items-center gap-2">
+                                                <span className="w-2 h-2 rounded-full bg-[#FF6D00] shrink-0" />
+                                                <span className="font-mono font-bold text-[#ffc499] truncate dir-ltr">
+                                                  {item.idValue}
+                                                </span>
+                                              </div>
+                                              {(item.projectName || item.projectId || item.contractor) && (
+                                                <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-white/60 pr-4">
+                                                  {item.projectName && (
+                                                    <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-accent">
+                                                      {item.projectName}
+                                                    </span>
+                                                  )}
+                                                  {item.projectId && (
+                                                    <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-white/80">
+                                                      ID: {item.projectId}
+                                                    </span>
+                                                  )}
+                                                  {item.contractor && (
+                                                    <span className="bg-white/5 px-1.5 py-0.5 rounded border border-white/10 text-amber-300">
+                                                      {item.contractor}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+                                              <span className="text-[10px] font-black bg-white/10 text-white px-2 py-0.5 rounded-md">
+                                                #{item.count} {lang === 'ar' ? 'عنصر' : 'items'}
+                                              </span>
+                                              <span className="text-[10px] font-bold text-emerald-400">
+                                                {(item.totalLength / 1000).toFixed(3)} {lang === 'ar' ? 'كم' : 'km'}
+                                              </span>
+                                              <button
+                                                onClick={() => highlightSpecificPermitNo(item.points)}
+                                                className="text-[9px] bg-[#FF6D00]/30 hover:bg-[#FF6D00] text-white px-2 py-1 rounded-lg font-black transition-all"
+                                                title={lang === 'ar' ? 'تحديد وتكبير على الخريطة' : 'Highlight on map'}
+                                              >
+                                                {lang === 'ar' ? 'عرض' : 'View'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Export Excel for Permit No report */}
+                                    <button
+                                      onClick={exportPermitNoReportExcel}
+                                      className="w-full bg-[#FF6D00]/20 border border-[#FF6D00]/40 hover:bg-[#FF6D00]/40 text-[#ffc499] font-black py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all mt-2"
+                                    >
+                                      <FileSpreadsheet className="w-4 h-4 text-[#ffc499]" />
+                                      <span>
+                                        {lang === 'ar' ? 'تصدير تقرير Permit No إلى Excel' : 'Export Permit No Report to Excel'}
+                                      </span>
+                                    </button>
+
+                                    {/* Recharts Bar Chart for Total Length per Permit No */}
+                                    <PermitLengthChart
+                                      permitDetails={permitNoAnalysis.uniqueDetails}
+                                      lang={lang}
+                                      onHighlightPermit={highlightSpecificPermitNo}
+                                    />
                                   </div>
                                 )}
                               </div>
                             )}
 
                             <div className="grid grid-cols-2 gap-3">
-                                <button onClick={() => generateAnalysisPPTX(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-accent text-primary font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><Presentation className="w-5 h-5 group-hover:rotate-12 transition-transform" />{lang === 'ar' ? 'تصدير PPTX' : 'Export PPTX'}</button>
-                                <button onClick={() => generateAnalysisPDF(analysisData, activeFile?.filename || "Analysis", lang)} className="w-full bg-[#D32F2F] text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><FileText className="w-5 h-5 group-hover:scale-110 transition-transform" />{lang === 'ar' ? 'تصدير PDF' : 'Export PDF'}</button>
+                                <button onClick={() => generateAnalysisPPTX(analysisData, activeFile?.filename || "Analysis", lang, { segmentIdAnalysis: segmentIdAnalysis || undefined, permitNoAnalysis: permitNoAnalysis || undefined, wwMainlineStats: wwMainlineStats || undefined, wMainlineStats: wMainlineStats || undefined, networkType: analyzerNetworkType })} className="w-full bg-accent text-primary font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><Presentation className="w-5 h-5 group-hover:rotate-12 transition-transform" />{analyzerNetworkType === 'water' ? (lang === 'ar' ? 'تصدير PPTX (مياه)' : 'Export PPTX (Water)') : analyzerNetworkType === 'sewer' ? (lang === 'ar' ? 'تصدير PPTX (صرف)' : 'Export PPTX (Sewer)') : (lang === 'ar' ? 'تصدير PPTX (الكل)' : 'Export PPTX (All)')}</button>
+                                <button onClick={() => generateAnalysisPDF(analysisData, activeFile?.filename || "Analysis", lang, { segmentIdAnalysis: segmentIdAnalysis || undefined, permitNoAnalysis: permitNoAnalysis || undefined, wwMainlineStats: wwMainlineStats || undefined, wMainlineStats: wMainlineStats || undefined, networkType: analyzerNetworkType })} className="w-full bg-[#D32F2F] text-white font-black py-5 rounded-[2rem] flex items-center justify-center gap-2 shadow-2xl hover:brightness-110 active:scale-95 transition-all text-[11px] group"><FileText className="w-5 h-5 group-hover:scale-110 transition-transform" />{analyzerNetworkType === 'water' ? (lang === 'ar' ? 'تصدير PDF (مياه)' : 'Export PDF (Water)') : analyzerNetworkType === 'sewer' ? (lang === 'ar' ? 'تصدير PDF (صرف)' : 'Export PDF (Sewer)') : (lang === 'ar' ? 'تصدير PDF (الكل)' : 'Export PDF (All)')}</button>
                             </div>
                             <div className="bg-[#0b2d3d]/40 p-8 rounded-[3rem] border border-white/5 space-y-6">
                                 <h3 className="text-white/40 font-black text-[11px] text-center uppercase tracking-[0.2em]">{lang === 'ar' ? 'تفاصيل المجموعات المدمجة' : 'Merged Color Details'}</h3>
@@ -4122,6 +5211,21 @@ const App: React.FC = () => {
                     onLoadProjectToMap={handleLoadSavedProjectToMap}
                   />
                 )}
+                {activeTab === 'sbc-checker' && (
+                  <SbcValidator
+                    points={getPointsToCheck()}
+                    lang={lang}
+                    onHighlightPoints={highlightSpecificSegmentId}
+                    onApplySbcColors={(coloredPoints) => {
+                      setGlobalPoints(coloredPoints);
+                      setStatusMessage(
+                        lang === 'ar'
+                          ? 'تم تطبيق تمييز ألوان كود البناء السعودي على الخريطة (أحمر للمخالفات، أصفر للتحذيرات، أخضر للمطابق)'
+                          : 'Applied Saudi Building Code map color coding (Red=Errors, Yellow=Warnings, Green=Compliant)'
+                      );
+                    }}
+                  />
+                )}
            </div>
 
            <div className="p-8 border-t border-white/5 bg-black/10 shrink-0"><div className="space-y-2"><div className="flex items-center gap-2 text-white/40 group"><Mail className="w-3 h-3 group-hover:text-accent transition-colors" /><span className="text-[10px] font-bold">{t.contactDev}:</span><a href="mailto:almangoryo@gmail.com" className="text-[10px] font-black text-accent hover:underline">almangoryo@gmail.com</a></div><p className="text-[9px] font-black text-white/30 uppercase tracking-widest">{t.developedBy}</p></div></div>
@@ -4151,7 +5255,28 @@ const App: React.FC = () => {
               setIsDrawingMode(false);
             }}
          />
-         {loading && (<div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center"><div className="text-center p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl"><Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" /><p className="text-white font-black text-lg">{statusMessage}</p></div></div>)}
+         {loading && (
+           <div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+             <div className="text-center p-8 sm:p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl max-w-md w-full animate-in zoom-in-95 duration-200">
+               <Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" />
+               <p className="text-white font-black text-lg mb-2">{statusMessage}</p>
+               {progressPercent !== null && (
+                 <div className="w-full mt-4 space-y-2">
+                   <div className="w-full bg-white/10 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
+                     <div
+                       className="bg-gradient-to-r from-amber-400 via-accent to-amber-300 h-full rounded-full transition-all duration-300 shadow-[0_0_12px_rgba(220,177,60,0.6)]"
+                       style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                     />
+                   </div>
+                   <div className="flex items-center justify-between text-xs font-black">
+                     <span className="text-accent">{Math.round(progressPercent)}%</span>
+                     <span className="text-white/50">{lang === 'ar' ? 'جاري المعالجة...' : 'Processing...'}</span>
+                   </div>
+                 </div>
+               )}
+             </div>
+           </div>
+         )}
 
          {/* Mobile Floating Button to Return to Tools Panel */}
          <div className="lg:hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] pointer-events-auto">
@@ -4485,6 +5610,120 @@ const App: React.FC = () => {
                              className="px-6 py-2.5 bg-accent hover:brightness-110 text-primary font-black text-xs rounded-xl transition-all shadow-lg"
                           >
                              {lang === 'ar' ? 'حفظ وإغلاق' : 'Save & Close'}
+                          </button>
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {/* Auto-Alert Modal for Unresolved Spatial Overlaps upon File Import */}
+          {showAutoAlertModal && autoAlertInfo && (
+              <div className="fixed inset-0 z-[2500] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                  <div className="bg-gradient-to-br from-[#0e3547] via-[#08222e] to-[#041620] border-2 border-amber-400/80 rounded-[2.5rem] w-full max-w-xl p-6 sm:p-8 shadow-[0_0_50px_rgba(245,158,11,0.25)] space-y-6 relative overflow-hidden">
+                      {/* Glow Effect */}
+                      <div className="absolute -top-24 -right-24 w-48 h-48 bg-amber-500/20 rounded-full blur-3xl pointer-events-none" />
+
+                      {/* Header */}
+                      <div className="flex items-start justify-between gap-4">
+                          <div className="flex items-center gap-3">
+                              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-red-500 flex items-center justify-center shadow-lg shadow-amber-500/30 text-primary shrink-0 animate-pulse">
+                                  <AlertTriangle className="w-7 h-7 stroke-[2.5px]" />
+                              </div>
+                              <div>
+                                  <span className="inline-block px-2.5 py-0.5 bg-amber-400/20 text-amber-300 border border-amber-400/30 rounded-full text-[9px] font-black uppercase tracking-wider mb-1">
+                                      {lang === 'ar' ? 'تنبيه النظام التلقائي (Auto-Alert)' : 'System Auto-Alert'}
+                                  </span>
+                                  <h2 className="text-base sm:text-lg font-black text-white leading-tight">
+                                      {lang === 'ar' ? 'كشف تداخلات مكانية غير محلولة قبل بدء المعالجة!' : 'Unresolved Spatial Overlaps Detected!'}
+                                  </h2>
+                              </div>
+                          </div>
+                          <button
+                              onClick={() => setShowAutoAlertModal(false)}
+                              className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
+                          >
+                              <X className="w-5 h-5" />
+                          </button>
+                      </div>
+
+                      {/* File Info & Stats */}
+                      <div className="bg-black/30 border border-white/10 rounded-2xl p-4 space-y-3">
+                          <div className="flex items-center justify-between text-xs font-bold text-white/80 pb-2 border-b border-white/10">
+                              <span>{lang === 'ar' ? 'الملف المستورد:' : 'Imported File:'}</span>
+                              <span className="text-accent font-black truncate max-w-[200px]">{autoAlertInfo.filename}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 pt-1">
+                              <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center justify-between">
+                                  <div>
+                                      <span className="text-[10px] text-red-300 font-bold block">{lang === 'ar' ? 'عناصر متطابقة' : 'Duplicates'}</span>
+                                      <span className="text-lg font-black text-red-400">{autoAlertInfo.duplicatesCount}</span>
+                                  </div>
+                                  <Trash2 className="w-5 h-5 text-red-400/60" />
+                              </div>
+                              <div className="bg-cyan-500/10 border border-cyan-500/30 p-3 rounded-xl flex items-center justify-between">
+                                  <div>
+                                      <span className="text-[10px] text-cyan-300 font-bold block">{lang === 'ar' ? 'تقاطعات الخطوط' : 'Intersections'}</span>
+                                      <span className="text-lg font-black text-cyan-400">{autoAlertInfo.intersectionsCount}</span>
+                                  </div>
+                                  <GitBranch className="w-5 h-5 text-cyan-400/60" />
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* Description message */}
+                      <p className="text-xs text-white/80 leading-relaxed bg-white/5 p-4 rounded-xl border border-white/5">
+                          {lang === 'ar'
+                              ? 'تنبيه: يحتوي الملف المستورد على عناصر مكانية مكررة أو متقاطعة فوق بعضها. يرجى اختيار الإجراء المناسب لحلها فوراً أو معاينتها لضمان دقة المعالجة والتصدير.'
+                              : 'Notice: The imported dataset contains duplicate or intersecting spatial elements. Please select a quick action to resolve them now or inspect details to ensure processing accuracy.'}
+                      </p>
+
+                      {/* Action Buttons */}
+                      <div className="space-y-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                              {autoAlertInfo.duplicatesCount > 0 && (
+                                  <button
+                                      onClick={() => {
+                                          setShowAutoAlertModal(false);
+                                          handleResolveDuplicates();
+                                      }}
+                                      className="w-full py-3 px-4 bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
+                                  >
+                                      <Trash2 className="w-4 h-4 text-red-400" />
+                                      <span>{lang === 'ar' ? 'حذف المتطابقة تلقائياً 🗑️' : 'Auto-Delete Duplicates'}</span>
+                                  </button>
+                              )}
+                              {autoAlertInfo.intersectionsCount > 0 && (
+                                  <button
+                                      onClick={() => {
+                                          setShowAutoAlertModal(false);
+                                          handleTrimIntersections();
+                                      }}
+                                      className="w-full py-3 px-4 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-500/40 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
+                                  >
+                                      <Scissors className="w-4 h-4 text-cyan-400" />
+                                      <span>{lang === 'ar' ? 'تقليم عند التقاطعات ✂️' : 'Trim Intersections'}</span>
+                                  </button>
+                              )}
+                          </div>
+
+                          <button
+                              onClick={() => {
+                                  setShowAutoAlertModal(false);
+                                  setOverlapResults(autoAlertInfo.duplicatesCount > 0 ? autoAlertInfo.dups : autoAlertInfo.intersections);
+                                  setOverlapModalType(autoAlertInfo.duplicatesCount > 0 ? 'duplicates' : 'intersections');
+                                  setShowOverlapModal(true);
+                              }}
+                              className="w-full py-3 px-4 bg-accent text-primary hover:brightness-110 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
+                          >
+                              <GitBranch className="w-4 h-4" />
+                              <span>{lang === 'ar' ? 'معاينة وإدارة التداخلات التفصيلية 🔍' : 'Detailed Overlap Inspector 🔍'}</span>
+                          </button>
+
+                          <button
+                              onClick={() => setShowAutoAlertModal(false)}
+                              className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white rounded-xl font-bold text-xs transition-all"
+                          >
+                              {lang === 'ar' ? 'متابعة بدون معالجة (تجاهل التنبيه)' : 'Dismiss & Continue'}
                           </button>
                       </div>
                   </div>

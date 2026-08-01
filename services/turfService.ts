@@ -1,5 +1,6 @@
 import * as turf from '@turf/turf';
 import { GeoPoint } from '../types';
+import { cleanZoneValue } from './parserService';
 
 export interface ClassifiedAsset extends GeoPoint {
   district: string; // اسم المنطقة التي وقع فيها الأصل
@@ -74,7 +75,7 @@ export function classifyAssetsToZones(targetAssets: GeoPoint[], refZones: GeoPoi
           } else if (zone.properties?.name && zone.properties?.name !== 'undefined' && zone.properties?.name !== 'null') {
               name = String(zone.properties.name);
           }
-          assignedZoneName = name;
+          assignedZoneName = cleanZoneValue(name);
           if (zone.properties?.color) {
              assignedColor = String(zone.properties.color);
           }

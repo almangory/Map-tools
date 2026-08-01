@@ -7,10 +7,65 @@ import { Language } from "../translations";
 import { AnalysisItem } from "../types";
 import { matchStatusByColor } from "./colorUtils";
 
+export interface FullAnalysisExtraOptions {
+  segmentIdAnalysis?: {
+    totalElements: number;
+    validElementsCount: number;
+    uniqueSegmentIdsCount: number;
+    totalLengthWithSegmentId: number;
+    uniqueDetails: Array<{
+      idValue: string;
+      count: number;
+      totalLength: number;
+      projectName?: string;
+      projectId?: string;
+      contractor?: string;
+    }>;
+  };
+  permitNoAnalysis?: {
+    totalElements: number;
+    validElementsCount: number;
+    uniquePermitNosCount: number;
+    totalLengthWithPermitNo: number;
+    uniqueDetails: Array<{
+      idValue?: string;
+      permitValue?: string;
+      count: number;
+      totalLength: number;
+      projectName?: string;
+      projectId?: string;
+      contractor?: string;
+      primaryColor?: string;
+      primaryStatusKey?: string;
+      primaryStatusNameAr?: string;
+      primaryStatusNameEn?: string;
+      statusBreakdown?: Record<string, { count: number; totalLength: number }>;
+    }>;
+  };
+  wwMainlineStats?: {
+    totalLength: number;
+    segments: any[];
+    diameterBreakdown?: Record<string, number>;
+    diameterLengths?: Record<string, number>;
+    materialLengths?: Record<string, number>;
+    count?: number;
+  };
+  wMainlineStats?: {
+    totalLength: number;
+    segments: any[];
+    diameterBreakdown?: Record<string, number>;
+    diameterLengths?: Record<string, number>;
+    materialLengths?: Record<string, number>;
+    count?: number;
+  };
+  networkType?: 'all' | 'water' | 'sewer';
+}
+
 export const generateAnalysisPPTX = async (
   data: AnalysisItem[], 
   filename: string, 
-  lang: Language
+  lang: Language,
+  extraOptions?: FullAnalysisExtraOptions
 ) => {
   const isAr = lang === 'ar';
   const pptx = new pptxgen();
@@ -25,85 +80,453 @@ export const generateAnalysisPPTX = async (
   const white = "FFFFFF";
   const lightBg = "F8F9FA";
   const grayText = "64748B";
+  const purpleAccent = "9000FF";
+  const orangeAccent = "FF6D00";
+
+  const netType = extraOptions?.networkType || 'all';
+
+  let reportTitle = isAr ? "تقرير التحليل الجغرافي الشامل" : "Comprehensive Spatial Analysis Report";
+  let networkSubtitle = isAr ? "تقرير شامل لجميع شبكات المياه والصرف الصحي" : "Comprehensive Water & Sewer Networks Report";
+
+  if (netType === 'water') {
+    reportTitle = isAr ? "تقرير تحليل شبكة مياه الشرب" : "Drinking Water Network Analysis Report";
+    networkSubtitle = isAr ? "تقرير خاص لشبكة خطوط مياه الشرب" : "Dedicated Drinking Water Network Report";
+  } else if (netType === 'sewer') {
+    reportTitle = isAr ? "تقرير تحليل شبكة الصرف الصحي" : "Sewer & Wastewater Network Analysis Report";
+    networkSubtitle = isAr ? "تقرير خاص لشبكة خطوط الصرف الصحي" : "Dedicated Sewer & Wastewater Network Report";
+  }
 
   // 1. Title Slide
   const slide1 = pptx.addSlide();
   slide1.background = { color: primaryColor };
-  slide1.addText(isAr ? "تحليل أطوال المسارات" : "Path Length Analysis", {
-    x: 1, y: 2.5, w: 11.33, h: 1.5,
-    fontSize: 48, color: accentColor, bold: true, align: isAr ? 'right' : 'left'
+  slide1.addText(reportTitle, {
+    x: 1, y: 1.8, w: 11.33, h: 1.5,
+    fontSize: 40, color: accentColor, bold: true, align: isAr ? 'right' : 'left'
   });
-  slide1.addText(isAr ? `المشروع: ${filename}` : `Project: ${filename}`, {
-    x: 1, y: 4.2, w: 11.33, h: 0.8,
-    fontSize: 24, color: white, align: isAr ? 'right' : 'left'
+  slide1.addText(networkSubtitle, {
+    x: 1, y: 3.2, w: 11.33, h: 0.6,
+    fontSize: 20, color: "00C8B3", bold: true, align: isAr ? 'right' : 'left'
+  });
+  slide1.addText(isAr ? `اسم الملف/المشروع: ${filename}` : `Project/File: ${filename}`, {
+    x: 1, y: 4.0, w: 11.33, h: 0.8,
+    fontSize: 22, color: white, align: isAr ? 'right' : 'left'
   });
   slide1.addText(new Date().toLocaleDateString(isAr ? 'ar-SA' : 'en-US', { dateStyle: 'full' }), {
-      x: 1, y: 5.2, w: 11.33, h: 0.5,
+      x: 1, y: 5.0, w: 11.33, h: 0.5,
       fontSize: 16, color: "94A3B8", align: isAr ? 'right' : 'left'
   });
 
-  // 2. Summary Slide
+  // 2. Executive Comprehensive Summary Slide
   const totalKm = data.reduce((a, b) => a + b.totalLength, 0) / 1000;
+  const totalElementsCount = data.reduce((a, b) => a + b.count, 0);
   const slide2 = pptx.addSlide();
-  slide2.addText(isAr ? "نظرة عامة على الإحصائيات" : "Statistics Overview", {
+
+  const overviewHeading = netType === 'water'
+    ? (isAr ? "نظرة عامة وتقارير شبكة مياه الشرب" : "Water Network Analysis Overview")
+    : netType === 'sewer'
+    ? (isAr ? "نظرة عامة وتقارير شبكة الصرف الصحي" : "Sewer Network Analysis Overview")
+    : (isAr ? "نظرة عامة والتقرير الشامل للتحليل" : "Comprehensive Analysis Overview");
+
+  slide2.addText(overviewHeading, {
       x: 0.8, y: 0.6, w: 11.73, h: 0.8,
-      fontSize: 32, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
+      fontSize: 30, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
   });
 
+  const segAnalysis = extraOptions?.segmentIdAnalysis;
+  const perAnalysis = extraOptions?.permitNoAnalysis;
+  const wwStats = extraOptions?.wwMainlineStats;
+  const wStats = extraOptions?.wMainlineStats;
+
+  const networkTypeLabel = netType === 'water'
+    ? (isAr ? "شبكة مياه الشرب" : "Water Network")
+    : netType === 'sewer'
+    ? (isAr ? "شبكة الصرف الصحي" : "Sewer Network")
+    : (isAr ? "جميع الشبكات" : "All Networks");
+
   const summaryBoxes = [
-      { label: isAr ? "إجمالي الأطوال (كم)" : "Total Length (km)", value: `${totalKm.toFixed(2)}` },
-      { label: isAr ? "الحالات المكتشفة" : "Status Categories", value: data.length.toString() },
-      { label: isAr ? "إجمالي العناصر" : "Total Elements", value: data.reduce((a, b) => a + b.count, 0).toString() }
+      { label: isAr ? "إجمالي الأطوال الكلية (كم)" : "Total Length (km)", value: `${totalKm.toFixed(2)}` },
+      { label: isAr ? "عدد العناصر الكلي" : "Total Elements", value: totalElementsCount.toString() },
+      { label: isAr ? "نوع الشبكة المحللة" : "Analyzed Network", value: networkTypeLabel },
+      { 
+        label: isAr ? "أطوال Segment ID (كم)" : "Segment ID Length (km)", 
+        value: segAnalysis ? `${(segAnalysis.totalLengthWithSegmentId / 1000).toFixed(2)}` : '-' 
+      },
+      { 
+        label: isAr ? "أطوال Permit No (كم)" : "Permit No Length (km)", 
+        value: perAnalysis ? `${(perAnalysis.totalLengthWithPermitNo / 1000).toFixed(2)}` : '-' 
+      },
+      netType === 'water'
+        ? { 
+            label: isAr ? "أطوال خطوط المياه (W_MAINLINE)" : "Water Mainline Length (km)", 
+            value: wStats ? `${(wStats.totalLength / 1000).toFixed(2)}` : `${totalKm.toFixed(2)}` 
+          }
+        : netType === 'sewer'
+        ? { 
+            label: isAr ? "أطوال خطوط الصرف (WW_MAINLINE)" : "Sewer Mainline Length (km)", 
+            value: wwStats ? `${(wwStats.totalLength / 1000).toFixed(2)}` : `${totalKm.toFixed(2)}` 
+          }
+        : { 
+            label: isAr ? "خطوط الصرف (WW_MAINLINE)" : "WW Mainline Length (km)", 
+            value: wwStats ? `${(wwStats.totalLength / 1000).toFixed(2)}` : '-' 
+          }
   ];
 
   summaryBoxes.forEach((box, i) => {
-      const xPos = 0.8 + i * 4.0;
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const xPos = 0.8 + col * 4.0;
+      const yPos = 1.6 + row * 2.6;
+
       slide2.addShape(pptx.ShapeType.rect, {
-          x: xPos, y: 2.0, w: 3.5, h: 4.0,
+          x: xPos, y: yPos, w: 3.6, h: 2.3,
           fill: { color: lightBg }, line: { color: primaryColor, width: 1.5 },
-          rectRadius: 0.2 // Rounded corners
+          rectRadius: 0.15
       });
       slide2.addText(box.label, {
-          x: xPos + 0.2, y: 3.0, w: 3.1, h: 0.6,
-          fontSize: 18, color: grayText, align: 'center', bold: true
+          x: xPos + 0.1, y: yPos + 0.3, w: 3.4, h: 0.5,
+          fontSize: 14, color: grayText, align: 'center', bold: true
       });
       slide2.addText(box.value, {
-          x: xPos + 0.2, y: 4.0, w: 3.1, h: 1.2,
-          fontSize: 40, color: primaryColor, bold: true, align: 'center'
+          x: xPos + 0.1, y: yPos + 1.0, w: 3.4, h: 0.9,
+          fontSize: 32, color: primaryColor, bold: true, align: 'center'
       });
   });
 
-  // 3. Chart Slide
-  const slide3 = pptx.addSlide();
-  slide3.addText(isAr ? "مخطط توزيع الأطوال" : "Length Distribution Chart", {
-      x: 0.8, y: 0.6, w: 11.73, h: 0.8,
-      fontSize: 32, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
-  });
+  // 3. Status Chart Slide
+  if (data.length > 0) {
+    const slide3 = pptx.addSlide();
+    slide3.addText(isAr ? "مخطط توزيع الأطوال حسب الحالة واللون" : "Length Distribution by Status & Color", {
+        x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+        fontSize: 30, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
+    });
 
-  const chartData = [
+    const chartData = [
+        {
+            name: isAr ? "الأطوال" : "Lengths",
+            labels: data.map(d => d.statusName || d.color),
+            values: data.map(d => parseFloat((d.totalLength / 1000).toFixed(2)))
+        }
+    ];
+
+    slide3.addChart(pptx.ChartType.pie, chartData, {
+        x: 2.0, y: 1.5, w: 9.33, h: 5.5,
+        showLegend: true,
+        legendPos: 'r',
+        dataLabelFontSize: 12,
+        dataLabelColor: "FFFFFF",
+        showPercent: true,
+        chartColors: data.map(d => d.statusColor?.replace('#', '') || d.color.replace('#', ''))
+    });
+  }
+
+  // 4. Segment ID Report Slide
+  if (segAnalysis && segAnalysis.uniqueDetails && segAnalysis.uniqueDetails.length > 0) {
+    const slideSeg = pptx.addSlide();
+    slideSeg.addText(isAr ? "تقرير تحليل Segment ID" : "Segment ID Analysis Report", {
+        x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+        fontSize: 28, color: purpleAccent, bold: true, align: isAr ? 'right' : 'left'
+    });
+
+    const segKm = (segAnalysis.totalLengthWithSegmentId / 1000).toFixed(2);
+    const segPct = ((segAnalysis.validElementsCount / (segAnalysis.totalElements || 1)) * 100).toFixed(1);
+
+    // Summary sub-boxes
+    slideSeg.addText(
+      isAr 
+        ? `• عناصر تحتوي Segment ID: ${segAnalysis.validElementsCount} من أصل ${segAnalysis.totalElements} (${segPct}%)  |  • قيم فريدة: ${segAnalysis.uniqueSegmentIdsCount}  |  • إجمالي الطول: ${segKm} كم`
+        : `• Elements with Segment ID: ${segAnalysis.validElementsCount} / ${segAnalysis.totalElements} (${segPct}%)  |  • Unique IDs: ${segAnalysis.uniqueSegmentIdsCount}  |  • Total Length: ${segKm} km`,
+      { x: 0.8, y: 1.4, w: 11.73, h: 0.5, fontSize: 13, color: primaryColor, bold: true, align: isAr ? 'right' : 'left' }
+    );
+
+    const tableRows: any[][] = [
+      [
+        { text: isAr ? "م" : "#", options: { fill: purpleAccent, color: white, bold: true, fontSize: 13 } },
+        { text: isAr ? "Segment ID" : "Segment ID", options: { fill: purpleAccent, color: white, bold: true, fontSize: 13 } },
+        { text: isAr ? "العدد" : "Count", options: { fill: purpleAccent, color: white, bold: true, fontSize: 13 } },
+        { text: isAr ? "الطول (كم)" : "Length (km)", options: { fill: purpleAccent, color: white, bold: true, fontSize: 13 } },
+        { text: isAr ? "اسم المشروع" : "Project Name", options: { fill: purpleAccent, color: white, bold: true, fontSize: 13 } },
+        { text: isAr ? "المقاول" : "Contractor", options: { fill: purpleAccent, color: white, bold: true, fontSize: 13 } }
+      ]
+    ];
+
+    segAnalysis.uniqueDetails.slice(0, 10).forEach((item, idx) => {
+      tableRows.push([
+        { text: (idx + 1).toString(), options: { fontSize: 11 } },
+        { text: item.idValue, options: { bold: true, fontSize: 11, color: purpleAccent } },
+        { text: item.count.toString(), options: { fontSize: 11 } },
+        { text: (item.totalLength / 1000).toFixed(3), options: { fontSize: 11 } },
+        { text: item.projectName || '-', options: { fontSize: 10 } },
+        { text: item.contractor || '-', options: { fontSize: 10 } }
+      ]);
+    });
+
+    slideSeg.addTable(tableRows as any, {
+      x: 0.8, y: 2.1, w: 11.73,
+      border: { type: 'solid', color: "E2E8F0", pt: 1 },
+      align: 'center',
+      valign: 'middle',
+      colW: [0.6, 2.5, 1.2, 1.8, 3.2, 2.43],
+      fill: "F8F9FA",
+      autoPage: false
+    });
+
+    // 4b. Segment ID Distribution Chart Slide
+    const slideSegChart = pptx.addSlide();
+    slideSegChart.addText(isAr ? "مخطط توزيع الأطوال حسب Segment ID" : "Segment ID Length Distribution Chart", {
+        x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+        fontSize: 28, color: purpleAccent, bold: true, align: isAr ? 'right' : 'left'
+    });
+
+    const topSegs = [...segAnalysis.uniqueDetails]
+      .sort((a, b) => b.totalLength - a.totalLength)
+      .slice(0, 10);
+
+    const chartDataSeg = [
       {
-          name: isAr ? "الأطوال" : "Lengths",
-          labels: data.map(d => d.statusName || d.color),
-          values: data.map(d => parseFloat((d.totalLength / 1000).toFixed(2)))
+        name: isAr ? "الطول (كم)" : "Length (km)",
+        labels: topSegs.map(s => s.idValue || (s as any).permitValue || '-'),
+        values: topSegs.map(s => parseFloat((s.totalLength / 1000).toFixed(3)))
       }
-  ];
+    ];
 
-  slide3.addChart(pptx.ChartType.pie, chartData, {
-      x: 2.0, y: 1.5, w: 9.33, h: 5.5,
-      showLegend: true,
-      legendPos: 'r',
-      dataLabelFontSize: 12,
-      dataLabelColor: "FFFFFF",
-      showPercent: true,
-      chartColors: data.map(d => d.statusColor?.replace('#', '') || d.color.replace('#', ''))
-  });
+    slideSegChart.addChart(pptx.ChartType.bar, chartDataSeg, {
+      x: 0.8, y: 1.6, w: 11.73, h: 5.2,
+      barDir: 'col',
+      showValue: true,
+      dataLabelFormatCode: "0.000",
+      dataLabelColor: "1E293B",
+      dataLabelFontSize: 10,
+      chartColors: [purpleAccent],
+      valAxisTitle: isAr ? "الطول (كم)" : "Length (km)",
+      catAxisTitle: isAr ? "Segment ID" : "Segment ID",
+    });
+  }
 
-  // 4. Data Table Slide(s)
-  // Split data into chunks of 8 for table slides (to fit better vertically)
+  // 5. Permit No Report Slide (Grouped & Sorted by Status Color)
+  if (perAnalysis && perAnalysis.uniqueDetails && perAnalysis.uniqueDetails.length > 0) {
+    const STATUS_INFO_MAP: Record<string, { order: number; nameAr: string; nameEn: string; color: string }> = {
+      executed_water: { order: 1, nameAr: 'منفذ - مياه', nameEn: 'Executed - Water', color: '01579B' },
+      executed_sewer: { order: 2, nameAr: 'منفذ - صرف', nameEn: 'Executed - Sewer', color: '097138' },
+      in_progress: { order: 3, nameAr: 'جاري العمل', nameEn: 'Work in Progress', color: 'FFEA00' },
+      remaining: { order: 4, nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: 'A52714' }
+    };
+
+    const getPermitStatus = (item: any) => {
+      const catKey = item.primaryStatusKey || matchStatusByColor(item.primaryColor || '#A52714').key;
+      return STATUS_INFO_MAP[catKey] || STATUS_INFO_MAP['remaining'];
+    };
+
+    // Calculate Summary by Status Color
+    const statusSummary: Record<string, { countPermits: number; countElements: number; totalLength: number }> = {
+      executed_water: { countPermits: 0, countElements: 0, totalLength: 0 },
+      executed_sewer: { countPermits: 0, countElements: 0, totalLength: 0 },
+      in_progress: { countPermits: 0, countElements: 0, totalLength: 0 },
+      remaining: { countPermits: 0, countElements: 0, totalLength: 0 }
+    };
+
+    perAnalysis.uniqueDetails.forEach(item => {
+      const catKey = item.primaryStatusKey || matchStatusByColor(item.primaryColor || '#A52714').key;
+      if (statusSummary[catKey]) {
+        statusSummary[catKey].countPermits += 1;
+        statusSummary[catKey].countElements += item.count;
+        statusSummary[catKey].totalLength += item.totalLength;
+      }
+    });
+
+    // Sort permits by status category order, then by total length descending
+    const sortedPermitsByColor = [...perAnalysis.uniqueDetails].sort((a, b) => {
+      const stA = getPermitStatus(a);
+      const stB = getPermitStatus(b);
+      if (stA.order !== stB.order) return stA.order - stB.order;
+      return b.totalLength - a.totalLength;
+    });
+
+    // 5a. Permit No Status Color Summary Slide
+    const slidePerSummary = pptx.addSlide();
+    slidePerSummary.addText(
+      isAr ? "تقرير تحليل التراخيص (Permit No) حسب حالة التنفيذ واللون" : "Permit No Analysis by Execution Status & Color",
+      { x: 0.8, y: 0.6, w: 11.73, h: 0.8, fontSize: 26, color: orangeAccent, bold: true, align: isAr ? 'right' : 'left' }
+    );
+
+    const perKm = (perAnalysis.totalLengthWithPermitNo / 1000).toFixed(2);
+    const perPct = ((perAnalysis.validElementsCount / (perAnalysis.totalElements || 1)) * 100).toFixed(1);
+
+    slidePerSummary.addText(
+      isAr 
+        ? `• عناصر تحتوي رقم ترخيص: ${perAnalysis.validElementsCount} من أصل ${perAnalysis.totalElements} (${perPct}%)  |  • تراخيص فريدة: ${perAnalysis.uniquePermitNosCount}  |  • إجمالي الطول: ${perKm} كم`
+        : `• Elements with Permit No: ${perAnalysis.validElementsCount} / ${perAnalysis.totalElements} (${perPct}%)  |  • Unique Permits: ${perAnalysis.uniquePermitNosCount}  |  • Total Length: ${perKm} km`,
+      { x: 0.8, y: 1.4, w: 11.73, h: 0.5, fontSize: 13, color: primaryColor, bold: true, align: isAr ? 'right' : 'left' }
+    );
+
+    const summaryTableRows: any[][] = [
+      [
+        { text: isAr ? "م" : "#", options: { fill: orangeAccent, color: white, bold: true, fontSize: 12 } },
+        { text: isAr ? "حالة التنفيذ / اللون" : "Execution Status / Color", options: { fill: orangeAccent, color: white, bold: true, fontSize: 12 } },
+        { text: isAr ? "عدد التراخيص الفريدة" : "Unique Permits", options: { fill: orangeAccent, color: white, bold: true, fontSize: 12 } },
+        { text: isAr ? "عدد العناصر" : "Elements Count", options: { fill: orangeAccent, color: white, bold: true, fontSize: 12 } },
+        { text: isAr ? "إجمالي الطول (كم)" : "Total Length (km)", options: { fill: orangeAccent, color: white, bold: true, fontSize: 12 } },
+        { text: isAr ? "النسبة %" : "Percentage %", options: { fill: orangeAccent, color: white, bold: true, fontSize: 12 } }
+      ]
+    ];
+
+    const totalPermitLen = perAnalysis.totalLengthWithPermitNo || 1;
+    let sIdx = 1;
+    Object.entries(STATUS_INFO_MAP).forEach(([key, info]) => {
+      const data = statusSummary[key] || { countPermits: 0, countElements: 0, totalLength: 0 };
+      const pct = ((data.totalLength / totalPermitLen) * 100).toFixed(1);
+      summaryTableRows.push([
+        { text: (sIdx++).toString(), options: { fontSize: 11, align: 'center' } },
+        { text: isAr ? info.nameAr : info.nameEn, options: { bold: true, fontSize: 11, color: info.color } },
+        { text: data.countPermits.toString(), options: { fontSize: 11, align: 'center' } },
+        { text: data.countElements.toString(), options: { fontSize: 11, align: 'center' } },
+        { text: (data.totalLength / 1000).toFixed(3), options: { fontSize: 11, align: 'right' } },
+        { text: `${pct}%`, options: { bold: true, fontSize: 11, align: 'right', color: info.color } }
+      ]);
+    });
+
+    slidePerSummary.addTable(summaryTableRows as any, {
+      x: 0.8, y: 2.1, w: 11.73,
+      border: { type: 'solid', color: "E2E8F0", pt: 1 },
+      align: 'center',
+      valign: 'middle',
+      colW: [0.6, 3.2, 2.0, 1.8, 2.2, 1.93],
+      fill: "F8F9FA",
+      autoPage: false
+    });
+
+    // 5b. Permit Details Table Sorted by Status Color Slide (Paginated for complete reporting)
+    const perPageSize = 10;
+    const perTotalPages = Math.ceil(sortedPermitsByColor.length / perPageSize);
+
+    for (let page = 0; page < perTotalPages; page++) {
+      const slidePerDetails = pptx.addSlide();
+      const pageChunk = sortedPermitsByColor.slice(page * perPageSize, (page + 1) * perPageSize);
+      const titleText = perTotalPages > 1
+        ? (isAr ? `تفاصيل التراخيص حسب حالة التنفيذ واللون (${page + 1} من ${perTotalPages})` : `Permit Details List (${page + 1} of ${perTotalPages})`)
+        : (isAr ? "تفاصيل التراخيص مفرزة حسب حالة التنفيذ واللون" : "Permit Details List (Sorted by Execution Status & Color)");
+
+      slidePerDetails.addText(
+        titleText,
+        { x: 0.8, y: 0.6, w: 11.73, h: 0.8, fontSize: 26, color: primaryColor, bold: true, align: isAr ? 'right' : 'left' }
+      );
+
+      const detailsTableRows: any[][] = [
+        [
+          { text: isAr ? "م" : "#", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } },
+          { text: isAr ? "حالة التنفيذ / اللون" : "Status / Color", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } },
+          { text: isAr ? "Permit No / رقم الترخيص" : "Permit No", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } },
+          { text: isAr ? "العدد" : "Count", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } },
+          { text: isAr ? "الطول (كم)" : "Length (km)", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } },
+          { text: isAr ? "اسم المشروع" : "Project Name", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } },
+          { text: isAr ? "المقاول" : "Contractor", options: { fill: primaryColor, color: white, bold: true, fontSize: 12 } }
+        ]
+      ];
+
+      pageChunk.forEach((item, idx) => {
+        const globalIdx = page * perPageSize + idx + 1;
+        const stInfo = getPermitStatus(item);
+        const stName = isAr ? (item.primaryStatusNameAr || stInfo.nameAr) : (item.primaryStatusNameEn || stInfo.nameEn);
+        detailsTableRows.push([
+          { text: globalIdx.toString(), options: { fontSize: 10, align: 'center' } },
+          { text: stName, options: { bold: true, fontSize: 10, color: stInfo.color } },
+          { text: item.idValue || item.permitValue || '-', options: { bold: true, fontSize: 10, color: orangeAccent } },
+          { text: item.count.toString(), options: { fontSize: 10, align: 'center' } },
+          { text: (item.totalLength / 1000).toFixed(3), options: { fontSize: 10, align: 'right' } },
+          { text: item.projectName || '-', options: { fontSize: 9 } },
+          { text: item.contractor || '-', options: { fontSize: 9 } }
+        ]);
+      });
+
+      slidePerDetails.addTable(detailsTableRows as any, {
+        x: 0.8, y: 1.6, w: 11.73,
+        border: { type: 'solid', color: "E2E8F0", pt: 1 },
+        align: 'center',
+        valign: 'middle',
+        colW: [0.5, 2.3, 2.2, 1.0, 1.5, 2.4, 1.83],
+        fill: "F8F9FA",
+        autoPage: false
+      });
+    }
+
+    // 5c. Permit No Distribution Chart Slide
+    const slidePerChart = pptx.addSlide();
+    slidePerChart.addText(
+      isAr ? "مخطط توزيع أطوال التراخيص مفرزة حسب اللون" : "Permit No Length Distribution Chart (by Color)",
+      { x: 0.8, y: 0.6, w: 11.73, h: 0.8, fontSize: 28, color: orangeAccent, bold: true, align: isAr ? 'right' : 'left' }
+    );
+
+    const topPermits = [...sortedPermitsByColor].slice(0, 10);
+
+    const chartDataPermit = [
+      {
+        name: isAr ? "الطول (كم)" : "Length (km)",
+        labels: topPermits.map(p => `${p.permitValue || p.idValue || '-'}`),
+        values: topPermits.map(p => parseFloat((p.totalLength / 1000).toFixed(3)))
+      }
+    ];
+
+    slidePerChart.addChart(pptx.ChartType.bar, chartDataPermit, {
+      x: 0.8, y: 1.6, w: 11.73, h: 5.2,
+      barDir: 'col',
+      showValue: true,
+      dataLabelFormatCode: "0.000",
+      dataLabelColor: "1E293B",
+      dataLabelFontSize: 9,
+      chartColors: topPermits.map(p => getPermitStatus(p).color),
+      valAxisTitle: isAr ? "الطول (كم)" : "Length (km)",
+      catAxisTitle: isAr ? "Permit No (رقم الترخيص)" : "Permit No",
+    });
+  }
+
+  // 6. Sewer Mainline (WW_MAINLINE) Slide if present
+  if (wwStats && Object.keys(wwStats.diameterBreakdown || {}).length > 0) {
+    const slideWw = pptx.addSlide();
+    slideWw.addText(isAr ? "تقرير شبكة الصرف الصحي الرئيسية (WW_MAINLINE)" : "WW_MAINLINE Sewer Network Report", {
+        x: 0.8, y: 0.6, w: 11.73, h: 0.8,
+        fontSize: 28, color: "D946EF", bold: true, align: isAr ? 'right' : 'left'
+    });
+
+    const wwKm = (wwStats.totalLength / 1000).toFixed(3);
+    slideWw.addText(
+      isAr 
+        ? `إجمالي طول خطوط الصرف الرئيسي: ${wwKm} كم  |  عدد الأجزاء: ${wwStats.segments.length}`
+        : `Total WW_MAINLINE Length: ${wwKm} km  |  Total Segments: ${wwStats.segments.length}`,
+      { x: 0.8, y: 1.4, w: 11.73, h: 0.5, fontSize: 14, color: primaryColor, bold: true, align: isAr ? 'right' : 'left' }
+    );
+
+    const tableRows: any[][] = [
+      [
+        { text: isAr ? "القطر (مم)" : "Diameter (mm)", options: { fill: "D946EF", color: white, bold: true, fontSize: 14 } },
+        { text: isAr ? "الطول الإجمالي (كم)" : "Total Length (km)", options: { fill: "D946EF", color: white, bold: true, fontSize: 14 } },
+        { text: isAr ? "النسبة من الشبكة" : "Percentage", options: { fill: "D946EF", color: white, bold: true, fontSize: 14 } }
+      ]
+    ];
+
+    Object.entries(wwStats.diameterBreakdown).forEach(([dia, len]) => {
+      const pct = (len / (wwStats.totalLength || 1)) * 100;
+      tableRows.push([
+        { text: dia, options: { bold: true, fontSize: 13 } },
+        { text: (len / 1000).toFixed(3), options: { fontSize: 13 } },
+        { text: `${pct.toFixed(1)}%`, options: { fontSize: 13 } }
+      ]);
+    });
+
+    slideWw.addTable(tableRows as any, {
+      x: 0.8, y: 2.1, w: 11.73,
+      border: { type: 'solid', color: "E2E8F0", pt: 1 },
+      align: 'center',
+      valign: 'middle',
+      colW: [4.0, 4.0, 3.73],
+      fill: "F8F9FA",
+      autoPage: false
+    });
+  }
+
+  // 7. Data Table Slide(s)
   for (let i = 0; i < data.length; i += 8) {
       const chunk = data.slice(i, i + 8);
       const slideTable = pptx.addSlide();
-      slideTable.addText(isAr ? `البيانات التفصيلية (${i + 1} - ${i + chunk.length})` : `Detailed Statistics (${i + 1} - ${i + chunk.length})`, {
+      slideTable.addText(isAr ? `البيانات التفصيلية للحالات (${i + 1} - ${i + chunk.length})` : `Detailed Category Statistics (${i + 1} - ${i + chunk.length})`, {
           x: 0.8, y: 0.6, w: 11.73, h: 0.8,
           fontSize: 28, color: primaryColor, bold: true, align: isAr ? 'right' : 'left'
       });
@@ -133,7 +556,7 @@ export const generateAnalysisPPTX = async (
           fontSize: 14,
           align: 'center',
           valign: 'middle',
-          colW: [4.73, 2.5, 2.0, 2.5], // proportional column widths
+          colW: [4.73, 2.5, 2.0, 2.5],
           fill: "F8F9FA",
           autoPage: false
       });
@@ -141,71 +564,202 @@ export const generateAnalysisPPTX = async (
 
   // Save the presentation
   const safeName = String(filename || '').replace(/[^a-z0-9\u0600-\u06FF]/gi, '_');
-  await pptx.writeFile({ fileName: `Analysis_Report_${safeName}.pptx` });
+  await pptx.writeFile({ fileName: `Full_Analysis_Report_${safeName}.pptx` });
+};
+
+export const cleanTextForPdf = (text: any): string => {
+  if (text === null || text === undefined) return '-';
+  let str = String(text)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#160;/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[\s\u00A0]+/g, ' ')
+    .trim();
+
+  if (!str) return '-';
+
+  const lower = str.toLowerCase();
+  const emptyValues = new Set([
+    'null', 'undefined', 'none', '-', '--', '---', '_', '=', 'n/a', 'na', 'unknown', 'nil', 'empty',
+    'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان', 'لاشيء', 'لا شيء'
+  ]);
+  if (emptyValues.has(lower)) return '-';
+
+  // Check if string contains Arabic characters
+  if (/[\u0600-\u06FF]/.test(str)) {
+    str = str
+      .replace(/مشروع/gi, 'Project')
+      .replace(/شبكة/gi, 'Network')
+      .replace(/شبكات/gi, 'Networks')
+      .replace(/مياه/gi, 'Water')
+      .replace(/الصرف\s*الصحي/gi, 'Sewerage')
+      .replace(/الأمطار|الامطار/gi, 'Stormwater')
+      .replace(/تصريف/gi, 'Drainage')
+      .replace(/تأهيل|تاهيل/gi, 'Rehab')
+      .replace(/إنشاء|انشاء/gi, 'Construction')
+      .replace(/صيانة/gi, 'Maintenance')
+      .replace(/تشغيل/gi, 'Operation')
+      .replace(/شركة/gi, 'Company')
+      .replace(/مؤسسة/gi, 'Est.')
+      .replace(/للمقاولات/gi, 'Contracting')
+      .replace(/مقاولات/gi, 'Contracting')
+      .replace(/مقاول/gi, 'Contractor')
+      .replace(/الرياض/gi, 'Riyadh')
+      .replace(/جدة/gi, 'Jeddah')
+      .replace(/مكة/gi, 'Makkah')
+      .replace(/المدينة/gi, 'Madinah')
+      .replace(/الدمام/gi, 'Dammam')
+      .replace(/الشرقية/gi, 'Eastern')
+      .replace(/الشمالية/gi, 'Northern')
+      .replace(/الجنوبية/gi, 'Southern')
+      .replace(/الغربية/gi, 'Western')
+      .replace(/خط/gi, 'Line')
+      .replace(/رئيسي/gi, 'Main')
+      .replace(/فرعي/gi, 'Sub')
+      .replace(/أنبوب|انبوب/gi, 'Pipe')
+      .replace(/أناديب|انابيب/gi, 'Pipes')
+      .replace(/مرحلة/gi, 'Phase')
+      .replace(/عقد/gi, 'Contract');
+
+    const arabicToLatinMap: Record<string, string> = {
+      'أ': 'A', 'إ': 'I', 'آ': 'Aa', 'ا': 'A', 'ب': 'B', 'ت': 'T', 'ث': 'Th',
+      'ج': 'J', 'ح': 'H', 'خ': 'Kh', 'د': 'D', 'ذ': 'Dh', 'ر': 'R', 'ز': 'Z',
+      'س': 'S', 'ش': 'Sh', 'ص': 'S', 'ض': 'D', 'ط': 'T', 'ظ': 'Z', 'ع': 'A',
+      'غ': 'Gh', 'ف': 'F', 'ق': 'Q', 'ك': 'K', 'ل': 'L', 'م': 'M', 'ن': 'N',
+      'ه': 'H', 'و': 'W', 'ي': 'Y', 'ى': 'Y', 'ئ': 'Y', 'ء': '', 'ة': 'h',
+      '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9'
+    };
+
+    str = str.split('').map(ch => arabicToLatinMap[ch] !== undefined ? arabicToLatinMap[ch] : ch).join('');
+  }
+
+  // Remove any non-ASCII printable characters to avoid jsPDF font corruption
+  str = str.replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  return str || '-';
 };
 
 export const generateAnalysisPDF = (
   data: AnalysisItem[], 
   filename: string, 
-  lang: Language
+  lang: Language,
+  extraOptions?: FullAnalysisExtraOptions
 ) => {
-  // Always use English for the PDF report to ensure compatibility with jsPDF's built-in fonts
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  // Always use English for the PDF report with landscape orientation
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   
   const primaryColor: [number, number, number] = [11, 45, 61]; // #0B2D3D
   const accentColor: [number, number, number] = [220, 177, 60]; // #DCB13C
+  const purpleAccent: [number, number, number] = [147, 51, 234]; // #9333EA
+  const orangeAccent: [number, number, number] = [255, 109, 0]; // #FF6D00
   const textColor: [number, number, number] = [60, 60, 60];
   const lightGray: [number, number, number] = [245, 247, 250];
   
   // Clean filename for title
-  const displayTitle = String(filename || '').replace(/_/g, ' ').replace(/\.kml|\.kmz|\.xlsx|\.csv|\.dxf/i, '');
+  const rawTitle = String(filename || '').replace(/_/g, ' ').replace(/\.kml|\.kmz|\.xlsx|\.csv|\.dxf/i, '');
+  const displayTitle = cleanTextForPdf(rawTitle);
 
-  // 1. Header Section (Dark Blue Background)
+  const netType = extraOptions?.networkType || 'all';
+
+  let pdfTitle = "Path Length & Spatial Analysis Report";
+  let pdfSubtitle = `Project: ${displayTitle}`;
+
+  if (netType === 'water') {
+    pdfTitle = "Drinking Water Network Analysis Report";
+    pdfSubtitle = `Project: ${displayTitle} | Scope: Water Network Only`;
+  } else if (netType === 'sewer') {
+    pdfTitle = "Sewer & Wastewater Network Analysis Report";
+    pdfSubtitle = `Project: ${displayTitle} | Scope: Sewer Network Only`;
+  }
+
+  // 1. Header Section (Dark Blue Background - Landscape 297mm width)
   doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-  doc.rect(0, 0, 210, 45, 'F');
+  doc.rect(0, 0, 297, 42, 'F');
   
   // Add a subtle accent line at the bottom of the header
   doc.setFillColor(accentColor[0], accentColor[1], accentColor[2]);
-  doc.rect(0, 45, 210, 2, 'F');
+  doc.rect(0, 42, 297, 2, 'F');
 
-  // Title Text
+  // Title Text (Centered at 148.5 mm)
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(24);
-  doc.text("Path Length Analysis Report", 105, 22, { align: 'center' });
+  doc.setFontSize(20);
+  doc.text(pdfTitle, 148.5, 18, { align: 'center' });
   
   doc.setFont("helvetica", "normal");
   doc.setFontSize(11);
   doc.setTextColor(200, 200, 200);
-  doc.text(`Project: ${displayTitle}`, 105, 32, { align: 'center' });
+  doc.text(pdfSubtitle, 148.5, 28, { align: 'center' });
   
   doc.setFontSize(9);
-  doc.text(`Generated on: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 105, 38, { align: 'center' });
+  doc.text(`Generated on: ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}`, 148.5, 36, { align: 'center' });
 
   // 2. Summary Statistics Section
   const totalKm = data.reduce((a, b) => a + b.totalLength, 0) / 1000;
   const totalElements = data.reduce((a, b) => a + b.count, 0);
 
+  const segAnalysis = extraOptions?.segmentIdAnalysis;
+  const perAnalysis = extraOptions?.permitNoAnalysis;
+  const wwStats = extraOptions?.wwMainlineStats;
+  const wStats = extraOptions?.wMainlineStats;
+
   doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.text("Executive Summary", 14, 62);
+  doc.setFontSize(15);
+  doc.text(
+    netType === 'water'
+      ? "Executive Summary - Drinking Water Network"
+      : netType === 'sewer'
+      ? "Executive Summary - Sewer & Wastewater Network"
+      : "Executive Summary",
+    14, 54
+  );
   
-  // Summary Cards (Draw 3 light gray boxes with borders)
-  const cardY = 68;
-  const cardW = 58;
-  const cardH = 22;
-  const marginX = 14;
-  const gap = (210 - (2 * marginX) - (3 * cardW)) / 2; // Calculate gap between cards
+  const hasExtraStats = !!(segAnalysis || perAnalysis || wwStats || wStats);
 
   const summaryStats = [
       { label: "Total Length (km)", value: totalKm.toFixed(2) },
-      { label: "Status Categories", value: data.length.toString() },
-      { label: "Total Elements", value: totalElements.toString() }
+      { label: "Total Elements", value: totalElements.toString() },
+      { 
+        label: "Analyzed Network", 
+        value: netType === 'water' ? 'Water' : netType === 'sewer' ? 'Sewer' : 'All' 
+      },
+      { 
+        label: "Segment ID Length (km)", 
+        value: segAnalysis ? (segAnalysis.totalLengthWithSegmentId / 1000).toFixed(2) : '-' 
+      },
+      { 
+        label: "Permit No Length (km)", 
+        value: perAnalysis ? (perAnalysis.totalLengthWithPermitNo / 1000).toFixed(2) : '-' 
+      },
+      netType === 'water'
+        ? { 
+            label: "Water Mainline Length (km)", 
+            value: wStats ? (wStats.totalLength / 1000).toFixed(2) : totalKm.toFixed(2) 
+          }
+        : netType === 'sewer'
+        ? { 
+            label: "Sewer Mainline Length (km)", 
+            value: wwStats ? (wwStats.totalLength / 1000).toFixed(2) : totalKm.toFixed(2) 
+          }
+        : { 
+            label: "WW Mainline Length (km)", 
+            value: wwStats ? (wwStats.totalLength / 1000).toFixed(2) : '-' 
+          }
   ];
 
-  summaryStats.forEach((stat, i) => {
-      const cardX = marginX + i * (cardW + gap);
+  const statsToShow = hasExtraStats ? summaryStats : summaryStats.slice(0, 3);
+  
+  const cardW = 85;
+  const cardH = 18;
+  const marginX = 14;
+  const gapX = 7;
+
+  statsToShow.forEach((stat, i) => {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      const cardX = marginX + col * (cardW + gapX);
+      const cardY = 59 + row * (cardH + 4);
       
       // Card Background
       doc.setFillColor(lightGray[0], lightGray[1], lightGray[2]);
@@ -214,22 +768,24 @@ export const generateAnalysisPDF = (
       
       // Card Label
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
+      doc.setFontSize(8);
       doc.setTextColor(100, 110, 120);
-      doc.text(stat.label, cardX + cardW/2, cardY + 7, { align: 'center' });
+      doc.text(stat.label, cardX + cardW/2, cardY + 6, { align: 'center' });
       
       // Card Value
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(16);
+      doc.setFontSize(13);
       doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-      doc.text(stat.value, cardX + cardW/2, cardY + 16, { align: 'center' });
+      doc.text(stat.value, cardX + cardW/2, cardY + 14, { align: 'center' });
   });
+
+  const tableStartY = hasExtraStats ? 108 : 88;
 
   // 3. Detailed Breakdown Section
   doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.text("Detailed Breakdown by Status", 14, 105);
+  doc.setFontSize(14);
+  doc.text("Detailed Breakdown by Status", 14, tableStartY);
 
   // Data Table
   const tableHead = [
@@ -248,11 +804,10 @@ export const generateAnalysisPDF = (
 
   const tableBody = data.map(item => {
       const statusCat = matchStatusByColor(item.color);
-      // Fallback to the raw color code if no category matches perfectly, but we use the English name of the category
       const displayName = statusCat ? statusCat.nameEn : item.color;
       return [
           "", // Empty cell for color badge
-          displayName,
+          cleanTextForPdf(displayName),
           (item.totalLength / 1000).toFixed(3),
           item.count.toString(),
           `${item.percentage.toFixed(1)}%`
@@ -260,7 +815,7 @@ export const generateAnalysisPDF = (
   });
 
   autoTable(doc, {
-      startY: 112,
+      startY: tableStartY + 6,
       head: tableHead,
       body: tableBody,
       theme: 'grid',
@@ -269,18 +824,18 @@ export const generateAnalysisPDF = (
           textColor: [255, 255, 255],
           fontStyle: 'bold',
           halign: 'center',
-          fontSize: 10
+          fontSize: 9
       },
       columnStyles: {
-          0: { cellWidth: 15, halign: 'center' }, // Color badge column
-          1: { cellWidth: 70, halign: 'left', fontStyle: 'bold' },
-          2: { cellWidth: 'auto', halign: 'right' },
-          3: { cellWidth: 'auto', halign: 'right' },
-          4: { cellWidth: 'auto', halign: 'right' }
+          0: { cellWidth: 14, halign: 'center' },
+          1: { cellWidth: 100, halign: 'left', fontStyle: 'bold' },
+          2: { cellWidth: 50, halign: 'right' },
+          3: { cellWidth: 50, halign: 'right' },
+          4: { cellWidth: 55, halign: 'right' }
       },
       styles: { 
-          fontSize: 10, 
-          cellPadding: 6,
+          fontSize: 9, 
+          cellPadding: 5,
           textColor: textColor,
           lineColor: [220, 225, 230],
           valign: 'middle'
@@ -289,15 +844,15 @@ export const generateAnalysisPDF = (
           fillColor: [252, 253, 254]
       },
       didDrawCell: function(dataOptions) {
-          // Draw color badge in the first column for body rows
           if (dataOptions.section === 'body' && dataOptions.column.index === 0) {
               const rowIndex = dataOptions.row.index;
               const item = data[rowIndex];
+              if (!item) return;
               const statusCat = matchStatusByColor(item.color);
               const colorHex = statusCat ? statusCat.color : item.color;
               const [r, g, b] = hexToRgbForPdf(colorHex);
               
-              const dim = 6;
+              const dim = 5;
               const x = dataOptions.cell.x + (dataOptions.cell.width - dim) / 2;
               const y = dataOptions.cell.y + (dataOptions.cell.height - dim) / 2;
               
@@ -307,6 +862,336 @@ export const generateAnalysisPDF = (
           }
       }
   });
+
+  // 4. Segment ID Analysis Section
+  if (segAnalysis && segAnalysis.uniqueDetails && segAnalysis.uniqueDetails.length > 0) {
+      doc.addPage();
+      
+      // Section Header (Landscape 297mm width)
+      doc.setFillColor(purpleAccent[0], purpleAccent[1], purpleAccent[2]);
+      doc.rect(0, 0, 297, 24, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("Segment ID Analysis Report", 14, 16);
+
+      const segKm = (segAnalysis.totalLengthWithSegmentId / 1000).toFixed(2);
+      const segPct = ((segAnalysis.validElementsCount / (segAnalysis.totalElements || 1)) * 100).toFixed(1);
+
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(`Valid Segment IDs: ${segAnalysis.validElementsCount} / ${segAnalysis.totalElements} (${segPct}%)   |   Unique Segment IDs: ${segAnalysis.uniqueSegmentIdsCount}   |   Total Length: ${segKm} km`, 14, 33);
+
+      const segTableHead = [
+          ["#", "Segment ID", "Count", "Length (km)", "Project Name", "Contractor"]
+      ];
+
+      const segTableBody = segAnalysis.uniqueDetails.slice(0, 30).map((item, idx) => [
+          (idx + 1).toString(),
+          cleanTextForPdf(item.idValue || (item as any).permitValue),
+          item.count.toString(),
+          (item.totalLength / 1000).toFixed(3),
+          cleanTextForPdf(item.projectName),
+          cleanTextForPdf(item.contractor)
+      ]);
+
+      autoTable(doc, {
+          startY: 38,
+          head: segTableHead,
+          body: segTableBody,
+          theme: 'grid',
+          headStyles: {
+              fillColor: purpleAccent,
+              textColor: [255, 255, 255],
+              fontStyle: 'bold',
+              halign: 'center',
+              fontSize: 9
+          },
+          columnStyles: {
+              0: { cellWidth: 12, halign: 'center' },
+              1: { cellWidth: 65, halign: 'left', fontStyle: 'bold' },
+              2: { cellWidth: 22, halign: 'right' },
+              3: { cellWidth: 28, halign: 'right' },
+              4: { cellWidth: 82, halign: 'left' },
+              5: { cellWidth: 60, halign: 'left' }
+          },
+          styles: {
+              fontSize: 8.5,
+              cellPadding: 4,
+              textColor: textColor,
+              lineColor: [220, 225, 230],
+              valign: 'middle'
+          },
+          alternateRowStyles: {
+              fillColor: [250, 245, 255]
+          }
+      });
+  }
+
+  // 5. Permit No Analysis Section (Grouped & Sorted by Status Color)
+  if (perAnalysis && perAnalysis.uniqueDetails && perAnalysis.uniqueDetails.length > 0) {
+      doc.addPage();
+      
+      // Section Header (Landscape 297mm width)
+      doc.setFillColor(orangeAccent[0], orangeAccent[1], orangeAccent[2]);
+      doc.rect(0, 0, 297, 24, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("Permit No Analysis & Status Color Report", 14, 16);
+
+      const perKm = (perAnalysis.totalLengthWithPermitNo / 1000).toFixed(2);
+      const perPct = ((perAnalysis.validElementsCount / (perAnalysis.totalElements || 1)) * 100).toFixed(1);
+
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(`Valid Permit Nos: ${perAnalysis.validElementsCount} / ${perAnalysis.totalElements} (${perPct}%)   |   Unique Permit Nos: ${perAnalysis.uniquePermitNosCount}   |   Total Length: ${perKm} km`, 14, 32);
+
+      // Status info helper for PDF
+      const STATUS_PDF_MAP: Record<string, { order: number; nameEn: string; colorHex: string }> = {
+        executed_water: { order: 1, nameEn: 'Executed - Water', colorHex: '#01579B' },
+        executed_sewer: { order: 2, nameEn: 'Executed - Sewer', colorHex: '#097138' },
+        in_progress: { order: 3, nameEn: 'Work in Progress', colorHex: '#FFEA00' },
+        remaining: { order: 4, nameEn: 'Remaining Work', colorHex: '#A52714' }
+      };
+
+      const getPermitPdfStatus = (item: any) => {
+        const catKey = item.primaryStatusKey || matchStatusByColor(item.primaryColor || '#A52714').key;
+        return STATUS_PDF_MAP[catKey] || STATUS_PDF_MAP['remaining'];
+      };
+
+      // 1. Status Summary Table for Permits
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text("Permit Summary by Execution Status & Color", 14, 40);
+
+      const permitStatusSummaryMap: Record<string, { uniqueCount: number; elementsCount: number; totalLength: number }> = {
+        executed_water: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
+        executed_sewer: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
+        in_progress: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
+        remaining: { uniqueCount: 0, elementsCount: 0, totalLength: 0 }
+      };
+
+      perAnalysis.uniqueDetails.forEach(item => {
+        const catKey = item.primaryStatusKey || matchStatusByColor(item.primaryColor || '#A52714').key;
+        if (permitStatusSummaryMap[catKey]) {
+          permitStatusSummaryMap[catKey].uniqueCount += 1;
+          permitStatusSummaryMap[catKey].elementsCount += item.count;
+          permitStatusSummaryMap[catKey].totalLength += item.totalLength;
+        }
+      });
+
+      const perSummaryHead = [
+        ["", "Execution Status / Color", "Unique Permits", "Elements", "Total Length (km)", "Percentage"]
+      ];
+
+      const totalPermitLenPdf = perAnalysis.totalLengthWithPermitNo || 1;
+      const summaryKeys = Object.keys(STATUS_PDF_MAP);
+      const perSummaryBody = summaryKeys.map(key => {
+        const st = STATUS_PDF_MAP[key];
+        const data = permitStatusSummaryMap[key] || { uniqueCount: 0, elementsCount: 0, totalLength: 0 };
+        const pct = ((data.totalLength / totalPermitLenPdf) * 100).toFixed(1);
+        return [
+          "", // Badge dot
+          st.nameEn,
+          data.uniqueCount.toString(),
+          data.elementsCount.toString(),
+          (data.totalLength / 1000).toFixed(3),
+          `${pct}%`
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 43,
+        head: perSummaryHead,
+        body: perSummaryBody,
+        theme: 'grid',
+        headStyles: {
+          fillColor: orangeAccent,
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          halign: 'center',
+          fontSize: 8.5
+        },
+        columnStyles: {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 65, halign: 'left', fontStyle: 'bold' },
+          2: { cellWidth: 40, halign: 'right' },
+          3: { cellWidth: 35, halign: 'right' },
+          4: { cellWidth: 45, halign: 'right' },
+          5: { cellWidth: 40, halign: 'right', fontStyle: 'bold' }
+        },
+        styles: {
+          fontSize: 8,
+          cellPadding: 3,
+          textColor: textColor,
+          lineColor: [220, 225, 230],
+          valign: 'middle'
+        },
+        didDrawCell: function(dataOptions) {
+          if (dataOptions.section === 'body' && dataOptions.column.index === 0) {
+            const rowIndex = dataOptions.row.index;
+            const key = summaryKeys[rowIndex];
+            const st = STATUS_PDF_MAP[key];
+            if (!st) return;
+            const [r, g, b] = hexToRgbForPdf(st.colorHex);
+            const dim = 4;
+            const x = dataOptions.cell.x + (dataOptions.cell.width - dim) / 2;
+            const y = dataOptions.cell.y + (dataOptions.cell.height - dim) / 2;
+            doc.setFillColor(r, g, b);
+            doc.setDrawColor(200, 200, 200);
+            doc.circle(x + dim/2, y + dim/2, dim/2, 'FD');
+          }
+        }
+      });
+
+      // 2. Detailed Permits Table Sorted by Status Color
+      const lastY = (doc as any).lastAutoTable ? (doc as any).lastAutoTable.finalY + 8 : 100;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text("Permit Details List (Sorted by Execution Status & Color)", 14, lastY);
+
+      const sortedPermitsByColorPdf = [...perAnalysis.uniqueDetails].sort((a, b) => {
+        const stA = getPermitPdfStatus(a);
+        const stB = getPermitPdfStatus(b);
+        if (stA.order !== stB.order) return stA.order - stB.order;
+        return b.totalLength - a.totalLength;
+      });
+
+      const perTableHead = [
+        ["#", "Status / Color", "Permit No / License No", "Count", "Length (km)", "Project Name", "Contractor"]
+      ];
+
+      const perTableBody = sortedPermitsByColorPdf.slice(0, 35).map((item, idx) => {
+        const st = getPermitPdfStatus(item);
+        const stName = cleanTextForPdf(item.primaryStatusNameEn || st.nameEn);
+        return [
+          (idx + 1).toString(),
+          stName,
+          cleanTextForPdf(item.idValue || item.permitValue),
+          item.count.toString(),
+          (item.totalLength / 1000).toFixed(3),
+          cleanTextForPdf(item.projectName),
+          cleanTextForPdf(item.contractor)
+        ];
+      });
+
+      autoTable(doc, {
+        startY: lastY + 3,
+        head: perTableHead,
+        body: perTableBody,
+        theme: 'grid',
+        headStyles: {
+          fillColor: orangeAccent,
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+          halign: 'center',
+          fontSize: 8.5
+        },
+        columnStyles: {
+          0: { cellWidth: 10, halign: 'center' },
+          1: { cellWidth: 45, halign: 'left', fontStyle: 'bold' },
+          2: { cellWidth: 50, halign: 'left', fontStyle: 'bold' },
+          3: { cellWidth: 20, halign: 'right' },
+          4: { cellWidth: 28, halign: 'right' },
+          5: { cellWidth: 62, halign: 'left' },
+          6: { cellWidth: 54, halign: 'left' }
+        },
+        styles: {
+          fontSize: 8,
+          cellPadding: 3,
+          textColor: textColor,
+          lineColor: [220, 225, 230],
+          valign: 'middle'
+        },
+        alternateRowStyles: {
+          fillColor: [255, 248, 240]
+        },
+        didDrawCell: function(dataOptions) {
+          if (dataOptions.section === 'body' && dataOptions.column.index === 1) {
+            const rowIndex = dataOptions.row.index;
+            const item = sortedPermitsByColorPdf[rowIndex];
+            if (!item) return;
+            const st = getPermitPdfStatus(item);
+            const [r, g, b] = hexToRgbForPdf(item.primaryColor || st.colorHex);
+            // subtle color highlight for status text cell background or border
+          }
+        }
+      });
+  }
+
+  // 6. Sewer Mainline (WW_MAINLINE) Section
+  if (wwStats && Object.keys(wwStats.diameterBreakdown || {}).length > 0) {
+      doc.addPage();
+      
+      const wwColor: [number, number, number] = [217, 70, 239]; // #D946EF
+      doc.setFillColor(wwColor[0], wwColor[1], wwColor[2]);
+      doc.rect(0, 0, 297, 24, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(16);
+      doc.text("Sewer Mainline (WW_MAINLINE) Report", 14, 16);
+
+      const wwKm = (wwStats.totalLength / 1000).toFixed(3);
+
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(`Total Sewer Mainline Length: ${wwKm} km   |   Total Segments: ${wwStats.segments.length}`, 14, 33);
+
+      const wwTableHead = [
+          ["Diameter (mm)", "Length (m)", "Length (km)", "Percentage"]
+      ];
+
+      const totalLen = wwStats.totalLength || 1;
+      const wwTableBody = Object.entries(wwStats.diameterBreakdown).map(([dia, lenM]) => {
+          const len = Number(lenM) || 0;
+          const pct = ((len / totalLen) * 100).toFixed(1);
+          return [
+              `${dia} mm`,
+              len.toFixed(2),
+              (len / 1000).toFixed(3),
+              `${pct}%`
+          ];
+      });
+
+      autoTable(doc, {
+          startY: 38,
+          head: wwTableHead,
+          body: wwTableBody,
+          theme: 'grid',
+          headStyles: {
+              fillColor: wwColor,
+              textColor: [255, 255, 255],
+              fontStyle: 'bold',
+              halign: 'center',
+              fontSize: 9
+          },
+          columnStyles: {
+              0: { cellWidth: 65, halign: 'center', fontStyle: 'bold' },
+              1: { cellWidth: 65, halign: 'right' },
+              2: { cellWidth: 65, halign: 'right' },
+              3: { cellWidth: 74, halign: 'right' }
+          },
+          styles: {
+              fontSize: 9,
+              cellPadding: 5,
+              textColor: textColor,
+              lineColor: [220, 225, 230],
+              valign: 'middle'
+          },
+          alternateRowStyles: {
+              fillColor: [253, 242, 255]
+          }
+      });
+  }
 
   // Footer (Page numbers)
   const pageCount = (doc as any).internal.getNumberOfPages();

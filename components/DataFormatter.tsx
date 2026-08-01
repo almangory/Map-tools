@@ -4,7 +4,8 @@ import { GeoPoint, OverlapResult } from '../types';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
-import { extractAllPointAttributes, parseDescriptionToAttributes, stripHtml } from '../services/parserService';
+import { extractAllPointAttributes, parseDescriptionToAttributes, stripHtml, extractNumbersOnly, isNumericTargetField, cleanZoneValue, isZoneField } from '../services/parserService';
+import { calculatePathLength } from '../services/geometryService';
 import * as XLSX from 'xlsx';
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -118,13 +119,25 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   // Collect all unique attributes from current points
   const sourceAttributes = useMemo(() => {
     const attrMap = new Map<string, string>();
+
+    // 1. Add all active file headers if provided
+    if (headers && Array.isArray(headers)) {
+      headers.forEach(h => {
+        if (h && typeof h === 'string' && h.trim()) {
+          attrMap.set(h.trim(), '');
+        }
+      });
+    }
+
+    // 2. Collect attributes & sample values from points
     points.forEach(p => {
       if (p.attributes && Object.keys(p.attributes).length > 0) {
         Object.entries(p.attributes).forEach(([k, v]) => {
-          if (!attrMap.has(k)) {
-            attrMap.set(k, String(v || '').substring(0, 30));
-          } else if (attrMap.get(k) === '' && v) {
-            attrMap.set(k, String(v).substring(0, 30));
+          const cleanK = String(k || '').trim();
+          if (!cleanK) return;
+          const valStr = String(v ?? '').trim();
+          if (!attrMap.has(cleanK) || attrMap.get(cleanK) === '') {
+            attrMap.set(cleanK, valStr.substring(0, 30));
           }
         });
       }
@@ -132,28 +145,31 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       if (p.description) {
         const descAttrs = parseDescriptionToAttributes(p.description, {});
         Object.entries(descAttrs).forEach(([k, v]) => {
-          if (!attrMap.has(k)) {
-            attrMap.set(k, String(v || '').substring(0, 30));
-          } else if (attrMap.get(k) === '' && v) {
-            attrMap.set(k, String(v).substring(0, 30));
+          const cleanK = String(k || '').trim();
+          if (!cleanK) return;
+          const valStr = String(v ?? '').trim();
+          if (!attrMap.has(cleanK) || attrMap.get(cleanK) === '') {
+            attrMap.set(cleanK, valStr.substring(0, 30));
           }
         });
       }
-      
+
       if (p.originalRow && headers) {
         headers.forEach((h, i) => {
+          const cleanK = String(h || '').trim();
+          if (!cleanK) return;
           const v = p.originalRow![i];
-          if (!attrMap.has(h)) {
-             attrMap.set(h, String(v || '').substring(0, 30));
-          } else if (attrMap.get(h) === '' && v) {
-             attrMap.set(h, String(v).substring(0, 30));
+          const valStr = String(v ?? '').trim();
+          if (!attrMap.has(cleanK) || attrMap.get(cleanK) === '') {
+            attrMap.set(cleanK, valStr.substring(0, 30));
           }
         });
       }
+
       if (p.street && !attrMap.has('الشارع (مسترجع)')) attrMap.set('الشارع (مسترجع)', p.street.substring(0, 30));
       if (p.district && !attrMap.has('الحي (مسترجع)')) attrMap.set('الحي (مسترجع)', p.district.substring(0, 30));
-
     });
+
     return Array.from(attrMap.entries()).map(([name, sample]) => ({ name, sample }));
   }, [points, headers]);
 
@@ -169,8 +185,11 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
       const findMatchingSource = (aliases: string[]) => {
         return sourceAttributes.find(sa => {
-          const lower = sa.name.toLowerCase().trim();
-          return aliases.some(a => lower === a.toLowerCase() || lower.includes(a.toLowerCase()));
+          const lower = sa.name.toLowerCase().replace(/[\s_#-]/g, '');
+          return aliases.some(a => {
+            const cleanA = a.toLowerCase().replace(/[\s_#-]/g, '');
+            return lower === cleanA || lower.includes(cleanA) || cleanA.includes(lower);
+          });
         })?.name;
       };
 
@@ -178,9 +197,24 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         if (!newMap[field]?.sourceField) {
           let matched: string | undefined;
 
-          if (field === 'INNERDIAMETER' || field === 'DIAMETER' || field === 'OUTERDIAMETER') {
+          if (field === 'INNERDIAMETER') {
             matched = findMatchingSource([
-              'innerdiameter', 'outerdiameter', 'diameter', 'قطر_الخط', 'قطر الخط', 'قطر_الانبوب', 'قطر الانبوب', 'القطر', 'قطر', 'قطر_الشبكة', 'size'
+              'innerdiameter', 'inner_diameter', 'inner diameter', 'القطر الداخلي', 'القطر_الداخلي', 'قطر_داخلي', 'قطر داخلي', 'قطر_الخط', 'قطر الخط', 'قطر_الانبوب', 'قطر الانبوب', 'القطر', 'قطر', 'diameter', 'size'
+            ]);
+          } else if (field === 'OUTERDIAMETER') {
+            matched = findMatchingSource([
+              'outerdiameter', 'outer_diameter', 'outer diameter', 'القطر الخارجي', 'القطر_الخارجي', 'قطر_خارجي', 'قطر خارجي'
+            ]);
+          } else if (field === 'SHAPE_Length' || field === 'ACTUALLENGTH') {
+            matched = findMatchingSource([
+              'shape_length', 'shapelength', 'shape length', 'actuallength', 'actual_length', 'actual length', 'طول_الخط', 'طول الخط', 'طول_العنصر', 'الاطوال', 'length'
+            ]);
+            if (!matched) {
+              matched = '__MAP_LENGTH__';
+            }
+          } else if (field === 'DIAMETER') {
+            matched = findMatchingSource([
+              'diameter', 'قطر_الخط', 'قطر الخط', 'قطر_الانبوب', 'قطر الانبوب', 'القطر', 'قطر', 'قطر_الشبكة', 'size', 'innerdiameter'
             ]);
           } else if (field === 'MATERIAL') {
             matched = findMatchingSource(['material', 'مادة', 'مادة_الخط', 'مادة الخط', 'نوع_الانبوب', 'نوع الانبوب']);
@@ -196,10 +230,16 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             matched = findMatchingSource(['zone_nu', 'zone', 'منطقة', 'النطاق', 'رقم_المنطقة']);
           } else if (field === 'Permit No') {
             matched = findMatchingSource(['permit no', 'permit_no', 'permit', 'رقم_الترخيص', 'رقم_الرخصة', 'رقم الرخصة']);
-          } else if (field === 'STREETNAME' || field === 'Street') {
+          } else if (field === 'STREETNAME' || field === 'Street' || field === 'STREET_NAME') {
             matched = findMatchingSource(['streetname', 'street', 'الشارع', 'اسم_الشارع', 'الشارع (مسترجع)']);
-          } else if (field === 'DISTRICT') {
+            if (!matched) {
+              matched = 'الشارع (مسترجع)';
+            }
+          } else if (field === 'DISTRICT' || field === 'District') {
             matched = findMatchingSource(['district', 'الحي', 'اسم_الحي', 'الحي (مسترجع)']);
+            if (!matched) {
+              matched = 'الحي (مسترجع)';
+            }
           } else if (field === 'CONTRACTOR') {
             matched = findMatchingSource(['contractor', 'المقاول', 'اسم_المقاول']);
           } else if (field === 'CONSULTANT') {
@@ -243,7 +283,28 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       templateFields.forEach(field => {
         const mapRules = mapping[field];
         let val = '';
-        if (mapRules?.sourceField) {
+
+        const isLengthTarget = (fName: string) => {
+          const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
+          return lower === 'shapelength' || lower === 'actuallength' || lower === 'length' || lower === 'طولالخط' || lower === 'طولالعنصر';
+        };
+
+        const isStreetTarget = (fName: string) => {
+          const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
+          return lower === 'streetname' || lower === 'street' || lower === 'street_name' || lower === 'اسمالشارع' || lower === 'الشارع';
+        };
+
+        const isDistrictTarget = (fName: string) => {
+          const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
+          return lower === 'district' || lower === 'اسمالحي' || lower === 'الحي';
+        };
+
+        if (mapRules?.sourceField === '__MAP_LENGTH__') {
+            const calcLen = (p.path && p.path.length >= 2) ? calculatePathLength(p.path) : (p.originalLength || 0);
+            if (calcLen > 0) {
+                val = calcLen.toFixed(2);
+            }
+        } else if (mapRules?.sourceField) {
            if (mapRules.sourceField === 'الشارع (مسترجع)') {
                val = p.street || '';
            } else if (mapRules.sourceField === 'الحي (مسترجع)') {
@@ -270,7 +331,30 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
            }
            if (val) mappedSourceFields.add(mapRules.sourceField);
         }
+
+        // Fallback: If val is still empty and this is a length field (e.g. SHAPE_Length), auto-fill from map geometry length
+        if (!val && isLengthTarget(field)) {
+            const calcLen = (p.path && p.path.length >= 2) ? calculatePathLength(p.path) : (p.originalLength || 0);
+            if (calcLen > 0) {
+                val = calcLen.toFixed(2);
+            }
+        }
+
+        // Fallback: If val is empty and this is a street or district field, auto-fill from reverse geocoded map data
+        if (!val && isStreetTarget(field)) {
+            val = p.street || '';
+        }
+        if (!val && isDistrictTarget(field)) {
+            val = p.district || '';
+        }
+
         if (!val && mapRules?.defaultValue) val = mapRules.defaultValue;
+
+        // Clean numeric and ZONE target fields (ZONE leading zeros are removed)
+        if (val && (isNumericTargetField(field) || isZoneField(field))) {
+          val = isZoneField(field) ? cleanZoneValue(val) : extractNumbersOnly(val);
+        }
+
         newAttrs[field] = val;
       });
 
@@ -278,14 +362,22 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         if (p.attributes) {
             Object.keys(p.attributes).forEach(k => {
                 if (!mappedSourceFields.has(k) && !unselectedTemplateFields.has(k)) {
-                    newAttrs[k] = String(p.attributes[k] || '');
+                    let rawV = String(p.attributes[k] || '');
+                    if (rawV && (isNumericTargetField(k) || isZoneField(k))) {
+                        rawV = isZoneField(k) ? cleanZoneValue(rawV) : extractNumbersOnly(rawV);
+                    }
+                    newAttrs[k] = rawV;
                 }
             });
         }
         if (p.originalRow && headers) {
             headers.forEach((h, i) => {
                 if (!mappedSourceFields.has(h) && !unselectedTemplateFields.has(h) && p.originalRow![i] !== undefined && p.originalRow![i] !== null) {
-                    newAttrs[h] = String(p.originalRow![i]);
+                    let rawV = String(p.originalRow![i]);
+                    if (rawV && (isNumericTargetField(h) || isZoneField(h))) {
+                        rawV = isZoneField(h) ? cleanZoneValue(rawV) : extractNumbersOnly(rawV);
+                    }
+                    newAttrs[h] = rawV;
                 }
             });
         }
@@ -784,7 +876,14 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                     >
                       <Check className="w-3 h-3 stroke-[3px]" />
                     </button>
-                    <span className="text-xs font-black text-accent">{field}</span>
+                    <span className="text-xs font-black text-accent flex items-center gap-1.5 flex-wrap">
+                      <span>{field}</span>
+                      {isNumericTargetField(field) && (
+                        <span className="text-[9px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-md whitespace-nowrap">
+                          {lang === 'ar' ? '🔢 أرقام فقط' : '🔢 Numbers Only'}
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <div className="w-full md:w-1/3">
                     <select 
@@ -793,6 +892,15 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                       className="w-full bg-[#0e3f53] border border-white/10 rounded-lg px-3 py-2 text-[10px] font-bold text-white focus:outline-none focus:border-accent"
                     >
                       <option value="">{lang === 'ar' ? '-- بدون ربط --' : '-- Unmapped --'}</option>
+                      <option value="الشارع (مسترجع)">
+                        {lang === 'ar' ? '🗺️ ربط اسم الشارع تلقائياً من الخريطة' : '🗺️ Auto Street Name from Map'}
+                      </option>
+                      <option value="الحي (مسترجع)">
+                        {lang === 'ar' ? '🏘️ ربط اسم الحي تلقائياً من الخريطة' : '🏘️ Auto District Name from Map'}
+                      </option>
+                      <option value="__MAP_LENGTH__">
+                        {lang === 'ar' ? '📏 حساب طول العنصر تلقائياً من الخريطة (متر)' : '📏 Auto Map Length from Map (m)'}
+                      </option>
                       {sourceAttributes.map(attr => (
                         <option key={attr.name} value={attr.name}>
                           {attr.name} {attr.sample ? (lang === 'ar' ? `(مثال: ${attr.sample})` : `(e.g. ${attr.sample})`) : ''}
