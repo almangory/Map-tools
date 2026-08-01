@@ -427,10 +427,74 @@ const App: React.FC = () => {
         const isInvalidVal = (val: any): boolean => {
             if (val === undefined || val === null) return true;
             const str = String(val).trim().toLowerCase();
+            if (
+                str === '' || str === '0' || str === '0.0' || str === '0.00' ||
+                str === 'null' || str === 'undefined' || str === 'none' ||
+                str === 'n/a' || str === 'na' || str === 'غير متوفر' ||
+                str === 'غير معروف' || str === 'لا يوجد' || str === 'بدون' ||
+                str === 'unknown'
+            ) return true;
+            // Dashing / hyphenated / blank values like "-", "--", "---", " - ", "/ " etc are invalid
+            if (/^[\s_\-–—\/\\.:;]+$/.test(str)) return true;
+            return false;
+        };
+
+        const isDiameterKey = (key: string): boolean => {
+            const k = key.toLowerCase().trim().replace(/[\s_#-]/g, '');
             return (
-                str === '' || str === '0' || str === '-' || str === '--' || str === 'null' ||
-                str === 'undefined' || str === 'none' || str === 'n/a' || str === 'na' ||
-                str === 'غير متوفر' || str === 'غير معروف' || str === 'لا يوجد'
+                k === 'dn' ||
+                k === 'd' ||
+                k === 'dia' ||
+                k === 'diameter' ||
+                k === 'innerdiameter' ||
+                k === 'outerdiameter' ||
+                k === 'pipesize' ||
+                k === 'size' ||
+                k === 'width' ||
+                k === 'قطر' ||
+                k === 'القطر' ||
+                k === 'قطرالخط' ||
+                k === 'قطرالانبوب' ||
+                k === 'قطرالشبكة' ||
+                k === 'القطرالداخلي' ||
+                k === 'القطرالخارجي' ||
+                k === 'مقاس' ||
+                k === 'سمك' ||
+                k.includes('diameter') ||
+                k.includes('innerdiameter') ||
+                k.includes('outerdiameter') ||
+                k.includes('قطر')
+            );
+        };
+
+        const isZoneKey = (key: string): boolean => {
+            const k = key.toLowerCase().trim().replace(/[\s_#-]/g, '');
+            return (
+                k === 'zone' ||
+                k === 'zonenu' ||
+                k === 'zonenumber' ||
+                k === 'zoneid' ||
+                k === 'district' ||
+                k === 'districtname' ||
+                k === 'منطقة' ||
+                k === 'المنطقة' ||
+                k === 'رقمالمنطقة' ||
+                k === 'منطقه' ||
+                k === 'النطاق' ||
+                k === 'حي' ||
+                k === 'الحي' ||
+                k === 'اسمالحي' ||
+                k === 'قطاع' ||
+                k === 'مخطط' ||
+                k === 'عقد' ||
+                k === 'مجاور' ||
+                k === 'مجاورة' ||
+                k.includes('zone') ||
+                k.includes('district') ||
+                k.includes('منطقة') ||
+                k.includes('منطقه') ||
+                k.includes('النطاق') ||
+                k.includes('حي')
             );
         };
 
@@ -446,102 +510,78 @@ const App: React.FC = () => {
                   (pt.coordinates && pt.coordinates.length >= 2)
                 );
                 if (!isLine) return pt;
-                
-                const descLower = String(pt.description || '').toLowerCase();
-                const idLower = String(pt.id || '').toLowerCase();
-                const layerLower = String(pt.layer || '').toLowerCase();
-                const nameLower = String(pt.name || '').toLowerCase();
-                const attr1Lower = String(pt.attr1 || '').toLowerCase();
-                const attr2Lower = String(pt.attr2 || '').toLowerCase();
-                const combinedText = `${descLower} ${idLower} ${layerLower} ${nameLower} ${attr1Lower} ${attr2Lower}`;
 
+                // Merge all attributes from attributes object and description HTML
+                const mergedAttrs: Record<string, string> = {
+                    ...(pt.attributes || {})
+                };
+                if (pt.description) {
+                    parseDescriptionToAttributes(pt.description, mergedAttrs);
+                }
+
+                // --- 1. CHECK DIAMETER (INNERDIAMETER, OUTERDIAMETER, DIAMETER, قطر, etc.) ---
                 let hasDiameter = false;
-                
-                // 1. Basic regex match (number with unit: mm, inch, مم, انش, بوصة)
-                const diaUnitRegex = /(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة|بوصه)/i;
-                if (diaUnitRegex.test(combinedText)) {
-                    hasDiameter = true;
-                }
-                
-                // 2. Check prefix diameter patterns (DN200, Ø110, D-160, قطر 200, مقاس 110)
-                const diaPrefixRegex = /(?:dn|d|ø|dia|diameter|size|pipe_size|قطر|القطر|مقاس|سمك)[\s:=_#-]*(\d+(\.\d+)?)/i;
-                if (!hasDiameter && diaPrefixRegex.test(combinedText)) {
-                    hasDiameter = true;
-                }
+                let foundDiameterAttribute = false;
 
-                // 3. Check standard metric pipe diameters in text/layer
-                const standardDias = /\b(1400|1200|1000|900|800|700|600|500|450|400|355|315|300|280|250|225|200|180|160|140|125|110|90|75|63|50|40|32|25|20|16)\b/;
-                if (!hasDiameter && standardDias.test(combinedText)) {
-                    hasDiameter = true;
-                }
-
-                // 4. Check extended attributes map
-                if (!hasDiameter && pt.attributes) {
-                    for (const [key, val] of Object.entries(pt.attributes)) {
-                        if (isInvalidVal(val)) continue;
-                        const keyLower = String(key).toLowerCase().trim();
-                        const valString = String(val).toLowerCase().trim();
-                        
-                        const isDiaKey = (
-                            keyLower === 'dn' ||
-                            keyLower === 'd' ||
-                            keyLower.includes('diameter') || 
-                            keyLower.includes('قطر') || 
-                            keyLower.includes('innerdiameter') || 
-                            keyLower.includes('outerdiameter') ||
-                            keyLower.includes('dia') ||
-                            keyLower.includes('size') ||
-                            keyLower.includes('مقاس') ||
-                            keyLower.includes('pipe') ||
-                            keyLower.includes('سمك')
-                        );
-
-                        if (isDiaKey && /\d+(\.\d+)?/.test(valString) && valString !== '0') {
-                            hasDiameter = true;
-                            break;
-                        }
-                        
-                        if (diaUnitRegex.test(valString) || diaPrefixRegex.test(valString)) {
-                            hasDiameter = true;
-                            break;
+                for (const [key, val] of Object.entries(mergedAttrs)) {
+                    if (isDiameterKey(key)) {
+                        foundDiameterAttribute = true;
+                        if (!isInvalidVal(val)) {
+                            const numMatch = String(val).trim().match(/(\d+(\.\d+)?)/);
+                            if (numMatch && parseFloat(numMatch[1]) > 0) {
+                                hasDiameter = true;
+                                break;
+                            }
                         }
                     }
                 }
 
-                // Check zone / district
+                // Fallback only if NO explicit diameter key exists in attributes/description
+                if (!foundDiameterAttribute && !hasDiameter) {
+                    const diaUnitRegex = /\b(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة|بوصه)\b/i;
+                    const diaPrefixRegex = /(?:dn|ø|dia|diameter|size|pipe_size|قطر|القطر|مقاس|سمك)[ \t:=_#-]*(\d+(\.\d+)?)\b/i;
+
+                    const layerAndName = `${pt.layer || ''} ${pt.name || ''}`;
+                    let m = layerAndName.match(diaUnitRegex) || layerAndName.match(diaPrefixRegex);
+                    if (m && parseFloat(m[1]) > 0) {
+                        hasDiameter = true;
+                    }
+                }
+
+                // --- 2. CHECK ZONE / DISTRICT ---
                 let hasZone = false;
-                if (!isInvalidVal(pt.district)) hasZone = true;
-                if (!hasZone && !isInvalidVal((pt as any).zone)) hasZone = true;
+                let foundZoneAttribute = false;
+
+                if (!isInvalidVal(pt.district)) {
+                    hasZone = true;
+                    foundZoneAttribute = true;
+                } else if (!isInvalidVal((pt as any).zone)) {
+                    hasZone = true;
+                    foundZoneAttribute = true;
+                }
 
                 if (!hasZone) {
-                    const zoneRegex = /(zone|district|neighborhood|suburb|sector|area|block|منطقة|منطقه|المنطقة|حي|الحي|قطاع|مخطط|عقد|مجاور|مجاورة)/i;
-                    if (zoneRegex.test(combinedText)) {
+                    for (const [key, val] of Object.entries(mergedAttrs)) {
+                        if (isZoneKey(key)) {
+                            foundZoneAttribute = true;
+                            if (!isInvalidVal(val)) {
+                                hasZone = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!foundZoneAttribute && !hasZone) {
+                    const zonePrefixRegex = /(?:zone|district|neighborhood|suburb|sector|area|block|منطقة|منطقه|المنطقة|حي|الحي|قطاع|مخطط|عقد|مجاور|مجاورة|النطاق)[ \t:=_#-]*([a-zA-Z0-9\u0600-\u06FF]+)/i;
+                    const layerAndName = `${pt.layer || ''} ${pt.name || ''}`;
+                    let m = layerAndName.match(zonePrefixRegex);
+                    if (m && !isInvalidVal(m[1])) {
                         hasZone = true;
                     }
                 }
-                
-                if (!hasZone && pt.attributes) {
-                     for (const [key, val] of Object.entries(pt.attributes)) {
-                        if (isInvalidVal(val)) continue;
-                        const keyLower = String(key).toLowerCase().trim();
-                        if (
-                            keyLower.includes('zone') || 
-                            keyLower.includes('منطقة') || 
-                            keyLower.includes('منطقه') || 
-                            keyLower.includes('district') || 
-                            keyLower.includes('حي') ||
-                            keyLower.includes('sector') ||
-                            keyLower.includes('قطاع') ||
-                            keyLower.includes('مخطط') ||
-                            keyLower.includes('عقد') ||
-                            keyLower.includes('مجاور')
-                        ) {
-                            hasZone = true;
-                            break;
-                        }
-                    }
-                }
 
+                // --- 3. APPLY BLACK COLOR IF EITHER DIAMETER OR ZONE IS MISSING ---
                 if (!hasDiameter || !hasZone) {
                     missingCount++;
                     const missingParts = [];
@@ -550,7 +590,7 @@ const App: React.FC = () => {
                     
                     return {
                         ...pt,
-                        color: '#FF0055', // Neon Pink/Red Alert Color for missing attributes
+                        color: '#000000', // Black color for missing essential attributes (diameter / zone)
                         description: `${pt.description || ''}\n[MISSING: ${missingParts.join(', ')}]`.trim(),
                         layer: `${pt.layer || 'Unknown'}_MISSING_ATTRS`
                     };
@@ -572,7 +612,7 @@ const App: React.FC = () => {
         setProgressPercent(100);
         setLoading(false);
         setProgressPercent(null);
-        setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية (قطر/منطقة) باللون الأحمر الفاقع.` : `Highlighted ${missingCount} segments missing essential attributes in bright red.`);
+        setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية (قطر/منطقة) باللون الأسود.` : `Highlighted ${missingCount} segments missing essential attributes in black.`);
         setTimeout(() => setStatusMessage(''), 4000);
     }, 300);
   };
