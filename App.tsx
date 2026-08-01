@@ -2934,48 +2934,64 @@ const App: React.FC = () => {
     const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'streetname', 'district', 'الحي'].includes(String(h || '').toLowerCase()));
     if (hasStreetHeader) {
       setLoading(true);
-      const total = points.length;
-      const batchSize = geocodingMode === 'accurate' ? 4 : 10;
+      try {
+        const total = points.length;
+        const batchSize = geocodingMode === 'accurate' ? 3 : 8;
 
-      for (let i = 0; i < total; i += batchSize) {
-          const processed = Math.min(i + batchSize, total);
-          const pct = Math.round((processed / total) * 100);
-          setProgressPercent(pct);
-          setStatusMessage(lang === 'ar'
-              ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${processed} من ${total})`
-              : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${processed} of ${total})`
-          );
-          const chunk = points.slice(i, i + batchSize);
-          await Promise.all(chunk.map(async (pt) => {
-              let street = pt.street;
-              if (!street || street === "غير متوفر") {
-                  try {
-                      const geoData = await getReverseGeocode(pt.y, pt.x, geocodingMode);
-                      street = geoData.street;
-                      pt.street = street;
-                      pt.district = geoData.district;
-                  } catch (err) {
-                      street = "";
-                  }
-              }
-              pt.attributes = { ...(pt.attributes || {}) };
-              const matchStreet = headers.find(h => String(h || '').toLowerCase() === 'street');
-              const matchArabic = headers.find(h => h === 'الشارع');
-              const matchStreetName = headers.find(h => String(h || '').toLowerCase() === 'streetname');
+        for (let i = 0; i < total; i += batchSize) {
+            const processed = Math.min(i + batchSize, total);
+            const pct = Math.round((processed / total) * 100);
+            setProgressPercent(pct);
+            setStatusMessage(lang === 'ar'
+                ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${processed} من ${total})`
+                : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${processed} of ${total})`
+            );
+            const chunk = points.slice(i, i + batchSize);
+            await Promise.all(chunk.map(async (pt) => {
+                let street = pt.street;
+                if (!street || street === "غير متوفر") {
+                    try {
+                        const timeoutPromise = new Promise<{street: string, district: string}>((resolve) => {
+                          setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 4500);
+                        });
+                        const geoData = await Promise.race([
+                          getReverseGeocode(pt.y, pt.x, geocodingMode),
+                          timeoutPromise
+                        ]);
+                        street = geoData.street;
+                        pt.street = street;
+                        pt.district = geoData.district;
+                    } catch (err) {
+                        street = "";
+                    }
+                }
+                pt.attributes = { ...(pt.attributes || {}) };
+                const matchStreet = headers.find(h => String(h || '').toLowerCase() === 'street');
+                const matchArabic = headers.find(h => h === 'الشارع');
+                const matchStreetName = headers.find(h => String(h || '').toLowerCase() === 'streetname');
 
-              if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-              if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-              if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
-              const matchDistrict = headers.find(h => String(h || '').toLowerCase() === 'district');
-              const matchArabicDistrict = headers.find(h => h === 'الحي');
-              if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-              if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-          }));
+                const matchDistrict = headers.find(h => String(h || '').toLowerCase() === 'district');
+                const matchArabicDistrict = headers.find(h => h === 'الحي');
+                if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+            }));
+
+            // Small delay between batches to respect network rate limits
+            if (i + batchSize < total) {
+              await new Promise(res => setTimeout(res, 80));
+            }
+        }
+      } catch (err) {
+        console.error("Error in executeWithStreetFetching:", err);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+        setStatusMessage('');
       }
-      setLoading(false);
-      setProgressPercent(null);
-      setStatusMessage('');
     }
     await action();
   };
