@@ -13,7 +13,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun, ShieldCheck
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';

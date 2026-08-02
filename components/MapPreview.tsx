@@ -438,9 +438,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           </div>`;
         }
         
-        popupContent += `<div class="flex items-center justify-between text-[9px] text-slate-400 font-bold border-t border-slate-50 pt-2 mt-1" dir="ltr">
-          <span>${pt.y.toFixed(6)}</span>
-          <span>${pt.x.toFixed(6)}</span>
+        popupContent += `<div class="flex items-center justify-center text-[10px] text-slate-500 font-bold border-t border-slate-100 pt-2 mt-1" dir="ltr">
+          <span>${pt.y.toFixed(6)}, ${pt.x.toFixed(6)}</span>
         </div></div>`;
 
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {
@@ -794,9 +793,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 "absolute bottom-2 lg:bottom-6 z-[600] px-3 py-1.5 sm:px-4 sm:py-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200 text-[9px] sm:text-[10px] font-black text-slate-600 flex gap-2 sm:gap-4 animate-in fade-in duration-300 hidden sm:flex",
                 lang === 'ar' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
             )} dir="ltr">
-                <div className="flex items-center gap-1.5"><Navigation2 className="w-3 h-3 text-accent" /><span>{cursorCoords.lat.toFixed(6)}</span></div>
-                <div className="w-px h-3 bg-slate-300" />
-                <div className="flex items-center gap-1.5"><span>{cursorCoords.lng.toFixed(6)}</span></div>
+                <div className="flex items-center gap-1.5"><Navigation2 className="w-3 h-3 text-accent" /><span>{cursorCoords.lat.toFixed(6)}, {cursorCoords.lng.toFixed(6)}</span></div>
             </div>
         )}
 
