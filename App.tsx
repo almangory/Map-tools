@@ -3833,7 +3833,7 @@ const App: React.FC = () => {
       </div>
 
       <div className="flex flex-1 h-full w-full overflow-hidden relative">
-        <nav className="hidden lg:flex bg-primary border-e border-slate-800 flex-col items-center py-8 w-20 lg:w-24 shrink-0 z-50 shadow-2xl transition-colors duration-500 overflow-y-auto custom-scrollbar">
+        <nav className="hidden lg:flex bg-primary border-e border-slate-800 flex-col items-center py-8 w-20 lg:w-24 shrink-0 z-20 shadow-2xl transition-colors duration-500 overflow-y-auto custom-scrollbar">
           <div className="flex-1 flex flex-col gap-4 md:gap-6 w-full px-1.5 sm:px-2">
              {[
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
@@ -3873,7 +3873,7 @@ const App: React.FC = () => {
           </div>
       </nav>
 
-      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-40 transition-colors duration-500 overflow-hidden shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]" : "hidden lg:flex lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]")}>
+      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-30 transition-colors duration-500 overflow-visible shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]" : "hidden lg:flex lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]")}>
            <div className="p-4 sm:p-6 md:p-10 pb-4 shrink-0">
                 <div className="flex items-center justify-between">
                    <div>

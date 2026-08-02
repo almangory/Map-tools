@@ -116,11 +116,12 @@ export const SegmentLengthChart: React.FC<SegmentLengthChartProps> = ({
   };
 
   // Custom Tooltip Component
-  const CustomTooltip = ({ active, payload }: any) => {
+  const CustomTooltip = ({ active, payload, coordinate, viewBox }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
+      const isRightSide = coordinate && viewBox && (coordinate.x > viewBox.width * 0.35);
       return (
-        <div className="bg-[#180a2c]/95 border-2 border-[#9000FF] rounded-2xl p-4 shadow-[0_30px_90px_rgba(0,0,0,0.98)] backdrop-blur-xl max-w-xs text-xs space-y-2 text-white z-[99999999] pointer-events-none min-w-[220px]">
+        <div className={`bg-[#180a2c]/95 border-2 border-[#9000FF] rounded-2xl p-4 shadow-[0_30px_90px_rgba(0,0,0,0.98)] backdrop-blur-xl max-w-xs text-xs space-y-2 text-white z-[99999999] pointer-events-none min-w-[220px] transition-transform duration-100 ${isRightSide ? '-translate-x-full -ml-4' : ''}`}>
           <div className="flex items-center justify-between border-b border-[#9000FF]/40 pb-2 gap-2">
             <span className="font-mono font-black text-[#d8b4fe] text-xs truncate dir-ltr" title={data.fullName}>
               {data.fullName}

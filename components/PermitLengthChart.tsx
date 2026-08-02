@@ -166,14 +166,15 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
   }, [permitDetails, sortBy, statusFilter, unit, searchQuery, lang]);
 
   // Custom Recharts Tooltip
-  const CustomTooltip = ({ active, payload }: any) => {
+  const CustomTooltip = ({ active, payload, coordinate, viewBox }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       const totalM = stats.sumLenMeters || 1;
       const pct = ((data.lengthMeters / totalM) * 100).toFixed(1);
+      const isRightSide = coordinate && viewBox && (coordinate.x > viewBox.width * 0.35);
 
       return (
-        <div className="bg-[#1f0f05]/95 border-2 border-[#FF6D00] p-4 rounded-2xl shadow-[0_30px_90px_rgba(0,0,0,0.98)] text-xs text-white space-y-2 backdrop-blur-xl max-w-xs z-[99999999] pointer-events-none min-w-[220px]">
+        <div className={`bg-[#1f0f05]/95 border-2 border-[#FF6D00] p-4 rounded-2xl shadow-[0_30px_90px_rgba(0,0,0,0.98)] text-xs text-white space-y-2 backdrop-blur-xl max-w-xs z-[99999999] pointer-events-none min-w-[220px] transition-transform duration-100 ${isRightSide ? '-translate-x-full -ml-4' : ''}`}>
           <div className="flex items-center justify-between gap-2 border-b border-white/15 pb-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-3 h-3 rounded-full shrink-0 border border-white/30" style={{ backgroundColor: data.color }} />
