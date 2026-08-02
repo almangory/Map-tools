@@ -528,14 +528,13 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
                       unit={chartMetric === 'length' ? ' km' : ''}
                     />
                     <Tooltip
-                      allowEscapeViewBox={{ x: true, y: true }}
+                      position={{ x: 8, y: 8 }}
                       wrapperStyle={{ zIndex: 99999999, outline: 'none', pointerEvents: 'none' }}
-                      content={({ active, payload, coordinate, viewBox }: any) => {
+                      content={({ active, payload }: any) => {
                         if (active && payload && payload.length) {
                           const data = payload[0].payload;
-                          const isRightSide = coordinate && viewBox && (coordinate.x > viewBox.width * 0.35);
                           return (
-                            <div className={`bg-[#031e29]/95 border-2 border-accent/60 p-3.5 rounded-2xl shadow-[0_30px_90px_rgba(0,0,0,0.98)] backdrop-blur-xl text-xs space-y-1.5 z-[99999999] pointer-events-none min-w-[220px] transition-transform duration-100 ${isRightSide ? '-translate-x-full -ml-4' : ''}`} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                            <div className="bg-[#031e29]/95 border-2 border-accent/60 p-3.5 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.95)] backdrop-blur-xl text-xs space-y-1.5 z-[99999999] pointer-events-none w-[240px]" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                               <p className="font-black text-white border-b border-white/10 pb-1">{data.fullName}</p>
                               <p className="text-emerald-400 font-bold flex justify-between gap-4">
                                 <span>{lang === 'ar' ? 'إجمالي أطوال Segment IDs:' : 'Total Segment Length:'}</span>

@@ -116,12 +116,11 @@ export const SegmentLengthChart: React.FC<SegmentLengthChartProps> = ({
   };
 
   // Custom Tooltip Component
-  const CustomTooltip = ({ active, payload, coordinate, viewBox }: any) => {
+  const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload;
-      const isRightSide = coordinate && viewBox && (coordinate.x > viewBox.width * 0.35);
       return (
-        <div className={`bg-[#180a2c]/95 border-2 border-[#9000FF] rounded-2xl p-4 shadow-[0_30px_90px_rgba(0,0,0,0.98)] backdrop-blur-xl max-w-xs text-xs space-y-2 text-white z-[99999999] pointer-events-none min-w-[220px] transition-transform duration-100 ${isRightSide ? '-translate-x-full -ml-4' : ''}`}>
+        <div className="bg-[#180a2c]/95 border-2 border-[#9000FF] rounded-2xl p-3.5 shadow-[0_20px_60px_rgba(0,0,0,0.95)] backdrop-blur-xl w-[240px] text-xs space-y-2 text-white z-[99999999] pointer-events-none">
           <div className="flex items-center justify-between border-b border-[#9000FF]/40 pb-2 gap-2">
             <span className="font-mono font-black text-[#d8b4fe] text-xs truncate dir-ltr" title={data.fullName}>
               {data.fullName}
@@ -417,7 +416,7 @@ export const SegmentLengthChart: React.FC<SegmentLengthChartProps> = ({
               />
               <RechartsTooltip
                 content={<CustomTooltip />}
-                allowEscapeViewBox={{ x: true, y: true }}
+                position={{ x: 8, y: 8 }}
                 wrapperStyle={{ zIndex: 99999999, outline: 'none', pointerEvents: 'none' }}
                 cursor={{ fill: 'rgba(255, 255, 255, 0.08)' }}
               />

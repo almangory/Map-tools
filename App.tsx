@@ -4638,7 +4638,7 @@ const App: React.FC = () => {
                                                                 <Cell key={`cell-${index}`} fill={entry.color} />
                                                             ))}
                                                         </Pie>
-                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} wrapperStyle={{ zIndex: 99999999 }} allowEscapeViewBox={{ x: true, y: true }} />
+                                                        <RechartsTooltip position={{ x: 8, y: 8 }} formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} wrapperStyle={{ zIndex: 99999999 }} />
                                                     </RechartsPieChart>
                                                 </ResponsiveContainer>
                                             ) : (
@@ -4658,7 +4658,7 @@ const App: React.FC = () => {
                                                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
                                                         <XAxis dataKey="name" tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
                                                         <YAxis tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
-                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} wrapperStyle={{ zIndex: 99999999 }} allowEscapeViewBox={{ x: true, y: true }} />
+                                                        <RechartsTooltip position={{ x: 8, y: 8 }} formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} wrapperStyle={{ zIndex: 99999999 }} />
                                                         <Bar dataKey="value" fill="#06b6d4" radius={[4, 4, 0, 0]} />
                                                     </BarChart>
                                                 </ResponsiveContainer>
