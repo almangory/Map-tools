@@ -4531,7 +4531,6 @@ const App: React.FC = () => {
                           </button>
                         </div>
                       </div>
-
                       {analysisData.length > 0 && (
                         <div className="bg-accent/10 p-6 rounded-[2.5rem] border border-accent/20 space-y-4 animate-in slide-in-from-top">
                            <div className="flex items-center justify-between mb-2">
@@ -4574,6 +4573,8 @@ const App: React.FC = () => {
                                   </div>
                                 </div>
                             </div>
+                        </div>
+                      )}
 
                             {/* Summary of KML placemarks categorized by feature type */}
                             <div id="placemarks-summary" className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 animate-in slide-in-from-bottom duration-700">
@@ -4628,7 +4629,7 @@ const App: React.FC = () => {
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div className="space-y-3">
                                         <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب حالة التنفيذ' : 'By Execution Status'}</h4>
-                                        <div className="h-[200px] w-full">
+                                        <div className="h-[200px] w-full relative overflow-visible z-30">
                                             {executionStatusDistribution.length > 0 ? (
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <RechartsPieChart>
@@ -4637,7 +4638,7 @@ const App: React.FC = () => {
                                                                 <Cell key={`cell-${index}`} fill={entry.color} />
                                                             ))}
                                                         </Pie>
-                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} />
+                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} wrapperStyle={{ zIndex: 99999999 }} allowEscapeViewBox={{ x: true, y: true }} />
                                                     </RechartsPieChart>
                                                 </ResponsiveContainer>
                                             ) : (
@@ -4650,14 +4651,14 @@ const App: React.FC = () => {
                                     </div>
                                     <div className="space-y-3">
                                         <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب القطر' : 'By Diameter'}</h4>
-                                        <div className="h-[200px] w-full">
+                                        <div className="h-[200px] w-full relative overflow-visible z-30">
                                             {diameterDistribution.length > 0 ? (
                                                 <ResponsiveContainer width="100%" height="100%">
                                                     <BarChart data={diameterDistribution}>
                                                         <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
                                                         <XAxis dataKey="name" tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
                                                         <YAxis tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
-                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px' }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} />
+                                                        <RechartsTooltip formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} wrapperStyle={{ zIndex: 99999999 }} allowEscapeViewBox={{ x: true, y: true }} />
                                                         <Bar dataKey="value" fill="#06b6d4" radius={[4, 4, 0, 0]} />
                                                     </BarChart>
                                                 </ResponsiveContainer>
@@ -5042,7 +5043,7 @@ const App: React.FC = () => {
                             </button>
 
                             {segmentIdAnalysis && segmentIdAnalysis.totalElements > 0 && (
-                              <div className="bg-[#120a21]/90 p-6 rounded-[2.5rem] border border-[#9000FF]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4">
+                              <div className="bg-[#120a21]/90 p-6 rounded-[2.5rem] border border-[#9000FF]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4 relative z-20 overflow-visible">
                                 <div className="flex items-center justify-between border-b border-[#9000FF]/20 pb-3">
                                   <div className="flex items-center gap-2">
                                     <Fingerprint className="w-5 h-5 text-[#d8b4fe]" />
@@ -5212,7 +5213,7 @@ const App: React.FC = () => {
                             )}
 
                             {permitNoAnalysis && permitNoAnalysis.totalElements > 0 && (
-                              <div className="bg-[#1f0f05]/90 p-6 rounded-[2.5rem] border border-[#FF6D00]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4">
+                              <div className="bg-[#1f0f05]/90 p-6 rounded-[2.5rem] border border-[#FF6D00]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4 relative z-20 overflow-visible">
                                 <div className="flex items-center justify-between border-b border-[#FF6D00]/20 pb-3">
                                   <div className="flex items-center gap-2">
                                     <FileText className="w-5 h-5 text-[#ffc499]" />
@@ -5420,8 +5421,6 @@ const App: React.FC = () => {
                             </div>
                         </div>
                       )}
-                  </div>
-                )}
 
                 {activeTab === 'analyzer' && !activeFile && plannedStreets.length === 0 && (
                   <div className="space-y-6 animate-in fade-in duration-500">

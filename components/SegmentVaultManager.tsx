@@ -508,7 +508,7 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
                 </div>
               </div>
 
-              <div className="h-64 w-full pt-2">
+              <div className="h-64 w-full pt-2 relative overflow-visible z-30">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData} margin={{ top: 15, right: 15, left: 15, bottom: 25 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#ffffff15" vertical={false} />
@@ -528,11 +528,13 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
                       unit={chartMetric === 'length' ? ' km' : ''}
                     />
                     <Tooltip
+                      allowEscapeViewBox={{ x: true, y: true }}
+                      wrapperStyle={{ zIndex: 99999999, outline: 'none', pointerEvents: 'none' }}
                       content={({ active, payload }) => {
                         if (active && payload && payload.length) {
                           const data = payload[0].payload;
                           return (
-                            <div className="bg-[#031e29] border border-accent/40 p-3 rounded-2xl shadow-2xl text-xs space-y-1.5 z-[100]" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                            <div className="bg-[#031e29]/95 border-2 border-accent/60 p-3.5 rounded-2xl shadow-[0_30px_90px_rgba(0,0,0,0.98)] backdrop-blur-xl text-xs space-y-1.5 z-[99999999] pointer-events-none min-w-[220px]" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                               <p className="font-black text-white border-b border-white/10 pb-1">{data.fullName}</p>
                               <p className="text-emerald-400 font-bold flex justify-between gap-4">
                                 <span>{lang === 'ar' ? 'إجمالي أطوال Segment IDs:' : 'Total Segment Length:'}</span>
