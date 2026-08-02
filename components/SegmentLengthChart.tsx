@@ -120,7 +120,7 @@ export const SegmentLengthChart: React.FC<SegmentLengthChartProps> = ({
     if (active && payload && payload.length) {
       const data = payload[0].payload;
       return (
-        <div className="bg-[#180a2c] border-2 border-[#9000FF] rounded-2xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.9)] backdrop-blur-xl max-w-xs text-xs space-y-2 text-white z-[9999] pointer-events-none min-w-[220px]">
+        <div className="bg-[#180a2c]/95 border-2 border-[#9000FF] rounded-2xl p-4 shadow-[0_25px_60px_rgba(0,0,0,0.95)] backdrop-blur-xl max-w-xs text-xs space-y-2 text-white z-[9999999] pointer-events-none min-w-[220px]">
           <div className="flex items-center justify-between border-b border-[#9000FF]/40 pb-2 gap-2">
             <span className="font-mono font-black text-[#d8b4fe] text-xs truncate dir-ltr" title={data.fullName}>
               {data.fullName}
@@ -416,8 +416,9 @@ export const SegmentLengthChart: React.FC<SegmentLengthChartProps> = ({
               />
               <RechartsTooltip
                 content={<CustomTooltip />}
-                position={{ y: 0 }}
-                wrapperStyle={{ zIndex: 9999, outline: 'none' }}
+                position={{ y: 195 }}
+                allowEscapeViewBox={{ x: true, y: true }}
+                wrapperStyle={{ zIndex: 9999999, outline: 'none', pointerEvents: 'none' }}
                 cursor={{ fill: 'rgba(255, 255, 255, 0.08)' }}
               />
               <Bar

@@ -251,6 +251,95 @@ const savePreference = <T,>(key: string, value: T) => {
   }
 };
 
+export const isLineElement = (pt: GeoPoint): boolean => {
+  if (!pt || pt.isDuplicateOverlay) return false;
+
+  // 1. Check explicit geometry type
+  const gType = String(pt.type || '').trim().toLowerCase();
+  if (
+    gType === 'polygon' || 
+    gType === 'multipolygon' || 
+    gType === 'point' || 
+    gType === 'multipoint'
+  ) {
+    return false;
+  }
+
+  // 2. Check explicit flags
+  if (
+    (pt as any).isPolygon === true || 
+    (pt as any).geometryType === 'Polygon' || 
+    (pt as any).geometryType === 'MultiPolygon' ||
+    (pt as any).isPoint === true
+  ) {
+    return false;
+  }
+
+  // 3. Path coordinates check (Points have no path or length < 2)
+  const path = pt.path || (pt as any).coordinates;
+  if (!path || !Array.isArray(path) || path.length < 2) {
+    return false;
+  }
+
+  const layerLower = String(pt.layer || '').toLowerCase();
+  const descLower = String(pt.description || '').toLowerCase();
+  const nameLower = String(pt.name || pt.id || '').toLowerCase();
+
+  // 4. Description HTML/XML tags indicating Polygon or Point
+  if (
+    descLower.includes('<polygon') ||
+    descLower.includes('<outerboundaryis>') ||
+    descLower.includes('<innerboundaryis>') ||
+    descLower.includes('<linearring>') ||
+    descLower.includes('<point')
+  ) {
+    return false;
+  }
+
+  // 5. Check if layer or name indicates a polygon/boundary/zone/area shape
+  const polygonKeywords = [
+    'polygon', 'polygons', 'مضلع', 'مضلعات', 'بولجون', 'بولغون', 'boundar', 'boundary', 'boundaries',
+    'حدود', 'حد', 'نطاق', 'نطاقات', 'حي', 'الحي', 'منطقة', 'منطقه', 'قطاع', 'مخطط', 'عقد',
+    'مبنى', 'ارض', 'أرض', 'حرم', 'خزان', 'محطة', 'محيط', 'مساحة', 'zone', 'zones',
+    'area', 'areas', 'district', 'districts', 'sector', 'block', 'parcel'
+  ];
+  const isPolygonNameOrLayer = polygonKeywords.some(kw => layerLower.includes(kw) || nameLower.includes(kw));
+
+  if (isPolygonNameOrLayer && gType !== 'linestring' && gType !== 'polyline' && gType !== 'multilinestring') {
+    return false;
+  }
+
+  // 6. Check if path forms a closed polygon ring (first coordinate equals last coordinate)
+  if (path.length >= 3) {
+    const first = path[0];
+    const last = path[path.length - 1];
+    if (first && last) {
+      const firstX = typeof first.x === 'number' ? first.x : (Array.isArray(first) ? first[0] : 0);
+      const firstY = typeof first.y === 'number' ? first.y : (Array.isArray(first) ? first[1] : 0);
+      const lastX = typeof last.x === 'number' ? last.x : (Array.isArray(last) ? last[0] : 0);
+      const lastY = typeof last.y === 'number' ? last.y : (Array.isArray(last) ? last[1] : 0);
+
+      if (Math.abs(firstX - lastX) < 1e-6 && Math.abs(firstY - lastY) < 1e-6) {
+        if (gType !== 'linestring' && gType !== 'polyline') {
+          return false;
+        }
+      }
+    }
+  }
+
+  // 7. Explicit line types
+  if (
+    gType === 'linestring' || 
+    gType === 'polyline' || 
+    gType === 'multilinestring'
+  ) {
+    return true;
+  }
+
+  // 8. Open path with 2+ coordinates
+  return true;
+};
+
 
 const UniversalExportBar = ({
   data,
@@ -377,22 +466,12 @@ const App: React.FC = () => {
   const lastAlertedFileRef = useRef<string>('');
   const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>(() => loadSavedPreference('globalBaseMap', 'satellite'));
 
-  // Validation Check Popup Modal state
-  const [checkResultModal, setCheckResultModal] = useState<{
-    type: 'essential' | 'segment' | 'permit' | 'sbc';
-    titleAr: string;
-    titleEn: string;
-    icon: 'essential' | 'segment' | 'permit' | 'sbc';
-    totalChecked: number;
-    issuesCount: number;
-    successCount: number;
-    uniqueCount?: number;
-    badgeTextAr: string;
-    badgeTextEn: string;
-    detailsAr: string;
-    detailsEn: string;
-    stats: Array<{ labelAr: string; labelEn: string; value: number | string; colorClass: string }>;
-  } | null>(null);
+  // Validation Check Popup Modal state & Map Issue Focus state
+  const [focusedPoint, setFocusedPoint] = useState<GeoPoint | null>(null);
+  const [activeIssueItems, setActiveIssueItems] = useState<GeoPoint[]>([]);
+  const [showIssuesOnly, setShowIssuesOnly] = useState<boolean>(false);
+
+  const [checkResultModal, setCheckResultModal] = useState<CheckResultModalState | null>(null);
 
   // PWA Mobile App Installation state
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -520,14 +599,7 @@ const App: React.FC = () => {
             return pts.map(pt => {
                 if (!pt || pt.isDuplicateOverlay) return pt;
 
-                const isLine = (
-                  pt.type === 'LineString' || 
-                  pt.type === 'Polyline' || 
-                  pt.type === 'MultiLineString' || 
-                  (pt.path && pt.path.length >= 2) || 
-                  (pt.coordinates && pt.coordinates.length >= 2)
-                );
-                if (!isLine) return pt;
+                if (!isLineElement(pt)) return pt;
 
                 totalChecked++;
 
@@ -605,17 +677,23 @@ const App: React.FC = () => {
                     if (!hasDiameter) missingParts.push(lang === 'ar' ? 'القطر' : 'Diameter');
                     if (!hasZone) missingParts.push(lang === 'ar' ? 'المنطقة' : 'Zone');
                     
-                    return {
+                    const issuePt: GeoPoint = {
                         ...pt,
-                        color: '#000000',
+                        color: '#ef4444',
+                        isIssue: true,
+                        issueReason: lang === 'ar' ? `عنصر ينقصه (${missingParts.join('، ')})` : `Missing (${missingParts.join(', ')})`,
                         description: `${pt.description || ''}\n[MISSING: ${missingParts.join(', ')}]`.trim(),
                         layer: `${pt.layer || 'Unknown'}_MISSING_ATTRS`
                     };
+                    missingItemsList.push(issuePt);
+                    return issuePt;
                 }
                 
                 return pt;
             });
         };
+
+        const missingItemsList: GeoPoint[] = [];
 
         if (globalPoints && globalPoints.length > 0) {
             const nextGlobal = processPoints(globalPoints);
@@ -626,6 +704,7 @@ const App: React.FC = () => {
             setPlannedStreets(nextPlanned);
         }
 
+        setDataId(`essential-check-${Date.now()}`);
         setProgressPercent(100);
         setLoading(false);
         setProgressPercent(null);
@@ -643,11 +722,12 @@ const App: React.FC = () => {
           badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة` : 'جميع العناصر مكتملة البيانات (لا توجد مشاكل)',
           badgeTextEn: missingCount > 0 ? `${missingCount} Issues Found` : 'All Elements Complete (No Issues)',
           detailsAr: missingCount > 0
-            ? `تم فحص ${totalChecked} عنصر خطي، وتبين وجود ${missingCount} عنصر ينقصه بيانات أساسية (قطر أو منطقة). تم تمييز هذه العناصر باللون الأسود على الخريطة لتسهيل المعاينة والتصحيح.`
+            ? `تم فحص ${totalChecked} عنصر، وتبين وجود ${missingCount} عنصر ينقصه بيانات أساسية (قطر أو منطقة). تم تمييز هذه العناصر وتحديد أماكنها بدقة مع تنبيهات نابضة على الخريطة.`
             : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وتبين أنها جميعاً تحتوي على بيانات القطر والمنطقة مكتملة بدون أي مشاكل.`,
           detailsEn: missingCount > 0
-            ? `Audited ${totalChecked} linear elements. Found ${missingCount} elements missing essential attributes (diameter or zone). Highlighted in black on the map.`
-            : `Audited ${totalChecked} linear elements. All elements contain complete diameter and zone data with zero issues.`,
+            ? `Audited ${totalChecked} elements. Found ${missingCount} elements missing essential attributes (diameter or zone). Highlighted with map markers.`
+            : `Audited ${totalChecked} elements. All elements contain complete diameter and zone data with zero issues.`,
+          issueItems: missingItemsList,
           stats: [
             { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
             { labelAr: 'عدد المشاكل (عناصر ناقصة)', labelEn: 'Issues Count (Missing)', value: missingCount, colorClass: missingCount > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
@@ -749,8 +829,13 @@ const App: React.FC = () => {
         return null;
       };
 
+      const missingSegmentList: GeoPoint[] = [];
+
       const processPoints = (pts: GeoPoint[]) => {
         return pts.map(pt => {
+          if (!pt || pt.isDuplicateOverlay) return pt;
+          if (!isLineElement(pt)) return pt;
+
           totalChecked++;
           let foundVal: string | null = null;
           if (pt.attributes) {
@@ -773,7 +858,15 @@ const App: React.FC = () => {
               color: '#9000FF'
             };
           }
-          return pt;
+
+          const issuePt: GeoPoint = {
+            ...pt,
+            color: '#ef4444',
+            isIssue: true,
+            issueReason: lang === 'ar' ? 'ينقصه رقم الشريحة (Segment ID)' : 'Missing Segment ID'
+          };
+          missingSegmentList.push(issuePt);
+          return issuePt;
         });
       };
 
@@ -803,11 +896,12 @@ const App: React.FC = () => {
         badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة (عناصر بدون Segment ID)` : 'جميع العناصر تحوي Segment ID (لا توجد مشاكل)',
         badgeTextEn: missingCount > 0 ? `${missingCount} Issues (Missing Segment ID)` : 'All Elements Have Segment ID (No Issues)',
         detailsAr: missingCount > 0
-          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي (Segment ID) صحيح ومكتمل (تم تلوينها باللون البنفسجي)، بينما يوجد ${missingCount} عنصر بدون Segment ID. وُجدت ${uniqueSegmentIdsSet.size} قيمة فريدة.`
+          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي (Segment ID) صحيح ومكتمل (باللون البنفسجي)، بينما يوجد ${missingCount} عنصر بدون Segment ID. تم تحديد مواقع المشاكل على الخريطة.`
           : `تم فحص جميع العناصر (${totalChecked} عنصر)، وجميعها تحوي رقم شريحة (Segment ID) صحيح ومكتمل بنجاح، بإجمالي ${uniqueSegmentIdsSet.size} قيمة فريدة.`,
         detailsEn: missingCount > 0
-          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Segment ID (colored purple), and ${missingCount} elements missing Segment ID. Total unique IDs: ${uniqueSegmentIdsSet.size}.`
+          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Segment ID (colored purple), and ${missingCount} elements missing Segment ID. Highlighted on map.`
           : `Audited ${totalChecked} elements. All elements contain valid Segment ID content with ${uniqueSegmentIdsSet.size} unique values.`,
+        issueItems: missingSegmentList,
         stats: [
           { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
           { labelAr: 'عناصر بـ Segment ID', labelEn: 'Valid Segment ID', value: matchedCount, colorClass: 'text-[#d8b4fe] font-black' },
@@ -906,8 +1000,13 @@ const App: React.FC = () => {
         return null;
       };
 
+      const missingPermitList: GeoPoint[] = [];
+
       const processPoints = (pts: GeoPoint[]) => {
         return pts.map(pt => {
+          if (!pt || pt.isDuplicateOverlay) return pt;
+          if (!isLineElement(pt)) return pt;
+
           totalChecked++;
           let foundVal: string | null = null;
           if (pt.attributes) {
@@ -930,7 +1029,15 @@ const App: React.FC = () => {
               color: '#FF6D00'
             };
           }
-          return pt;
+
+          const issuePt: GeoPoint = {
+            ...pt,
+            color: '#ef4444',
+            isIssue: true,
+            issueReason: lang === 'ar' ? 'ينقصه رقم الترخيص (Permit No)' : 'Missing Permit No'
+          };
+          missingPermitList.push(issuePt);
+          return issuePt;
         });
       };
 
@@ -960,11 +1067,12 @@ const App: React.FC = () => {
         badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة (عناصر بدون رقم ترخيص)` : 'جميع العناصر تحوي رقم ترخيص (لا توجد مشاكل)',
         badgeTextEn: missingCount > 0 ? `${missingCount} Issues (Missing Permit No)` : 'All Elements Have Permit No (No Issues)',
         detailsAr: missingCount > 0
-          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي رقم ترخيص (Permit No) صحيح (تم تلوينها باللون البرتقالي)، بينما يوجد ${missingCount} عنصر بدون رقم ترخيص. وُجدت ${uniquePermitSet.size} ترخيصات فريدة.`
+          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي رقم ترخيص (Permit No) صحيح، بينما يوجد ${missingCount} عنصر بدون رقم ترخيص. تم تحديد كافة مواقع المشاكل على الخريطة.`
           : `تم فحص جميع العناصر (${totalChecked} عنصر)، وجميعها تحوي رقم ترخيص (Permit No) صحيح ومكتمل بنجاح، بإجمالي ${uniquePermitSet.size} ترخيص فريد.`,
         detailsEn: missingCount > 0
-          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Permit No (colored neon orange), and ${missingCount} elements missing Permit No. Total unique permits: ${uniquePermitSet.size}.`
+          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Permit No, and ${missingCount} elements missing Permit No. Highlighted on map.`
           : `Audited ${totalChecked} elements. All elements contain valid Permit No with ${uniquePermitSet.size} unique values.`,
+        issueItems: missingPermitList,
         stats: [
           { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
           { labelAr: 'عناصر برقم ترخيص', labelEn: 'With Permit No', value: matchedCount, colorClass: 'text-[#ffc499] font-black' },
@@ -1019,6 +1127,30 @@ const App: React.FC = () => {
     const totalIssues = errorsCount + warningsCount;
     const compliantCount = Math.max(0, pts.length - totalIssues);
 
+    const sbcIssueMap = new Map<string, string>();
+    issues.forEach(iss => {
+      const targetId = iss.elementId || iss.element1Id;
+      if (targetId) {
+        sbcIssueMap.set(String(targetId), lang === 'ar' ? (iss.messageAr || iss.titleAr) : (iss.messageEn || iss.titleEn));
+      }
+    });
+
+    const sbcIssueItems: GeoPoint[] = [];
+    pts.forEach(p => {
+      if (sbcIssueMap.has(String(p.id))) {
+        sbcIssueItems.push({
+          ...p,
+          isIssue: true,
+          color: '#ef4444',
+          issueReason: sbcIssueMap.get(String(p.id)) || (lang === 'ar' ? 'مخالفة اشتراطات كود البناء السعودي' : 'SBC Violation')
+        });
+      }
+    });
+
+    if (sbcIssueItems.length > 0) {
+      setDataId(`sbc-check-${Date.now()}`);
+    }
+
     setCheckResultModal({
       type: 'sbc',
       titleAr: 'نتائج فحص مطابقة كود البناء السعودي (SBC)',
@@ -1030,11 +1162,12 @@ const App: React.FC = () => {
       badgeTextAr: totalIssues > 0 ? `وُجدت ${totalIssues} مخالفة / ملاحظة كود` : 'ممتاز! لا توجد مشاكل - مطبق للكود السعودي',
       badgeTextEn: totalIssues > 0 ? `${totalIssues} SBC Issues Found` : 'No Issues - Fully SBC Compliant',
       detailsAr: totalIssues > 0
-        ? `تم إجراء تدقيق كود البناء السعودي (SBC) على ${pts.length} عنصر شبكة. كشف التدقيق عن ${totalIssues} ملاحظة (تتضمن ${errorsCount} مخالفة صريحة في الأعماق أو مسافات الفصل الأفقية، و ${warningsCount} تحذير أقطار).`
+        ? `تم إجراء تدقيق كود البناء السعودي (SBC) على ${pts.length} عنصر شبكة. كشف التدقيق عن ${totalIssues} ملاحظة (تتضمن ${errorsCount} مخالفة صريحة في الأعماق أو مسافات الفصل الأفقية، و ${warningsCount} تحذير أقطار). تم إبراز ومواقع كافة المشاكل على الخريطة.`
         : `تم فحص جميع عناصر الخريطة (${pts.length} عنصر) وفقاً لاشتراطات كود البناء السعودي (SBC)، وتبين أنها مطابقة كلياً بجميع الأعماق والأقطار والمجاورات ولا توجد أي مخالفات.`,
       detailsEn: totalIssues > 0
-        ? `Audited ${pts.length} network elements against SBC specs. Discovered ${totalIssues} issues (${errorsCount} critical errors in depth/separation, ${warningsCount} diameter warnings).`
+        ? `Audited ${pts.length} network elements against SBC specs. Discovered ${totalIssues} issues (${errorsCount} critical errors in depth/separation, ${warningsCount} diameter warnings). Highlighted on map.`
         : `Audited ${pts.length} elements against SBC standard specifications. Zero violations found; networks fully comply.`,
+      issueItems: sbcIssueItems,
       stats: [
         { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Elements Audited', value: pts.length, colorClass: 'text-white' },
         { labelAr: 'إجمالي المشاكل والملاحظات', labelEn: 'Total SBC Issues', value: totalIssues, colorClass: totalIssues > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
@@ -5458,6 +5591,10 @@ const App: React.FC = () => {
             lang={lang}
             dataId={dataId}
             overlapResults={overlapResults}
+            focusedPoint={focusedPoint}
+            issueItems={activeIssueItems}
+            showIssuesOnly={showIssuesOnly}
+            onToggleShowIssuesOnly={setShowIssuesOnly}
             isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
             onPolygonComplete={(poly) => {
               if (activeTab === 'splitter' && splitMode === 'spatial') {
@@ -6460,6 +6597,23 @@ const App: React.FC = () => {
             setDeferredPrompt={setDeferredPrompt}
             isStandalone={isStandalone}
          />
+         <CheckResultModalPopup
+            checkResultModal={checkResultModal}
+            setCheckResultModal={setCheckResultModal}
+            lang={lang}
+            setActiveTab={setActiveTab}
+            onFocusIssuePoint={(pt) => {
+              setFocusedPoint(pt);
+              setDataId(`focus-point-${Date.now()}`);
+            }}
+            onShowAllIssuesOnMap={(items) => {
+              if (items && items.length > 0) {
+                setActiveIssueItems(items);
+              }
+              setShowIssuesOnly(true);
+              setDataId(`show-issues-${Date.now()}`);
+            }}
+         />
       </main>
       </div>
     </div>
@@ -6471,8 +6625,27 @@ export const CheckResultModalPopup: React.FC<{
   setCheckResultModal: (val: CheckResultModalState | null) => void;
   lang: 'ar' | 'en';
   setActiveTab: (tab: any) => void;
-}> = ({ checkResultModal, setCheckResultModal, lang, setActiveTab }) => {
+  onFocusIssuePoint?: (pt: GeoPoint) => void;
+  onShowAllIssuesOnMap?: (issueItems?: GeoPoint[]) => void;
+}> = ({ checkResultModal, setCheckResultModal, lang, setActiveTab, onFocusIssuePoint, onShowAllIssuesOnMap }) => {
   if (!checkResultModal) return null;
+
+  const handleLocateAll = () => {
+    if (onShowAllIssuesOnMap) {
+      onShowAllIssuesOnMap(checkResultModal.issueItems);
+    }
+    setCheckResultModal(null);
+    setActiveTab('preview');
+  };
+
+  const handleFocusItem = (item: GeoPoint) => {
+    if (onFocusIssuePoint) {
+      onFocusIssuePoint(item);
+    }
+    setCheckResultModal(null);
+    setActiveTab('preview');
+  };
+
   return (
     <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
       <div 
@@ -6524,7 +6697,7 @@ export const CheckResultModalPopup: React.FC<{
         </div>
 
         {/* Modal Content Body */}
-        <div className="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
+        <div className="p-6 space-y-6 overflow-y-auto max-h-[65vh] custom-scrollbar">
           {/* Detailed summary paragraph */}
           <div className="p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-white/80 leading-relaxed font-semibold">
             {lang === 'ar' ? checkResultModal.detailsAr : checkResultModal.detailsEn}
@@ -6544,6 +6717,56 @@ export const CheckResultModalPopup: React.FC<{
             ))}
           </div>
 
+          {/* Interactive Issues List */}
+          {checkResultModal.issuesCount > 0 && checkResultModal.issueItems && checkResultModal.issueItems.length > 0 && (
+            <div className="space-y-3 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-between text-xs font-black text-rose-300">
+                <span className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-rose-400 animate-pulse" />
+                  <span>{lang === 'ar' ? `قائمة العناصر المفحوصة ذات الملاحظات (${checkResultModal.issueItems.length})` : `Issues List (${checkResultModal.issueItems.length})`}</span>
+                </span>
+                <button
+                  onClick={handleLocateAll}
+                  className="text-[11px] text-accent hover:underline font-black flex items-center gap-1"
+                >
+                  <Maximize className="w-3 h-3" />
+                  <span>{lang === 'ar' ? 'عرض الكل على الخريطة' : 'View All on Map'}</span>
+                </button>
+              </div>
+
+              <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                {checkResultModal.issueItems.slice(0, 50).map((item, idx) => (
+                  <div 
+                    key={idx}
+                    className="p-3 rounded-xl bg-white/5 hover:bg-rose-500/10 border border-white/10 hover:border-rose-500/30 flex items-center justify-between gap-3 text-xs transition-all group"
+                  >
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <span className="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center justify-center font-black text-[10px] shrink-0">
+                        {idx + 1}
+                      </span>
+                      <div className="overflow-hidden">
+                        <div className="font-black text-white truncate text-[11px]">
+                          {item.id}
+                        </div>
+                        <div className="text-[10px] text-rose-300/80 truncate font-semibold">
+                          {item.issueReason || item.description || (lang === 'ar' ? 'ملاحظة تدقيق' : 'Audit issue')}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => handleFocusItem(item)}
+                      className="px-3 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-white text-[10px] font-black shrink-0 flex items-center gap-1 transition-all shadow-md active:scale-95"
+                    >
+                      <span>🔍</span>
+                      <span>{lang === 'ar' ? 'ذهاب للموقع' : 'Locate'}</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Informational Guidance */}
           {checkResultModal.issuesCount > 0 ? (
             <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 font-bold space-y-1">
@@ -6551,8 +6774,8 @@ export const CheckResultModalPopup: React.FC<{
                 <span>💡</span>
                 <span>
                   {lang === 'ar' 
-                    ? 'تم إبراز وتظليل العناصر التي بها ملاحظات بألوان خاصة على الخريطة للوصول السريع والتعامل معها.' 
-                    : 'Elements with issues have been highlighted with specific colors on the map for quick identification.'}
+                    ? 'انقر على "تحديد موقع المشاكل" للذهاب فوراً للخريطة وتحديد أماكن الـ 15 عنصر المعنية مع التكبير المباشر.' 
+                    : 'Click "Locate Issues" to jump directly to the map and view all 15 issue elements in high focus.'}
                 </span>
               </p>
             </div>
@@ -6571,25 +6794,37 @@ export const CheckResultModalPopup: React.FC<{
         </div>
 
         {/* Modal Footer */}
-        <div className="p-5 bg-black/30 border-t border-white/5 flex items-center justify-end gap-3 shrink-0">
-          {checkResultModal.type === 'sbc' && checkResultModal.issuesCount > 0 && (
+        <div className="p-5 bg-black/30 border-t border-white/5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          {checkResultModal.issuesCount > 0 ? (
             <button
-              onClick={() => {
-                setCheckResultModal(null);
-                setActiveTab('sbc-checker');
-              }}
-              className="px-5 py-3 rounded-2xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-black transition-all flex items-center gap-2"
+              onClick={handleLocateAll}
+              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white border border-rose-400 text-xs font-black transition-all flex items-center gap-2 shadow-xl animate-pulse active:scale-95"
             >
-              <ShieldCheck className="w-4 h-4" />
-              {lang === 'ar' ? 'عرض تقرير SBC التفصيلي' : 'View Full SBC Report'}
+              <MapPin className="w-4 h-4" />
+              <span>{lang === 'ar' ? `🎯 تحديد وتقريب أماكن الـ (${checkResultModal.issuesCount}) مشكلة على الخريطة` : `Locate ${checkResultModal.issuesCount} Issues on Map`}</span>
             </button>
-          )}
-          <button
-            onClick={() => setCheckResultModal(null)}
-            className="px-6 py-3 rounded-2xl bg-accent hover:bg-accent/90 text-primary text-xs font-black shadow-lg transition-all"
-          >
-            {lang === 'ar' ? 'فهمت (موافق)' : 'Got it (Close)'}
-          </button>
+          ) : <div />}
+
+          <div className="flex items-center gap-2">
+            {checkResultModal.type === 'sbc' && checkResultModal.issuesCount > 0 && (
+              <button
+                onClick={() => {
+                  setCheckResultModal(null);
+                  setActiveTab('sbc-checker');
+                }}
+                className="px-5 py-3 rounded-2xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-black transition-all flex items-center gap-2"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                {lang === 'ar' ? 'عرض تقرير SBC التفصيلي' : 'View Full SBC Report'}
+              </button>
+            )}
+            <button
+              onClick={() => setCheckResultModal(null)}
+              className="px-6 py-3 rounded-2xl bg-accent hover:bg-accent/90 text-primary text-xs font-black shadow-lg transition-all"
+            >
+              {lang === 'ar' ? 'إغلاق' : 'Close'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

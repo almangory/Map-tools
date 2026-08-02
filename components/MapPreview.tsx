@@ -1,5 +1,5 @@
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import L from 'leaflet';
 import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2, MapPin } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -20,10 +20,12 @@ export interface MapPreviewProps {
   isSelectionMode?: boolean;
   onPolygonComplete?: (polygon: {x: number; y: number}[]) => void;
   focusedColor?: string | null;
+  focusedPoint?: GeoPoint | null;
+  issueItems?: GeoPoint[];
+  showIssuesOnly?: boolean;
+  onToggleShowIssuesOnly?: (val: boolean) => void;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
 }
-
-
 
 /**
  * Validates if coordinates are safe for Leaflet consumption
@@ -36,13 +38,27 @@ const isValidLatLng = (lat: any, lng: any): boolean => {
          lng >= -180 && lng <= 180;
 };
 
-const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelectionMode, onPolygonComplete, focusedColor, overlapResults, globalBaseMap }) => {
+const MapPreview: React.FC<MapPreviewProps> = ({ 
+  points, 
+  lang, 
+  dataId, 
+  isSelectionMode, 
+  onPolygonComplete, 
+  focusedColor, 
+  focusedPoint,
+  issueItems,
+  showIssuesOnly = false,
+  onToggleShowIssuesOnly,
+  overlapResults, 
+  globalBaseMap 
+}) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const layerGroup = useRef<L.LayerGroup | null>(null);
   const drawLayerGroup = useRef<L.LayerGroup | null>(null);
   const currentDrawGroup = useRef<L.LayerGroup | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const issueMarkersMap = useRef<Map<string | number, L.Marker | L.CircleMarker | L.Polyline>>(new Map());
   
   const isDrawingRef = useRef(false);
   const polygonCoordsRef = useRef<L.LatLng[]>([]);
@@ -64,6 +80,62 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
   const [showDataOverlay, setShowDataOverlay] = useState(true);
 
   const t = translations[lang];
+
+  // Helper to check if point has validation issue
+  const isIssuePoint = (pt: GeoPoint): boolean => {
+    return Boolean(
+      pt.isIssue ||
+      pt.color === '#000000' ||
+      pt.color === '#ef4444' ||
+      (pt.layer && pt.layer.includes('MISSING')) ||
+      (pt.description && pt.description.includes('[MISSING:'))
+    );
+  };
+
+  const detectedIssuePoints = useMemo(() => {
+    if (issueItems && issueItems.length > 0) return issueItems;
+    return points.filter(isIssuePoint);
+  }, [points, issueItems]);
+
+  const zoomToIssuesExtent = useCallback(() => {
+    if (!mapInstance.current || detectedIssuePoints.length === 0) return;
+    const bounds = L.latLngBounds([]);
+    let validCount = 0;
+    
+    detectedIssuePoints.forEach(pt => {
+      if (isValidLatLng(pt.y, pt.x)) {
+        if (pt.path && Array.isArray(pt.path)) {
+          pt.path.forEach(p => {
+            if (isValidLatLng(p.y, p.x)) {
+              bounds.extend([p.y, p.x]);
+              validCount++;
+            }
+          });
+        } else {
+          bounds.extend([pt.y, pt.x]);
+          validCount++;
+        }
+      }
+    });
+
+    if (validCount > 0 && bounds.isValid()) {
+      mapInstance.current.fitBounds(bounds, { padding: [100, 100], maxZoom: 18, animate: true });
+    }
+  }, [detectedIssuePoints]);
+
+  // Handle zooming to a single focused point (when user clicks issue item in modal)
+  useEffect(() => {
+    if (focusedPoint && mapInstance.current && isValidLatLng(focusedPoint.y, focusedPoint.x)) {
+      mapInstance.current.flyTo([focusedPoint.y, focusedPoint.x], 18, { animate: true, duration: 1.5 });
+      
+      const targetMarker = issueMarkersMap.current.get(focusedPoint.id);
+      if (targetMarker && 'openPopup' in targetMarker) {
+        setTimeout(() => {
+          (targetMarker as any).openPopup();
+        }, 800);
+      }
+    }
+  }, [focusedPoint]);
 
   useEffect(() => {
     if (globalBaseMap) {
@@ -171,21 +243,60 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
     if (!mapInstance.current || !layerGroup.current) return;
 
     layerGroup.current.clearLayers();
+    issueMarkersMap.current.clear();
+
     if (points.length === 0) {
       lastDataIdRef.current = null;
       return;
     }
 
-    points.forEach(pt => {
+    const renderPoints = showIssuesOnly ? points.filter(isIssuePoint) : points;
+
+    renderPoints.forEach(pt => {
       if (isValidLatLng(pt.y, pt.x)) {
         const isOverlap = overlapResults?.some(o => !o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         const isIntersectionLine = overlapResults?.some(o => o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
+        const hasIssue = isIssuePoint(pt);
         
-        const featColor = isOverlap ? '#000000' : String(pt.color || '#dcb13c').toLowerCase();
+        let featColor = isOverlap ? '#000000' : String(pt.color || '#dcb13c').toLowerCase();
+        if (hasIssue && !isOverlap) {
+          featColor = pt.color === '#000000' ? '#000000' : '#ef4444';
+        }
         
-        if (focusedColor && featColor !== String(focusedColor || '').toLowerCase() && !isOverlap && !isIntersectionLine) return;
+        if (focusedColor && featColor !== String(focusedColor || '').toLowerCase() && !isOverlap && !isIntersectionLine && !hasIssue) return;
 
-        let marker;
+        let marker: L.Marker | L.CircleMarker | L.Polyline | null = null;
+
+        let popupContent = `<div class="p-3 min-w-[240px] font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+          <div class="font-black text-primary border-b border-slate-100 pb-2 mb-2 text-[13px] flex items-center justify-between">
+            <span>${pt.id}</span>
+            ${hasIssue ? `<span class="bg-red-500/10 text-red-600 border border-red-500/30 text-[9px] font-black px-2 py-0.5 rounded-full">⚠️ ${lang === 'ar' ? 'عنصر به ملاحظة' : 'Issue Found'}</span>` : ''}
+          </div>`;
+
+        if (hasIssue) {
+          popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] font-bold space-y-1 shadow-sm">
+            <div class="flex items-center gap-1.5 font-black text-red-800">
+              <span>⚠️</span>
+              <span>${lang === 'ar' ? 'تفاصيل الملاحظة / التدقيق:' : 'Audit Issue Details:'}</span>
+            </div>
+            <p class="text-[10px] leading-relaxed text-slate-700">
+              ${pt.issueReason || pt.description || (lang === 'ar' ? 'عنصر ناتج عن فحص البيانات' : 'Validation audit item')}
+            </p>
+          </div>`;
+        }
+        
+        if (pt.street || pt.district) {
+          popupContent += `<div class="space-y-1.5 mb-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
+            ${pt.street ? `<div class="text-[10px] leading-tight"><span class="text-slate-400 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الشارع' : 'Street'}</span> <span class="font-black text-slate-800">${pt.street}</span></div>` : ''}
+            ${pt.district ? `<div class="text-[10px] leading-tight"><span class="text-slate-400 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الحي' : 'District'}</span> <span class="font-black text-slate-800">${pt.district}</span></div>` : ''}
+          </div>`;
+        }
+        
+        popupContent += `<div class="flex items-center justify-between text-[9px] text-slate-400 font-bold border-t border-slate-50 pt-2 mt-1">
+          <span>LAT: ${pt.y.toFixed(6)}</span>
+          <span>LON: ${pt.x.toFixed(6)}</span>
+        </div></div>`;
+
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {
           if (!showPolygons) return;
           const latLngs = pt.path
@@ -194,12 +305,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
           
           if (latLngs.length >= 3) {
             marker = L.polygon(latLngs, { 
-              color: isOverlap ? '#000000' : '#ffffff', weight: isOverlap ? 4 : 2, fillColor: isOverlap ? '#9c27b0' : featColor, fillOpacity: isOverlap ? 0.7 : 0.5
+              color: hasIssue ? '#ef4444' : (isOverlap ? '#000000' : '#ffffff'), 
+              weight: hasIssue ? 5 : (isOverlap ? 4 : 2), 
+              fillColor: hasIssue ? '#f87171' : (isOverlap ? '#9c27b0' : featColor), 
+              fillOpacity: hasIssue ? 0.7 : (isOverlap ? 0.7 : 0.5)
             });
             
-            // Add label for polygons (important for Splitter mode)
             if (pt.layer === 'Split Polygons' || pt.layer === 'Split Boundaries') {
-              const center = marker.getBounds().getCenter();
+              const center = (marker as L.Polygon).getBounds().getCenter();
               L.marker(center, {
                 icon: L.divIcon({
                   className: 'bg-white/90 border border-slate-200 px-2 py-1 rounded-md shadow-lg text-[10px] font-black text-slate-800 whitespace-nowrap',
@@ -217,12 +330,46 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
           
           if (latLngs.length >= 2) {
             marker = L.polyline(latLngs, { 
-                color: isOverlap ? '#000000' : featColor, weight: (isOverlap || isIntersectionLine) ? 8 : 4, opacity: (isOverlap || isIntersectionLine) ? 1 : 0.8
+              color: hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor), 
+              weight: hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 4), 
+              opacity: hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8),
+              dashArray: hasIssue ? '10, 8' : undefined
             });
+
+            // If feature has issue, place a prominent pulsing ⚠️ warning marker at line midpoint
+            if (hasIssue) {
+              const midIdx = Math.floor(latLngs.length / 2);
+              const midPt = latLngs[midIdx];
+              const pulseIcon = L.divIcon({
+                className: 'bg-transparent border-0',
+                html: `<div style="position:relative; width:36px; height:36px; display:flex; align-items:center; justify-content:center;">
+                         <div style="position:absolute; width:100%; height:100%; background-color:#ef4444; border-radius:50%; opacity:0.6; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+                         <div style="position:relative; width:26px; height:26px; background-color:#dc2626; border:2px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-weight:900; font-size:12px; box-shadow:0 4px 12px rgba(220,38,38,0.7);">⚠️</div>
+                       </div>`,
+                iconSize: [36, 36],
+                iconAnchor: [18, 18],
+                popupAnchor: [0, -18]
+              });
+              const pulseMarker = L.marker(midPt, { icon: pulseIcon }).addTo(layerGroup.current!);
+              pulseMarker.bindPopup(popupContent);
+              issueMarkersMap.current.set(pt.id, pulseMarker);
+            }
           }
         } else {
           if (!showPoints) return;
-          if (pt.iconUrl) {
+          if (hasIssue) {
+            const pulseIcon = L.divIcon({
+              className: 'bg-transparent border-0',
+              html: `<div style="position:relative; width:36px; height:36px; display:flex; align-items:center; justify-content:center;">
+                       <div style="position:absolute; width:100%; height:100%; background-color:#ef4444; border-radius:50%; opacity:0.6; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+                       <div style="position:relative; width:26px; height:26px; background-color:#dc2626; border:2px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-weight:900; font-size:12px; box-shadow:0 4px 12px rgba(220,38,38,0.7);">⚠️</div>
+                     </div>`,
+              iconSize: [36, 36],
+              iconAnchor: [18, 18],
+              popupAnchor: [0, -18]
+            });
+            marker = L.marker([pt.y, pt.x], { icon: pulseIcon });
+          } else if (pt.iconUrl) {
             let safeUrl = pt.iconUrl;
             if (safeUrl.startsWith('http://')) safeUrl = safeUrl.replace('http://', 'https://');
             const customIcon = L.divIcon({
@@ -243,23 +390,11 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
         }
         
         if (marker) {
-          let popupContent = `<div class="p-3 min-w-[220px] font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
-            <div class="font-black text-primary border-b border-slate-100 pb-2 mb-2 text-[13px]">${pt.id}</div>`;
-          
-          if (pt.street || pt.district) {
-            popupContent += `<div class="space-y-1.5 mb-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
-              ${pt.street ? `<div class="text-[10px] leading-tight"><span class="text-slate-400 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الشارع' : 'Street'}</span> <span class="font-black text-slate-800">${pt.street}</span></div>` : ''}
-              ${pt.district ? `<div class="text-[10px] leading-tight"><span class="text-slate-400 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الحي' : 'District'}</span> <span class="font-black text-slate-800">${pt.district}</span></div>` : ''}
-            </div>`;
-          }
-          
-          popupContent += `<div class="flex items-center justify-between text-[9px] text-slate-400 font-bold border-t border-slate-50 pt-2 mt-1">
-            <span>LAT: ${pt.y.toFixed(6)}</span>
-            <span>LON: ${pt.x.toFixed(6)}</span>
-          </div></div>`;
-
           marker.bindPopup(popupContent);
           layerGroup.current?.addLayer(marker);
+          if (!issueMarkersMap.current.has(pt.id)) {
+            issueMarkersMap.current.set(pt.id, marker);
+          }
         }
       }
     });
@@ -283,7 +418,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showIssuesOnly]);
 
   const toggleDrawing = () => {
     if (isDrawing) {
@@ -332,6 +467,45 @@ const MapPreview: React.FC<MapPreviewProps> = ({ points, lang, dataId, isSelecti
     <div className="relative w-full h-full bg-[#1b2a32] overflow-hidden">
         <div ref={mapContainer} className="w-full h-full z-0" />
         
+        {/* Floating Top Banner for Issue Control */}
+        {detectedIssuePoints.length > 0 && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[600] flex items-center gap-2 bg-[#0b2d3d]/95 backdrop-blur-md border border-rose-500/50 p-1.5 sm:p-2 rounded-2xl shadow-2xl animate-in slide-in-from-top duration-300">
+            <div className="flex items-center gap-2 px-3 py-1 bg-rose-500/20 text-rose-300 rounded-xl text-xs font-black">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
+              <span>{lang === 'ar' ? `تم رصد ${detectedIssuePoints.length} مشكلة` : `${detectedIssuePoints.length} Issues Detected`}</span>
+            </div>
+
+            <button
+              onClick={() => {
+                if (onToggleShowIssuesOnly) {
+                  onToggleShowIssuesOnly(!showIssuesOnly);
+                }
+              }}
+              className={cn(
+                "px-3 py-1.5 rounded-xl text-xs font-black transition-all border flex items-center gap-1.5",
+                showIssuesOnly
+                  ? "bg-rose-600 text-white border-rose-400 shadow-lg"
+                  : "bg-white/10 text-white hover:bg-white/20 border-white/20"
+              )}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>
+                {showIssuesOnly
+                  ? (lang === 'ar' ? 'عرض الكل' : 'Show All')
+                  : (lang === 'ar' ? 'عزل المشاكل فقط' : 'Isolate Issues')}
+              </span>
+            </button>
+
+            <button
+              onClick={zoomToIssuesExtent}
+              className="px-3 py-1.5 bg-accent text-primary hover:bg-accent/90 rounded-xl text-xs font-black transition-all shadow-md flex items-center gap-1.5 active:scale-95"
+            >
+              <Maximize className="w-3.5 h-3.5" />
+              <span>{lang === 'ar' ? 'تقريب وتحديد الأماكن' : 'Zoom & Focus'}</span>
+            </button>
+          </div>
+        )}
+
         {/* Layer & Control Menu */}
         <div className={cn(
             "absolute top-4 sm:top-6 z-[600] flex flex-col gap-2.5 sm:gap-3 transition-all",

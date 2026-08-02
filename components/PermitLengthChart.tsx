@@ -173,7 +173,7 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
       const pct = ((data.lengthMeters / totalM) * 100).toFixed(1);
 
       return (
-        <div className="bg-[#1f0f05] border-2 border-[#FF6D00] p-4 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.9)] text-xs text-white space-y-2 backdrop-blur-xl max-w-xs z-[9999] pointer-events-none min-w-[220px]">
+        <div className="bg-[#1f0f05]/95 border-2 border-[#FF6D00] p-4 rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] text-xs text-white space-y-2 backdrop-blur-xl max-w-xs z-[9999999] pointer-events-none min-w-[220px]">
           <div className="flex items-center justify-between gap-2 border-b border-white/15 pb-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-3 h-3 rounded-full shrink-0 border border-white/30" style={{ backgroundColor: data.color }} />
@@ -514,8 +514,9 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
               />
               <RechartsTooltip
                 content={<CustomTooltip />}
-                position={{ y: 0 }}
-                wrapperStyle={{ zIndex: 9999, outline: 'none' }}
+                position={{ y: 195 }}
+                allowEscapeViewBox={{ x: true, y: true }}
+                wrapperStyle={{ zIndex: 9999999, outline: 'none', pointerEvents: 'none' }}
                 cursor={{ fill: 'rgba(255, 255, 255, 0.08)' }}
               />
               <Bar

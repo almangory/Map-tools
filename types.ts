@@ -18,6 +18,25 @@ export interface GeoPoint {
   originalRow?: any[]; // The raw data from Excel/CSV
   attributes?: Record<string, string>; // Extracted extended data
   iconUrl?: string; // Custom KML icon URL
+  isIssue?: boolean; // Flag if element has validation issue
+  issueReason?: string; // Explanation of validation issue
+}
+
+export interface CheckResultModalState {
+  type: 'essential' | 'segment' | 'permit' | 'sbc' | 'general';
+  titleAr: string;
+  titleEn: string;
+  icon: 'essential' | 'segment' | 'permit' | 'sbc' | 'general';
+  totalChecked: number;
+  issuesCount: number;
+  successCount: number;
+  uniqueCount?: number;
+  badgeTextAr: string;
+  badgeTextEn: string;
+  detailsAr: string;
+  detailsEn: string;
+  stats: Array<{ labelAr: string; labelEn: string; value: number | string; colorClass: string }>;
+  issueItems?: GeoPoint[];
 }
 
 export interface SplitPolygon {
