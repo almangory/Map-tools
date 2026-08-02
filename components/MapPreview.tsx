@@ -92,6 +92,152 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     );
   };
 
+  // Helper functions for extracting critical attributes (Segment ID, Permit No, Diameter)
+  const stripHtmlTags = (str: string): string => {
+    if (!str) return '';
+    return str.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+
+  const extractSegmentId = (pt: GeoPoint): string | null => {
+    if (pt.attributes) {
+      for (const [k, v] of Object.entries(pt.attributes)) {
+        if (v && typeof v === 'string' && v.trim() && v.trim() !== '0') {
+          const key = k.toLowerCase();
+          if (key.includes('segment') || key.includes('seg_') || key.includes('segid') || key.includes('شريحة') || key.includes('قطاع')) {
+            const clean = stripHtmlTags(v);
+            if (clean && clean !== '0' && clean.toLowerCase() !== 'null') return clean;
+          }
+        }
+      }
+    }
+    if (pt.description) {
+      const match = pt.description.match(/(?:segment\s*id|segment_id|segmentid|segment\s*no|seg\s*id|seg_id|segid|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|شريحة|قطاع)\s*[:=]\s*([^\r\n,;<>&|/<]+)/i);
+      if (match && match[1]) {
+        const clean = stripHtmlTags(match[1]);
+        if (clean && clean !== '0' && clean.toLowerCase() !== 'null') return clean;
+      }
+    }
+    return null;
+  };
+
+  const extractPermitNo = (pt: GeoPoint): string | null => {
+    if (pt.attributes) {
+      for (const [k, v] of Object.entries(pt.attributes)) {
+        if (v && typeof v === 'string' && v.trim() && v.trim() !== '0') {
+          const key = k.toLowerCase();
+          if (key.includes('permit') || key.includes('تصريح') || key.includes('ترخيص')) {
+            const clean = stripHtmlTags(v);
+            if (clean && clean !== '0' && clean.toLowerCase() !== 'null') return clean;
+          }
+        }
+      }
+    }
+    if (pt.description) {
+      const match = pt.description.match(/(?:permit\s*no|permit_no|permitno|permit\s*num|permit_number|permit\s*id|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*التصريح|ترخيص|تصريح)\s*[:=]\s*([^\r\n,;<>&|/<]+)/i);
+      if (match && match[1]) {
+        const clean = stripHtmlTags(match[1]);
+        if (clean && clean !== '0' && clean.toLowerCase() !== 'null') return clean;
+      }
+    }
+    return null;
+  };
+
+  const extractDiameter = (pt: GeoPoint): string | null => {
+    if (pt.attributes) {
+      for (const [k, v] of Object.entries(pt.attributes)) {
+        if (v && typeof v === 'string' && v.trim() && v.trim() !== '0') {
+          const key = k.toLowerCase();
+          if (key.includes('diameter') || key.includes('dia') || key.includes('dn') || key.includes('size') || key.includes('قطر') || key.includes('القطر')) {
+            const clean = stripHtmlTags(v);
+            if (clean && clean !== '0' && clean.toLowerCase() !== 'null') return clean;
+          }
+        }
+      }
+    }
+    if (pt.description) {
+      const match = pt.description.match(/(?:diameter|pipe_diameter|pipe\s*dia|dia|dn|size|القطر|قطر\s*الأنبوب|قطر\s*الأنبيب|قطر)\s*[:=]\s*([^\r\n,;<>&|/<]+)/i);
+      if (match && match[1]) {
+        const clean = stripHtmlTags(match[1]);
+        if (clean && clean !== '0' && clean.toLowerCase() !== 'null') return clean;
+      }
+    }
+    if (pt.attr1) {
+      const match = pt.attr1.match(/(?:\bDN\s*|\b|\bقطر\s*)(\d{2,4}\s*(?:mm|مم)?)\b/i);
+      if (match && match[1]) return match[1].trim();
+    }
+    if (pt.attr2) {
+      const match = pt.attr2.match(/(?:\bDN\s*|\b|\bقطر\s*)(\d{2,4}\s*(?:mm|مم)?)\b/i);
+      if (match && match[1]) return match[1].trim();
+    }
+    return null;
+  };
+
+  const buildTooltipContent = (pt: GeoPoint, lang: Language, hasIssue: boolean) => {
+    const segId = extractSegmentId(pt);
+    const permitNo = extractPermitNo(pt);
+    const diameter = extractDiameter(pt);
+
+    let html = `<div class="p-3 bg-[#0b1329]/95 backdrop-blur-md text-white rounded-2xl border border-cyan-500/40 shadow-2xl font-sans text-xs min-w-[220px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">`;
+    
+    html += `<div class="flex items-center justify-between border-b border-slate-700/80 pb-2 mb-2 gap-2">
+      <div class="flex items-center gap-1.5 font-black text-amber-400 text-[12px] truncate">
+        <span>📍</span>
+        <span class="truncate">${pt.id}</span>
+      </div>
+      ${pt.layer ? `<span class="bg-slate-800 text-slate-300 border border-slate-700 text-[9px] font-bold px-2 py-0.5 rounded-full truncate">${pt.layer}</span>` : ''}
+    </div>`;
+
+    html += `<div class="space-y-1.5 text-[11px]">`;
+
+    if (segId) {
+      html += `<div class="flex items-center justify-between gap-3 bg-purple-950/40 px-2.5 py-1 rounded-xl border border-purple-500/30">
+        <span class="text-purple-200/80 font-bold">${lang === 'ar' ? 'رقم الشريحة (Segment ID):' : 'Segment ID:'}</span>
+        <span class="font-black text-purple-300">${segId}</span>
+      </div>`;
+    }
+
+    if (permitNo) {
+      html += `<div class="flex items-center justify-between gap-3 bg-orange-950/40 px-2.5 py-1 rounded-xl border border-orange-500/30">
+        <span class="text-orange-200/80 font-bold">${lang === 'ar' ? 'رقم الترخيص (Permit No):' : 'Permit No:'}</span>
+        <span class="font-black text-orange-300">${permitNo}</span>
+      </div>`;
+    }
+
+    if (diameter) {
+      html += `<div class="flex items-center justify-between gap-3 bg-cyan-950/40 px-2.5 py-1 rounded-xl border border-cyan-500/30">
+        <span class="text-cyan-200/80 font-bold">${lang === 'ar' ? 'القطر (Diameter):' : 'Diameter:'}</span>
+        <span class="font-black text-cyan-300">${diameter}</span>
+      </div>`;
+    }
+
+    if (pt.length) {
+      const lenStr = pt.length >= 1000 ? `${(pt.length / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` : `${pt.length.toFixed(1)} ${lang === 'ar' ? 'م' : 'm'}`;
+      html += `<div class="flex items-center justify-between gap-3 px-1 py-0.5">
+        <span class="text-slate-400 font-bold">${lang === 'ar' ? 'الطول:' : 'Length:'}</span>
+        <span class="font-black text-emerald-400">${lenStr}</span>
+      </div>`;
+    }
+
+    if (pt.street || pt.district) {
+      html += `<div class="flex items-center justify-between gap-3 px-1 py-0.5">
+        <span class="text-slate-400 font-bold">${lang === 'ar' ? 'الموقع:' : 'Location:'}</span>
+        <span class="font-bold text-slate-200 truncate max-w-[130px]">${[pt.street, pt.district].filter(Boolean).join(' - ')}</span>
+      </div>`;
+    }
+
+    html += `</div>`;
+
+    if (hasIssue) {
+      html += `<div class="mt-2 pt-1.5 border-t border-rose-500/40 text-rose-300 font-black text-[10px] flex items-center gap-1">
+        <span>⚠️</span>
+        <span class="truncate">${pt.issueReason || (lang === 'ar' ? 'ملاحظة تدقيق' : 'Audit Issue')}</span>
+      </div>`;
+    }
+
+    html += `</div>`;
+    return html;
+  };
+
   const detectedIssuePoints = useMemo(() => {
     if (issueItems && issueItems.length > 0) return issueItems;
     return points.filter(isIssuePoint);
@@ -292,9 +438,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           </div>`;
         }
         
-        popupContent += `<div class="flex items-center justify-between text-[9px] text-slate-400 font-bold border-t border-slate-50 pt-2 mt-1">
-          <span>LAT: ${pt.y.toFixed(6)}</span>
-          <span>LON: ${pt.x.toFixed(6)}</span>
+        popupContent += `<div class="flex items-center justify-between text-[9px] text-slate-400 font-bold border-t border-slate-50 pt-2 mt-1" dir="ltr">
+          <span>${pt.y.toFixed(6)}</span>
+          <span>${pt.x.toFixed(6)}</span>
         </div></div>`;
 
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {
@@ -352,6 +498,13 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               });
               const pulseMarker = L.marker(midPt, { icon: pulseIcon }).addTo(layerGroup.current!);
               pulseMarker.bindPopup(popupContent);
+              pulseMarker.bindTooltip(buildTooltipContent(pt, lang, hasIssue), {
+                sticky: true,
+                direction: 'top',
+                offset: [0, -18],
+                opacity: 0.98,
+                className: 'leaflet-custom-tooltip-styled'
+              });
               issueMarkersMap.current.set(pt.id, pulseMarker);
             }
           }
@@ -391,6 +544,26 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         
         if (marker) {
           marker.bindPopup(popupContent);
+          marker.bindTooltip(buildTooltipContent(pt, lang, hasIssue), {
+            sticky: true,
+            direction: 'top',
+            offset: [0, -10],
+            opacity: 0.98,
+            className: 'leaflet-custom-tooltip-styled'
+          });
+
+          const baseWeight = hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : (pt.type === 'Polygon' ? 2 : 4));
+          marker.on('mouseover', function() {
+            if ('setStyle' in this) {
+              (this as any).setStyle({ weight: baseWeight + 3, opacity: 1, fillOpacity: 0.8 });
+            }
+          });
+          marker.on('mouseout', function() {
+            if ('setStyle' in this) {
+              (this as any).setStyle({ weight: baseWeight, opacity: hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8), fillOpacity: hasIssue ? 0.7 : (isOverlap ? 0.7 : 0.5) });
+            }
+          });
+
           layerGroup.current?.addLayer(marker);
           if (!issueMarkersMap.current.has(pt.id)) {
             issueMarkersMap.current.set(pt.id, marker);
@@ -465,6 +638,17 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
   return (
     <div className="relative w-full h-full bg-[#1b2a32] overflow-hidden">
+        <style>{`
+          .leaflet-tooltip.leaflet-custom-tooltip-styled {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+          }
+          .leaflet-tooltip.leaflet-custom-tooltip-styled::before {
+            display: none !important;
+          }
+        `}</style>
         <div ref={mapContainer} className="w-full h-full z-0" />
         
         {/* Floating Top Banner for Issue Control */}
@@ -609,10 +793,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             <div className={cn(
                 "absolute bottom-2 lg:bottom-6 z-[600] px-3 py-1.5 sm:px-4 sm:py-2 bg-white/90 backdrop-blur-md rounded-full shadow-lg border border-slate-200 text-[9px] sm:text-[10px] font-black text-slate-600 flex gap-2 sm:gap-4 animate-in fade-in duration-300 hidden sm:flex",
                 lang === 'ar' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
-            )}>
-                <div className="flex items-center gap-1.5"><Navigation2 className="w-3 h-3 text-accent" /><span>LAT: {cursorCoords.lat.toFixed(6)}</span></div>
+            )} dir="ltr">
+                <div className="flex items-center gap-1.5"><Navigation2 className="w-3 h-3 text-accent" /><span>{cursorCoords.lat.toFixed(6)}</span></div>
                 <div className="w-px h-3 bg-slate-300" />
-                <div className="flex items-center gap-1.5"><span>LON: {cursorCoords.lng.toFixed(6)}</span></div>
+                <div className="flex items-center gap-1.5"><span>{cursorCoords.lng.toFixed(6)}</span></div>
             </div>
         )}
 

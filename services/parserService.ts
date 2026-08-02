@@ -257,6 +257,18 @@ const cleanAttributeValue = (key: string, rawVal: string): string => {
   return rawVal;
 };
 
+export const isKnownAttributeKey = (str: string): boolean => {
+    if (!str) return false;
+    const s = str.toLowerCase().trim().replace(/[\s_#-]/g, '');
+    return (
+        s === 'innerdiameter' || s === 'outerdiameter' || s === 'diameter' || s === 'pipediameter' || s === 'dn' || s === 'dia' || s === 'size' || s === 'pipesize' || s === 'قطر' || s === 'القطر' || s === 'القطرالداخلي' || s === 'القطرالخارجي' ||
+        s === 'zone' || s === 'zonenu' || s === 'zonenumber' || s === 'zoneid' || s === 'district' || s === 'districtname' || s === 'منطقة' || s === 'المنطقة' || s === 'حي' || s === 'الحي' || s === 'النطاق' || s === 'زون' ||
+        s === 'permitno' || s === 'permit' || s === 'permitnumber' || s === 'ركمالترخيص' || s === 'ترخيص' || s === 'رقمترخيص' || s === 'رقمارخصة' ||
+        s === 'segmentid' || s === 'segment' || s === 'segid' || s === 'رقمالشريحة' || s === 'شريحة' ||
+        s === 'drillingtype' || s === 'stage' || s === 'contractor' || s === 'projectname' || s === 'projectid' || s === 'shapelength' || s === 'streetname' || s === 'street' || s === 'lineno' || s === 'maintroute' || s === 'material'
+    );
+};
+
 export const parseDescriptionToAttributes = (desc?: string, attributes: Record<string, string> = {}): Record<string, string> => {
     if (!desc || typeof desc !== 'string') return attributes;
     
@@ -281,6 +293,14 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                 rawKey = cells[1];
                 rawVal = cells[2];
             }
+
+            // Swap if rawVal is a known key or rawKey is value-like
+            if (isKnownAttributeKey(rawVal) && !isKnownAttributeKey(rawKey)) {
+                const tmp = rawKey; rawKey = rawVal; rawVal = tmp;
+            } else if (/^-?\d+(\.\d+)?$/.test(rawKey) && !/^-?\d+(\.\d+)?$/.test(rawVal) && !/^\d+$/.test(rawVal)) {
+                const tmp = rawKey; rawKey = rawVal; rawVal = tmp;
+            }
+
             const lowerK = String(rawKey || '').toLowerCase();
             const lowerV = String(rawVal || '').toLowerCase();
             const isHeader = (lowerK === 'key' && lowerV === 'value') ||
@@ -304,16 +324,22 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
         const text = stripHtml(liMatch[1]);
         const sepIdx = text.indexOf(':') !== -1 ? text.indexOf(':') : text.indexOf('=');
         if (sepIdx > 0) {
-            const k = text.substring(0, sepIdx).trim();
-            const v = text.substring(sepIdx + 1).trim();
+            let k = text.substring(0, sepIdx).trim();
+            let v = text.substring(sepIdx + 1).trim();
+            if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
+                const tmp = k; k = v; v = tmp;
+            }
             if (k && !attributes[k]) {
                 attributes[k] = cleanAttributeValue(k, v);
             }
         } else {
             const spaceIdx = text.indexOf(' ');
             if (spaceIdx > 0) {
-                const k = text.substring(0, spaceIdx).trim();
-                const v = text.substring(spaceIdx + 1).trim();
+                let k = text.substring(0, spaceIdx).trim();
+                let v = text.substring(spaceIdx + 1).trim();
+                if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
+                    const tmp = k; k = v; v = tmp;
+                }
                 if (k && k.length < 50 && !attributes[k]) {
                     attributes[k] = cleanAttributeValue(k, v);
                 }
@@ -344,8 +370,11 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
         else if (equalIdx !== -1) sepIdx = equalIdx;
 
         if (sepIdx > 0 && sepIdx < line.length - 1) {
-            const k = line.substring(0, sepIdx).trim();
-            const v = line.substring(sepIdx + 1).trim();
+            let k = line.substring(0, sepIdx).trim();
+            let v = line.substring(sepIdx + 1).trim();
+            if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
+                const tmp = k; k = v; v = tmp;
+            }
             if (k && k.length < 60 && !attributes[k]) {
                 attributes[k] = cleanAttributeValue(k, v);
             }
@@ -358,14 +387,24 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                 'segment no', 'SEG ID', 'seg id', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم القطاع',
                 'Permit No', 'Drilling type', 'Pipe Diameter', 'Line No', 'Asset Status',
                 'Project Name', 'Project ID', 'Inner Diameter', 'Outer Diameter', 'INNERDIAMETER',
-                'INNER_DIAMETER', 'INNER DIAMETER', 'InnerDiameter'
+                'INNER_DIAMETER', 'INNER DIAMETER', 'InnerDiameter', 'ZONE', 'Zone'
             ];
             
             let matchedMulti = false;
             for (const key of knownMultiWordKeys) {
-                if (line.toLowerCase().startsWith(key.toLowerCase() + ' ')) {
+                const lowerLine = line.toLowerCase();
+                const lowerKey = key.toLowerCase();
+                if (lowerLine.startsWith(lowerKey + ' ') || lowerLine.startsWith(lowerKey + ':') || lowerLine.startsWith(lowerKey + '=')) {
                     const k = key;
-                    const v = line.substring(key.length).trim();
+                    const v = line.substring(key.length).replace(/^[:=\s]+/, '').trim();
+                    if (v && !attributes[k]) {
+                        attributes[k] = cleanAttributeValue(k, v);
+                    }
+                    matchedMulti = true;
+                    break;
+                } else if (lowerLine.endsWith(' ' + lowerKey) || lowerLine.endsWith(':' + lowerKey) || lowerLine.endsWith('=' + lowerKey)) {
+                    const k = key;
+                    const v = line.substring(0, line.length - key.length).replace(/[:=\s]+$/, '').trim();
                     if (v && !attributes[k]) {
                         attributes[k] = cleanAttributeValue(k, v);
                     }
@@ -377,8 +416,11 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
             if (!matchedMulti) {
                 const spaceIdx = line.indexOf(' ');
                 if (spaceIdx > 0 && spaceIdx < line.length - 1) {
-                    const k = line.substring(0, spaceIdx).trim();
-                    const v = line.substring(spaceIdx + 1).trim();
+                    let k = line.substring(0, spaceIdx).trim();
+                    let v = line.substring(spaceIdx + 1).trim();
+                    if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
+                        const tmp = k; k = v; v = tmp;
+                    }
                     if (k && k.length < 50 && v && !attributes[k]) {
                         attributes[k] = cleanAttributeValue(k, v);
                     }

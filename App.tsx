@@ -30,7 +30,7 @@ import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsIn
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
 import { downloadDXF } from './services/dxfExportService';
 import { downloadDataPDF } from './services/pdfExportService';
-import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor } from './services/colorUtils';
+import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
 import { SegmentLengthChart } from './components/SegmentLengthChart';
@@ -611,11 +611,9 @@ const App: React.FC = () => {
                 }
 
                 let hasDiameter = false;
-                let foundDiameterAttribute = false;
 
                 for (const [key, val] of Object.entries(mergedAttrs)) {
                     if (isDiameterKey(key)) {
-                        foundDiameterAttribute = true;
                         if (!isInvalidVal(val)) {
                             const numMatch = String(val).trim().match(/(\d+(\.\d+)?)/);
                             if (numMatch && parseFloat(numMatch[1]) > 0) {
@@ -626,32 +624,29 @@ const App: React.FC = () => {
                     }
                 }
 
-                if (!foundDiameterAttribute && !hasDiameter) {
+                if (!hasDiameter) {
                     const diaUnitRegex = /\b(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة|بوصه)\b/i;
-                    const diaPrefixRegex = /(?:dn|ø|dia|diameter|size|pipe_size|قطر|القطر|مقاس|سمك)[ \t:=_#-]*(\d+(\.\d+)?)\b/i;
+                    const diaPrefixRegex = /(?:dn|ø|dia|diameter|innerdiameter|outerdiameter|size|pipe_size|قطر|القطر|مقاس|سمك)[ \t:=_#-]*(\d+(\.\d+)?)\b/i;
+                    const diaPostfixRegex = /(\d+(\.\d+)?)\s*(?:dn|ø|dia|diameter|innerdiameter|outerdiameter|size|pipe_size|قطر|القطر|مقاس|سمك)\b/i;
 
-                    const layerAndName = `${pt.layer || ''} ${pt.name || ''}`;
-                    let m = layerAndName.match(diaUnitRegex) || layerAndName.match(diaPrefixRegex);
+                    const fullText = `${pt.layer || ''} ${pt.name || ''} ${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
+                    let m = fullText.match(diaUnitRegex) || fullText.match(diaPrefixRegex) || fullText.match(diaPostfixRegex);
                     if (m && parseFloat(m[1]) > 0) {
                         hasDiameter = true;
                     }
                 }
 
                 let hasZone = false;
-                let foundZoneAttribute = false;
 
                 if (!isInvalidVal(pt.district)) {
                     hasZone = true;
-                    foundZoneAttribute = true;
                 } else if (!isInvalidVal((pt as any).zone)) {
                     hasZone = true;
-                    foundZoneAttribute = true;
                 }
 
                 if (!hasZone) {
                     for (const [key, val] of Object.entries(mergedAttrs)) {
                         if (isZoneKey(key)) {
-                            foundZoneAttribute = true;
                             if (!isInvalidVal(val)) {
                                 hasZone = true;
                                 break;
@@ -660,10 +655,11 @@ const App: React.FC = () => {
                     }
                 }
 
-                if (!foundZoneAttribute && !hasZone) {
+                if (!hasZone) {
                     const zonePrefixRegex = /(?:zone|district|neighborhood|suburb|sector|area|block|منطقة|منطقه|المنطقة|حي|الحي|قطاع|مخطط|عقد|مجاور|مجاورة|النطاق)[ \t:=_#-]*([a-zA-Z0-9\u0600-\u06FF]+)/i;
-                    const layerAndName = `${pt.layer || ''} ${pt.name || ''}`;
-                    let m = layerAndName.match(zonePrefixRegex);
+                    const zonePostfixRegex = /([a-zA-Z0-9\u0600-\u06FF]+)\s*(?:zone|district|neighborhood|suburb|sector|area|block|منطقة|منطقه|المنطقة|حي|الحي|قطاع|مخطط|عقد|مجاور|مجاورة|النطاق)/i;
+                    const fullText = `${pt.layer || ''} ${pt.name || ''} ${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
+                    let m = fullText.match(zonePrefixRegex) || fullText.match(zonePostfixRegex);
                     if (m && !isInvalidVal(m[1])) {
                         hasZone = true;
                     }
@@ -677,8 +673,12 @@ const App: React.FC = () => {
                     if (!hasDiameter) missingParts.push(lang === 'ar' ? 'القطر' : 'Diameter');
                     if (!hasZone) missingParts.push(lang === 'ar' ? 'المنطقة' : 'Zone');
                     
+                    const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+                    const origLayer = (pt as any).originalLayer || pt.layer;
                     const issuePt: GeoPoint = {
                         ...pt,
+                        originalColor: origColor,
+                        originalLayer: origLayer,
                         color: '#ef4444',
                         isIssue: true,
                         issueReason: lang === 'ar' ? `عنصر ينقصه (${missingParts.join('، ')})` : `Missing (${missingParts.join(', ')})`,
@@ -689,7 +689,13 @@ const App: React.FC = () => {
                     return issuePt;
                 }
                 
-                return pt;
+                const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+                const origLayer = (pt as any).originalLayer || pt.layer;
+                return {
+                    ...pt,
+                    originalColor: origColor,
+                    originalLayer: origLayer
+                };
             });
         };
 
@@ -850,17 +856,24 @@ const App: React.FC = () => {
             foundVal = extractSegmentIdFromDescription(pt.description);
           }
 
+          const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+          const origLayer = (pt as any).originalLayer || pt.layer;
+
           if (foundVal) {
             matchedCount++;
             uniqueSegmentIdsSet.add(foundVal.trim());
             return {
               ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
               color: '#9000FF'
             };
           }
 
           const issuePt: GeoPoint = {
             ...pt,
+            originalColor: origColor,
+            originalLayer: origLayer,
             color: '#ef4444',
             isIssue: true,
             issueReason: lang === 'ar' ? 'ينقصه رقم الشريحة (Segment ID)' : 'Missing Segment ID'
@@ -1021,17 +1034,24 @@ const App: React.FC = () => {
             foundVal = extractPermitNoFromDescription(pt.description);
           }
 
+          const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+          const origLayer = (pt as any).originalLayer || pt.layer;
+
           if (foundVal) {
             matchedCount++;
             uniquePermitSet.add(foundVal.trim());
             return {
               ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
               color: '#FF6D00'
             };
           }
 
           const issuePt: GeoPoint = {
             ...pt,
+            originalColor: origColor,
+            originalLayer: origLayer,
             color: '#ef4444',
             isIssue: true,
             issueReason: lang === 'ar' ? 'ينقصه رقم الترخيص (Permit No)' : 'Missing Permit No'
@@ -1175,6 +1195,167 @@ const App: React.FC = () => {
         { labelAr: 'تحذيرات (Warnings)', labelEn: 'Warnings', value: warningsCount, colorClass: warningsCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400' }
       ]
     });
+  };
+
+  const verifyApprovedColors = () => {
+    setLoading(true);
+    setProgressPercent(10);
+    setStatusMessage(lang === 'ar' ? 'جاري فحص الألوان المخالفة للألوان المعتمدة...' : 'Auditing non-compliant standard colors...');
+
+    setTimeout(() => {
+      let totalChecked = 0;
+      let nonCompliantCount = 0;
+      let compliantCount = 0;
+      const nonCompliantList: GeoPoint[] = [];
+
+      const processPoints = (pts: GeoPoint[]) => {
+        return pts.map(pt => {
+          if (!pt || pt.isDuplicateOverlay) return pt;
+          if (!isLineElement(pt)) return pt;
+
+          totalChecked++;
+          const ptColor = pt.color || '#DCB13C';
+
+          let minDistance = Infinity;
+          let nearestCat = STATUS_CATEGORIES[0];
+
+          for (const cat of STATUS_CATEGORIES) {
+            const dist = colorDistance(ptColor, cat.color);
+            if (dist < minDistance) {
+              minDistance = dist;
+              nearestCat = cat;
+            }
+          }
+
+          const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+          const origLayer = (pt as any).originalLayer || pt.layer;
+
+          if (minDistance > 60) {
+            nonCompliantCount++;
+            const issuePt: GeoPoint = {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#ef4444',
+              isIssue: true,
+              issueReason: lang === 'ar'
+                ? `لون مخالف للمواصفات (${ptColor}) - الأقرب: ${nearestCat.nameAr}`
+                : `Non-compliant color (${ptColor}) - Nearest: ${nearestCat.nameEn}`
+            };
+            nonCompliantList.push(issuePt);
+            return issuePt;
+          } else {
+            compliantCount++;
+            return {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer
+            };
+          }
+        });
+      };
+
+      if (globalPoints.length > 0) {
+        setGlobalPoints(processPoints(globalPoints));
+      }
+      if (plannedStreets.length > 0) {
+        setPlannedStreets(processPoints(plannedStreets));
+      }
+
+      setDataId(`color-check-${Date.now()}`);
+      setProgressPercent(100);
+      setLoading(false);
+      setProgressPercent(null);
+
+      setCheckResultModal({
+        type: 'essential',
+        titleAr: 'نتائج فحص الألوان المخالفة للألوان المعتمدة',
+        titleEn: 'Non-Compliant Colors Audit',
+        icon: 'essential',
+        totalChecked,
+        issuesCount: nonCompliantCount,
+        successCount: compliantCount,
+        badgeTextAr: nonCompliantCount > 0 ? `وُجدت ${nonCompliantCount} مشكلة (ألوان مخالفة)` : 'جميع العناصر ذات ألوان معتمدة بالكامل',
+        badgeTextEn: nonCompliantCount > 0 ? `${nonCompliantCount} Non-compliant colors found` : 'All elements match approved colors',
+        detailsAr: nonCompliantCount > 0
+          ? `تم فحص ${totalChecked} عنصر خطي، وتبين وجود ${nonCompliantCount} عنصر بألوان غير معتمدة (مخالفة للمواصفات الخمس المعتمدة: منفذ مياه، منفذ صرف، جاري العمل، متبقي، ملغى). تم إبرازها وتحديد مواقعها على الخريطة.`
+          : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وجميع ألوانها مطابقة للألوان المعتمدة بمشروع المياه والصرف الصحي.`,
+        detailsEn: nonCompliantCount > 0
+          ? `Audited ${totalChecked} line elements. Found ${nonCompliantCount} elements with non-compliant colors outside the standard approved categories. Highlighted on map.`
+          : `Audited ${totalChecked} line elements. All elements 100% match approved project colors.`,
+        issueItems: nonCompliantList,
+        stats: [
+          { labelAr: 'إجمالي العناصر الخطية المفحوصة', labelEn: 'Total Audited Line Elements', value: totalChecked, colorClass: 'text-white' },
+          { labelAr: 'عناصر بألوان معتمدة', labelEn: 'Approved Compliant Colors', value: compliantCount, colorClass: 'text-emerald-400 font-black' },
+          { labelAr: 'عناصر بألوان مخالفة', labelEn: 'Non-compliant Colors', value: nonCompliantCount, colorClass: nonCompliantCount > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' }
+        ]
+      });
+
+      if (nonCompliantCount > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم فحص وإبراز ${nonCompliantCount} عنصراً بألوان مخالفة للألوان المعتمدة باللون الأحمر على الخريطة.`
+            : `Highlighted ${nonCompliantCount} line elements with non-compliant colors in red on map.`
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? 'جميع الألوان في الخريطة مطابقة للألوان المعتمدة كلياً.'
+            : 'All colors on the map are fully compliant with approved standards.'
+        );
+      }
+      setTimeout(() => setStatusMessage(''), 5000);
+    }, 400);
+  };
+
+  const clearAuditResults = () => {
+    let clearedCount = 0;
+
+    const resetPoints = (pts: GeoPoint[]) => {
+      return pts.map(pt => {
+        if (!pt) return pt;
+        const originalColor = (pt as any).originalColor || pt.color;
+        const originalLayer = (pt as any).originalLayer || (pt.layer ? pt.layer.replace('_MISSING_ATTRS', '') : pt.layer);
+
+        if (pt.isIssue || pt.issueReason || (pt.color && pt.color !== originalColor) || (pt.layer && pt.layer.includes('_MISSING_ATTRS'))) {
+          clearedCount++;
+        }
+
+        const cleanPt: GeoPoint = {
+          ...pt,
+          isIssue: false,
+          issueReason: undefined,
+          color: originalColor,
+          layer: originalLayer
+        };
+
+        if (cleanPt.description && cleanPt.description.includes('[MISSING:')) {
+          cleanPt.description = cleanPt.description.replace(/\n?\[MISSING:[^\]]+\]/g, '').trim();
+        }
+
+        return cleanPt;
+      });
+    };
+
+    if (globalPoints && globalPoints.length > 0) {
+      setGlobalPoints(resetPoints(globalPoints));
+    }
+    if (plannedStreets && plannedStreets.length > 0) {
+      setPlannedStreets(resetPoints(plannedStreets));
+    }
+
+    setCheckResultModal(null);
+    setShowIssuesOnly(false);
+    setActiveIssueItems([]);
+    setFocusedPoint(null);
+    setDataId(`clear-audit-${Date.now()}`);
+
+    setStatusMessage(
+      lang === 'ar'
+        ? 'تمت إزالة نتائج الفحص والتظليل وإعادة الخريطة إلى حالتها الأصلية بنجاح.'
+        : 'All audit highlights cleared and map restored to original state successfully.'
+    );
+    setTimeout(() => setStatusMessage(''), 4000);
   };
 
   const getPointsToCheck = (): GeoPoint[] => {
@@ -4851,6 +5032,14 @@ const App: React.FC = () => {
                                 <ShieldCheck className="w-6 h-6 group-hover:scale-110 transition-transform text-emerald-400 group-hover:text-black" />
                                 {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC)' : 'Saudi Building Code (SBC) Compliance Audit'}
                             </button>
+                            <button onClick={verifyApprovedColors} className="w-full bg-[#3d2a0b] border border-[#FFD700]/50 text-[#FFE87C] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FFD700] hover:text-black transition-all text-sm group">
+                                <Palette className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FFD700] group-hover:text-black" />
+                                {lang === 'ar' ? 'فحص وإبراز الألوان المخالفة للألوان المعتمدة' : 'Highlight Non-Compliant Colors'}
+                            </button>
+                            <button onClick={clearAuditResults} className="w-full bg-[#3d0b16] border border-rose-500/50 text-rose-200 font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-rose-600 hover:text-white transition-all text-sm group">
+                                <RotateCcw className="w-6 h-6 group-hover:-rotate-90 transition-transform text-rose-400 group-hover:text-white" />
+                                {lang === 'ar' ? 'إزالة نتائج الفحص وإلغاء التظليل (إعادة الخريطة)' : 'Clear Audit Results & Reset Map Highlights'}
+                            </button>
 
                             {segmentIdAnalysis && segmentIdAnalysis.totalElements > 0 && (
                               <div className="bg-[#120a21]/90 p-6 rounded-[2.5rem] border border-[#9000FF]/40 shadow-2xl space-y-5 animate-in fade-in duration-500 my-4">
@@ -6613,6 +6802,7 @@ const App: React.FC = () => {
               setShowIssuesOnly(true);
               setDataId(`show-issues-${Date.now()}`);
             }}
+            onClearAudit={clearAuditResults}
          />
       </main>
       </div>
@@ -6627,7 +6817,8 @@ export const CheckResultModalPopup: React.FC<{
   setActiveTab: (tab: any) => void;
   onFocusIssuePoint?: (pt: GeoPoint) => void;
   onShowAllIssuesOnMap?: (issueItems?: GeoPoint[]) => void;
-}> = ({ checkResultModal, setCheckResultModal, lang, setActiveTab, onFocusIssuePoint, onShowAllIssuesOnMap }) => {
+  onClearAudit?: () => void;
+}> = ({ checkResultModal, setCheckResultModal, lang, setActiveTab, onFocusIssuePoint, onShowAllIssuesOnMap, onClearAudit }) => {
   if (!checkResultModal) return null;
 
   const handleLocateAll = () => {
@@ -6805,7 +6996,19 @@ export const CheckResultModalPopup: React.FC<{
             </button>
           ) : <div />}
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {onClearAudit && (
+              <button
+                onClick={() => {
+                  onClearAudit();
+                }}
+                className="px-5 py-3 rounded-2xl bg-rose-500/20 hover:bg-rose-500/40 text-rose-200 border border-rose-500/40 text-xs font-black transition-all flex items-center gap-2 active:scale-95"
+                title={lang === 'ar' ? 'إزالة نتائج الفحص والتظليل' : 'Clear Audit Highlights'}
+              >
+                <RotateCcw className="w-4 h-4 text-rose-400" />
+                <span>{lang === 'ar' ? 'إزالة نتائج الفحص' : 'Clear Audit Highlights'}</span>
+              </button>
+            )}
             {checkResultModal.type === 'sbc' && checkResultModal.issuesCount > 0 && (
               <button
                 onClick={() => {
