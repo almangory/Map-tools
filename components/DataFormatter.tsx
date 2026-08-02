@@ -19,7 +19,7 @@ const STANDARD_COLORS = [
   { name: 'Wastewater', hex: '#097138' },
   { name: 'Work in Progress', hex: '#ffea00' },
   { name: 'Remaining Works', hex: '#a52714' },
-  { name: 'Cancelled Works', hex: '#D86DCD' }
+  { name: 'Cancelled Works', hex: '#F48FB1' }
 ];
 
 function hexToRgb(hex: string) {

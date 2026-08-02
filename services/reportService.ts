@@ -309,7 +309,7 @@ export const generateAnalysisPPTX = async (
       executed_sewer: { order: 2, nameAr: 'منفذ - صرف', nameEn: 'Executed - Sewer', color: '097138' },
       in_progress: { order: 3, nameAr: 'جاري العمل', nameEn: 'Work in Progress', color: 'FFEA00' },
       remaining: { order: 4, nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: 'A52714' },
-      cancelled: { order: 5, nameAr: 'خطوط تم الغائها', nameEn: 'Cancelled Works', color: 'D86DCD' }
+      cancelled: { order: 5, nameAr: 'خطوط تم الغائها', nameEn: 'Cancelled Works', color: 'F48FB1' }
     };
 
     const getPermitStatus = (item: any) => {
@@ -959,7 +959,7 @@ export const generateAnalysisPDF = (
         executed_sewer: { order: 2, nameEn: 'Executed - Sewer', colorHex: '#097138' },
         in_progress: { order: 3, nameEn: 'Work in Progress', colorHex: '#FFEA00' },
         remaining: { order: 4, nameEn: 'Remaining Work', colorHex: '#A52714' },
-        cancelled: { order: 5, nameEn: 'Cancelled Works', colorHex: '#D86DCD' }
+        cancelled: { order: 5, nameEn: 'Cancelled Works', colorHex: '#F48FB1' }
       };
 
       const getPermitPdfStatus = (item: any) => {

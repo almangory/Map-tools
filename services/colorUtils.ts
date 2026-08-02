@@ -72,7 +72,7 @@ export const STATUS_CATEGORIES: StatusCategory[] = [
   { key: 'executed_sewer', nameAr: 'منفذ - صرف', nameEn: 'Executed - Sewer', color: '#097138' },
   { key: 'in_progress', nameAr: 'جاري العمل', nameEn: 'Work in Progress', color: '#FFEA00' },
   { key: 'remaining', nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: '#A52714' },
-  { key: 'cancelled', nameAr: 'خطوط تم الغائها', nameEn: 'Cancelled Works', color: '#D86DCD' },
+  { key: 'cancelled', nameAr: 'خطوط تم الغائها', nameEn: 'Cancelled Works', color: '#F48FB1' },
 ];
 
 export const matchStatusByColor = (colorHex: string): StatusCategory => {
