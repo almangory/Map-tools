@@ -29,6 +29,263 @@ export interface ValidationIssue {
   locationStr?: string;
 }
 
+// Helper to extract pipe diameter in mm
+export const extractDiameterMm = (pt: GeoPoint): number | null => {
+  const text = `${pt.layer || ''} ${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''} ${JSON.stringify(pt.attributes || {})}`;
+  const mmMatch = text.match(/(?:DN|Ø|\b)?\s*(\d{2,4})\s*(?:MM|مم)/i);
+  if (mmMatch) return parseInt(mmMatch[1], 10);
+
+  const inchMatch = text.match(/(\d{1,2})\s*(?:"|INCH|بوصة|بوصه)/i);
+  if (inchMatch) return Math.round(parseInt(inchMatch[1], 10) * 25.4);
+
+  if (pt.attributes) {
+    for (const [key, val] of Object.entries(pt.attributes)) {
+      if (/dia|diameter|size|dn|قطر/i.test(key)) {
+        const num = parseFloat(val);
+        if (!isNaN(num)) {
+          return num < 50 ? Math.round(num * 25.4) : num;
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+// Helper to extract pipe depth in meters
+export const extractDepthMeters = (pt: GeoPoint): number | null => {
+  if (pt.attributes) {
+    for (const [key, val] of Object.entries(pt.attributes)) {
+      if (/depth|عمق|h_cover|cover/i.test(key)) {
+        const num = parseFloat(val);
+        if (!isNaN(num)) return num;
+      }
+    }
+  }
+  const text = `${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
+  const depthMatch = text.match(/(?:depth|عمق)\s*[:=]?\s*(\d+(?:\.\d+)?)/i);
+  if (depthMatch) return parseFloat(depthMatch[1]);
+
+  if (pt.z !== undefined && pt.z < 0) {
+    return Math.abs(pt.z);
+  }
+
+  return null;
+};
+
+// Helper for Euclidean 2D distance
+export const getDistanceMeters = (p1: { x: number; y: number }, p2: { x: number; y: number }): number => {
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+  const distSq = dx * dx + dy * dy;
+
+  if (Math.abs(p1.x) <= 180 && Math.abs(p1.y) <= 90) {
+    const R = 6371000;
+    const lat1 = (p1.y * Math.PI) / 180;
+    const lat2 = (p2.y * Math.PI) / 180;
+    const dLat = ((p2.y - p1.y) * Math.PI) / 180;
+    const dLon = ((p2.x - p1.x) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  return Math.sqrt(distSq);
+};
+
+export function performSbcAuditEngine(points: GeoPoint[]): ValidationIssue[] {
+  const sewerPoints: GeoPoint[] = [];
+  const waterPoints: GeoPoint[] = [];
+
+  points.forEach(pt => {
+    const layerUpper = (pt.layer || '').toUpperCase();
+    const descUpper = (pt.description || '').toUpperCase();
+    const attrStr = JSON.stringify(pt.attributes || {}).toUpperCase();
+    const fullText = `${layerUpper} ${descUpper} ${attrStr} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
+
+    if (
+      fullText.includes('SEWER') ||
+      fullText.includes('SAN') ||
+      fullText.includes('WW') ||
+      fullText.includes('DRAIN') ||
+      fullText.includes('صرف') ||
+      fullText.includes('مجاري')
+    ) {
+      sewerPoints.push(pt);
+    } else if (
+      fullText.includes('WATER') ||
+      fullText.includes('WTR') ||
+      fullText.includes('POTABLE') ||
+      fullText.includes('MOW') ||
+      fullText.includes('ماء') ||
+      fullText.includes('مياه') ||
+      fullText.includes('شرب')
+    ) {
+      waterPoints.push(pt);
+    }
+  });
+
+  const issues: ValidationIssue[] = [];
+
+  sewerPoints.forEach((pt, idx) => {
+    const dia = extractDiameterMm(pt);
+    const depth = extractDepthMeters(pt);
+    const isMainTrunk = (pt.layer || '').toUpperCase().includes('TRUNK') ||
+                        (pt.layer || '').toUpperCase().includes('MAIN') ||
+                        (dia && dia >= 400);
+
+    if (isMainTrunk) {
+      if (dia !== null && dia < 400) {
+        issues.push({
+          id: `sewer-main-dia-${idx}`,
+          type: 'SEWER_MAIN',
+          severity: 'warning',
+          titleAr: 'قطر خط الصرف الرئيسي الناقل أقل من الكود السعودي',
+          titleEn: 'Main Trunk Sewer Diameter Below SBC Standard',
+          descriptionAr: `القطر المحدد (${dia} مم) أقل من النطاق الدارج للخطوط الناقلة في الكود السعودي.`,
+          descriptionEn: `Diameter (${dia} mm) is below standard SBC trunk line range.`,
+          actualValue: `${dia} mm`,
+          expectedValue: '400 - 1000+ mm',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+      if (depth !== null && depth < 3.0) {
+        issues.push({
+          id: `sewer-main-depth-${idx}`,
+          type: 'SEWER_MAIN',
+          severity: 'error',
+          titleAr: 'عمق خط الصرف الرئيسي الناقل ضحيل وفق الكود السعودي',
+          titleEn: 'Main Sewer Line Depth Too Shallow per SBC',
+          descriptionAr: `العمق الحالي (${depth.toFixed(2)} م) أقل من الحد الأدنى للخطوط الرئيسية.`,
+          descriptionEn: `Current depth (${depth.toFixed(2)} m) is shallower than standard SBC main line depth.`,
+          actualValue: `${depth.toFixed(2)} m`,
+          expectedValue: '3.0m - 7.0m+',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+    } else {
+      if (dia !== null && (dia < 200 || dia > 300)) {
+        issues.push({
+          id: `sewer-sub-dia-${idx}`,
+          type: 'SEWER_SUB',
+          severity: 'warning',
+          titleAr: 'قطر خط الصرف الفرعي خارج نطاق الكود السعودي النموذجي',
+          titleEn: 'Sub-main Sewer Line Diameter Out of Typical SBC Range',
+          descriptionAr: `القطر الحالي (${dia} مم) خارج النطاق النموذجي للخطوط الفرعية.`,
+          descriptionEn: `Diameter (${dia} mm) is outside typical sub-main range.`,
+          actualValue: `${dia} mm`,
+          expectedValue: '200 - 300 mm',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+      if (depth !== null && (depth < 1.5 || depth > 3.0)) {
+        issues.push({
+          id: `sewer-sub-depth-${idx}`,
+          type: 'SEWER_SUB',
+          severity: 'warning',
+          titleAr: 'عمق حفر خط الصرف الفرعي خارج حدود الكود النموذجية',
+          titleEn: 'Sub-main Sewer Depth Outside Standard SBC Range',
+          descriptionAr: `عمق الحفر (${depth.toFixed(2)} م) خارج النطاق النموذجي.`,
+          descriptionEn: `Depth (${depth.toFixed(2)} m) is outside typical SBC range.`,
+          actualValue: `${depth.toFixed(2)} m`,
+          expectedValue: '1.5m - 3.0m',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+    }
+  });
+
+  waterPoints.forEach((pt, idx) => {
+    const dia = extractDiameterMm(pt);
+    const depth = extractDepthMeters(pt);
+    const isMainTrans = (pt.layer || '').toUpperCase().includes('MAIN') ||
+                        (pt.layer || '').toUpperCase().includes('TRANS') ||
+                        (dia && dia >= 300);
+
+    if (isMainTrans) {
+      if (dia !== null && dia < 300) {
+        issues.push({
+          id: `water-main-dia-${idx}`,
+          type: 'WATER_MAIN',
+          severity: 'warning',
+          titleAr: 'قطر خط مياه الشرب الرئيسي الناقل أقل من المواصفات',
+          titleEn: 'Main Water Transmission Diameter Below Specs',
+          descriptionAr: `القطر المحدد (${dia} مم) أقل من الأقطار الكودية لخطوط النقل.`,
+          descriptionEn: `Diameter (${dia} mm) is less than standard main transmission diameter.`,
+          actualValue: `${dia} mm`,
+          expectedValue: '300 - 1000+ mm',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+    } else {
+      if (dia !== null && (dia < 110 || dia > 160)) {
+        issues.push({
+          id: `water-sub-dia-${idx}`,
+          type: 'WATER_SUB',
+          severity: 'warning',
+          titleAr: 'قطر خط التوزيع الفرعي للمياه خارج نطاق الكود',
+          titleEn: 'Water Distribution Pipe Diameter Out of SBC Range',
+          descriptionAr: `القطر الحالي (${dia} مم) خارج النطاق الدارج لخطوط التوزيع الفرعية.`,
+          descriptionEn: `Diameter (${dia} mm) is outside typical distribution range.`,
+          actualValue: `${dia} mm`,
+          expectedValue: '110 - 160 mm',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+      if (depth !== null && (depth < 0.8 || depth > 1.2)) {
+        issues.push({
+          id: `water-sub-depth-${idx}`,
+          type: 'WATER_SUB',
+          severity: 'warning',
+          titleAr: 'عمق خط توزيع المياه الفرعي لا يطابق اشتراط الكود',
+          titleEn: 'Water Distribution Pipe Depth Outside SBC Range',
+          descriptionAr: `عمق الحفر (${depth.toFixed(2)} م) يختلف عن العمق القريب المعتمد تحت الأرصفة.`,
+          descriptionEn: `Depth (${depth.toFixed(2)} m) differs from SBC standard depth under sidewalk.`,
+          actualValue: `${depth.toFixed(2)} m`,
+          expectedValue: '0.8m - 1.2m',
+          points: [pt],
+          locationStr: `X: ${pt.x.toFixed(2)}, Y: ${pt.y.toFixed(2)}`,
+        });
+      }
+    }
+  });
+
+  if (waterPoints.length > 0 && sewerPoints.length > 0) {
+    const sampleWater = waterPoints.slice(0, 150);
+    const sampleSewer = sewerPoints.slice(0, 150);
+    sampleWater.forEach(wPt => {
+      sampleSewer.forEach(sPt => {
+        const dist = getDistanceMeters(wPt, sPt);
+        if (dist > 0.05 && dist < 3.0) {
+          issues.push({
+            id: `horiz-sep-${wPt.id || sPt.id}`,
+            type: 'HORIZ_SEPARATION',
+            severity: 'error',
+            titleAr: 'مخالفة مسافة الفصل الأفقية الإلزامية بين المياه والصرف (< 3 أمتار)',
+            titleEn: 'Mandatory Horizontal Separation Violation (< 3.0 m)',
+            descriptionAr: `مسافة الفصل الأفقية بين خط مياه الشرب وخط الصرف الصحي أقل من 3 أمتار. المسافة الحالية: ${dist.toFixed(2)} م.`,
+            descriptionEn: `Horizontal separation between water and sewer mains is less than 3.0 m. Current: ${dist.toFixed(2)} m.`,
+            actualValue: `${dist.toFixed(2)} m`,
+            expectedValue: '≥ 3.0 m',
+            points: [wPt, sPt],
+            locationStr: `Water: (${wPt.x.toFixed(2)}, ${wPt.y.toFixed(2)}) | Sewer: (${sPt.x.toFixed(2)}, ${sPt.y.toFixed(2)})`,
+          });
+        }
+      });
+    });
+  }
+
+  return issues;
+}
+
 export const SbcValidator: React.FC<SbcValidatorProps> = ({
   points,
   lang,

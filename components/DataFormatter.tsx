@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus } from 'lucide-react';
+import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck } from 'lucide-react';
 import { GeoPoint, OverlapResult } from '../types';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
@@ -92,6 +92,10 @@ const TEMPLATES = {
   grids: {
     name: 'شبكيات (Grids)',
     fields: ["اسم المشروع", "اسم المقاول", "الحي", "حالة الشبكية", "اسم الشارع", "نوع الشبكية", "اسم الشبكية التعاقدي", "وصف الاعمال", "مدة العزل بالساعة", "تاريخ بدأ التنفيذ حسب البرنامج الزمني", "تاريخ البدأ بعد التنسيق مع الجهات", "التاريخ المتوقع للانتهاء", "طول الشبكية", "اعمق نقطة للشبكية", "عرض الشبكية", "الادارة الاشرافية", "الملاحظات"]
+  },
+  stowage_sites: {
+    name: 'مواقع التشوين (Stowage Sites)',
+    fields: ["اسم المشروع", "اسم المقاول", "PO", "نوع المشروع", "البرنامج", "تصنيف مواد التشوين", "هل يوجد سكن عمال", "اسم امين المستودع", "رقم تواصل", "هل تم التخصيص", "ملاحظات"]
   }
 };
 
@@ -104,6 +108,8 @@ interface Props {
   geocodingMode?: 'accurate' | 'fast';
   onVerifyMissingAttributes?: () => void;
   onVerifyPermitSegment?: () => void;
+  onVerifyPermitNo?: () => void;
+  onVerifySbc?: () => void;
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
 }
 
@@ -353,10 +359,10 @@ export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
   );
 };
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment }: Props) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc }: Props) => {
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
-  const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids'>('pipes');
+  const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('pipes');
   const [networkType, setNetworkType] = useState<'water' | 'wastewater'>('water');
   const [keepFolders, setKeepFolders] = useState(true);
   const [retainUnmapped, setRetainUnmapped] = useState(true);
@@ -549,7 +555,8 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     polygons: [...TEMPLATES.polygons.fields],
     violations: [...TEMPLATES.violations.fields],
     boundaries: [...TEMPLATES.boundaries.fields],
-    grids: [...TEMPLATES.grids.fields]
+    grids: [...TEMPLATES.grids.fields],
+    stowage_sites: [...TEMPLATES.stowage_sites.fields]
   });
 
   
@@ -783,7 +790,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
   const getBaseFilename = () => {
     const prefix = networkType === 'water' ? 'Water' : 'Wastewater';
-    const suffix = targetTemplate === 'pipes' ? 'Lines' : targetTemplate === 'points' ? 'Points' : targetTemplate === 'stations' ? 'Stations' : targetTemplate === 'boundaries' ? 'Boundaries' : targetTemplate === 'grids' ? 'Grids' : targetTemplate === 'violations' ? 'Violations' : 'Polygons';
+    const suffix = targetTemplate === 'pipes' ? 'Lines' : targetTemplate === 'points' ? 'Points' : targetTemplate === 'stations' ? 'Stations' : targetTemplate === 'boundaries' ? 'Boundaries' : targetTemplate === 'grids' ? 'Grids' : targetTemplate === 'violations' ? 'Violations' : targetTemplate === 'stowage_sites' ? 'StowageSites' : 'Polygons';
     return `${prefix}_${suffix}_Formatted`;
   };
 
@@ -893,6 +900,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                   { id: 'boundaries', label: TEMPLATES.boundaries.name },
                   { id: 'violations', label: TEMPLATES.violations.name },
                   { id: 'grids', label: TEMPLATES.grids.name },
+                  { id: 'stowage_sites', label: TEMPLATES.stowage_sites.name },
                 ].map((tItem) => (
                   <button
                     key={tItem.id}
@@ -1286,7 +1294,19 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
           {onVerifyPermitSegment && (
             <button onClick={onVerifyPermitSegment} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group mt-3">
                 <Layers className="w-5 h-5 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
-                {lang === 'ar' ? 'فحص وتلوين عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
+                {lang === 'ar' ? 'فحص عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
+            </button>
+          )}
+          {onVerifyPermitNo && (
+            <button onClick={onVerifyPermitNo} className="w-full bg-[#3d1e0b] border border-[#FF6D00]/50 text-[#ffc499] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF6D00] hover:text-white transition-all text-sm group mt-3">
+                <FileText className="w-5 h-5 group-hover:scale-110 transition-transform text-[#FF6D00] group-hover:text-white" />
+                {lang === 'ar' ? 'فحص رقم الترخيص (Permit No) برتقالي' : 'Highlight Permit No (Neon Orange)'}
+            </button>
+          )}
+          {onVerifySbc && (
+            <button onClick={onVerifySbc} className="w-full bg-[#0b281d] border border-emerald-500/50 text-emerald-300 font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-emerald-500 hover:text-black transition-all text-sm group mt-3">
+                <ShieldCheck className="w-5 h-5 group-hover:scale-110 transition-transform text-emerald-400 group-hover:text-black" />
+                {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC - تحت التطوير)' : 'Saudi Building Code (SBC) Compliance Audit (In Dev)'}
             </button>
           )}
 

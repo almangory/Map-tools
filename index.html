@@ -191,16 +191,5 @@
   <body class="bg-slate-50 text-slate-900 antialiased h-screen overflow-hidden transition-colors duration-500">
     <div id="root" class="h-full"></div>
   <script type="module" src="/index.tsx"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').then((reg) => {
-          console.log('GeoGIS Pro Service Worker registered successfully:', reg.scope);
-        }).catch((err) => {
-          console.log('Service Worker registration failed:', err);
-        });
-      });
-    }
-  </script>
-</body>
+  </body>
 </html>

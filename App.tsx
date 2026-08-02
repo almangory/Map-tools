@@ -38,7 +38,7 @@ import { PermitLengthChart } from './components/PermitLengthChart';
 import { FileComparator } from './components/FileComparator';
 import { MapClassifier } from './components/MapClassifier';
 import { SegmentVaultManager } from './components/SegmentVaultManager';
-import { SbcValidator } from './components/SbcValidator';
+import { SbcValidator, performSbcAuditEngine } from './components/SbcValidator';
 import { InstallPwaModal } from './components/InstallPwaModal';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
@@ -377,6 +377,23 @@ const App: React.FC = () => {
   const lastAlertedFileRef = useRef<string>('');
   const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>(() => loadSavedPreference('globalBaseMap', 'satellite'));
 
+  // Validation Check Popup Modal state
+  const [checkResultModal, setCheckResultModal] = useState<{
+    type: 'essential' | 'segment' | 'permit' | 'sbc';
+    titleAr: string;
+    titleEn: string;
+    icon: 'essential' | 'segment' | 'permit' | 'sbc';
+    totalChecked: number;
+    issuesCount: number;
+    successCount: number;
+    uniqueCount?: number;
+    badgeTextAr: string;
+    badgeTextEn: string;
+    detailsAr: string;
+    detailsEn: string;
+    stats: Array<{ labelAr: string; labelEn: string; value: number | string; colorClass: string }>;
+  } | null>(null);
+
   // PWA Mobile App Installation state
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallModal, setShowInstallModal] = useState(false);
@@ -414,7 +431,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  
   const verifyEssentialAttributes = () => {
     setLoading(true);
     setProgressPercent(10);
@@ -422,7 +438,10 @@ const App: React.FC = () => {
     
     setTimeout(() => {
         setProgressPercent(50);
+        let totalChecked = 0;
         let missingCount = 0;
+        let missingDiameterCount = 0;
+        let missingZoneCount = 0;
         
         const isInvalidVal = (val: any): boolean => {
             if (val === undefined || val === null) return true;
@@ -434,7 +453,6 @@ const App: React.FC = () => {
                 str === 'غير معروف' || str === 'لا يوجد' || str === 'بدون' ||
                 str === 'unknown'
             ) return true;
-            // Dashing / hyphenated / blank values like "-", "--", "---", " - ", "/ " etc are invalid
             if (/^[\s_\-–—\/\\.:;]+$/.test(str)) return true;
             return false;
         };
@@ -511,7 +529,8 @@ const App: React.FC = () => {
                 );
                 if (!isLine) return pt;
 
-                // Merge all attributes from attributes object and description HTML
+                totalChecked++;
+
                 const mergedAttrs: Record<string, string> = {
                     ...(pt.attributes || {})
                 };
@@ -519,7 +538,6 @@ const App: React.FC = () => {
                     parseDescriptionToAttributes(pt.description, mergedAttrs);
                 }
 
-                // --- 1. CHECK DIAMETER (INNERDIAMETER, OUTERDIAMETER, DIAMETER, قطر, etc.) ---
                 let hasDiameter = false;
                 let foundDiameterAttribute = false;
 
@@ -536,7 +554,6 @@ const App: React.FC = () => {
                     }
                 }
 
-                // Fallback only if NO explicit diameter key exists in attributes/description
                 if (!foundDiameterAttribute && !hasDiameter) {
                     const diaUnitRegex = /\b(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة|بوصه)\b/i;
                     const diaPrefixRegex = /(?:dn|ø|dia|diameter|size|pipe_size|قطر|القطر|مقاس|سمك)[ \t:=_#-]*(\d+(\.\d+)?)\b/i;
@@ -548,7 +565,6 @@ const App: React.FC = () => {
                     }
                 }
 
-                // --- 2. CHECK ZONE / DISTRICT ---
                 let hasZone = false;
                 let foundZoneAttribute = false;
 
@@ -581,16 +597,17 @@ const App: React.FC = () => {
                     }
                 }
 
-                // --- 3. APPLY BLACK COLOR IF EITHER DIAMETER OR ZONE IS MISSING ---
                 if (!hasDiameter || !hasZone) {
                     missingCount++;
+                    if (!hasDiameter) missingDiameterCount++;
+                    if (!hasZone) missingZoneCount++;
                     const missingParts = [];
                     if (!hasDiameter) missingParts.push(lang === 'ar' ? 'القطر' : 'Diameter');
                     if (!hasZone) missingParts.push(lang === 'ar' ? 'المنطقة' : 'Zone');
                     
                     return {
                         ...pt,
-                        color: '#000000', // Black color for missing essential attributes (diameter / zone)
+                        color: '#000000',
                         description: `${pt.description || ''}\n[MISSING: ${missingParts.join(', ')}]`.trim(),
                         layer: `${pt.layer || 'Unknown'}_MISSING_ATTRS`
                     };
@@ -612,12 +629,37 @@ const App: React.FC = () => {
         setProgressPercent(100);
         setLoading(false);
         setProgressPercent(null);
+
+        const completeCount = Math.max(0, totalChecked - missingCount);
+
+        setCheckResultModal({
+          type: 'essential',
+          titleAr: 'نتائج فحص العناصر الناقصة (قطر / منطقة)',
+          titleEn: 'Missing Attributes Audit (Diameter / Zone)',
+          icon: 'essential',
+          totalChecked,
+          issuesCount: missingCount,
+          successCount: completeCount,
+          badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة` : 'جميع العناصر مكتملة البيانات (لا توجد مشاكل)',
+          badgeTextEn: missingCount > 0 ? `${missingCount} Issues Found` : 'All Elements Complete (No Issues)',
+          detailsAr: missingCount > 0
+            ? `تم فحص ${totalChecked} عنصر خطي، وتبين وجود ${missingCount} عنصر ينقصه بيانات أساسية (قطر أو منطقة). تم تمييز هذه العناصر باللون الأسود على الخريطة لتسهيل المعاينة والتصحيح.`
+            : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وتبين أنها جميعاً تحتوي على بيانات القطر والمنطقة مكتملة بدون أي مشاكل.`,
+          detailsEn: missingCount > 0
+            ? `Audited ${totalChecked} linear elements. Found ${missingCount} elements missing essential attributes (diameter or zone). Highlighted in black on the map.`
+            : `Audited ${totalChecked} linear elements. All elements contain complete diameter and zone data with zero issues.`,
+          stats: [
+            { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
+            { labelAr: 'عدد المشاكل (عناصر ناقصة)', labelEn: 'Issues Count (Missing)', value: missingCount, colorClass: missingCount > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
+            { labelAr: 'عناصر ينقصها القطر', labelEn: 'Missing Diameter', value: missingDiameterCount, colorClass: missingDiameterCount > 0 ? 'text-amber-400' : 'text-emerald-400' },
+            { labelAr: 'عناصر ينقصها المنطقة', labelEn: 'Missing Zone', value: missingZoneCount, colorClass: missingZoneCount > 0 ? 'text-amber-400' : 'text-emerald-400' }
+          ]
+        });
+
         setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية (قطر/منطقة) باللون الأسود.` : `Highlighted ${missingCount} segments missing essential attributes in black.`);
         setTimeout(() => setStatusMessage(''), 4000);
     }, 300);
   };
-
-
 
   const verifyPermitAndSegmentId = () => {
     setLoading(true);
@@ -625,6 +667,7 @@ const App: React.FC = () => {
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (segment id)...' : 'Verifying content of segment id...');
 
     setTimeout(() => {
+      let totalChecked = 0;
       let matchedCount = 0;
       const uniqueSegmentIdsSet = new Set<string>();
 
@@ -640,19 +683,11 @@ const App: React.FC = () => {
 
       const isValidValue = (val: any, keyName?: string): boolean => {
         if (val === undefined || val === null) return false;
-        
         const cleanStr = stripHtml(val);
         if (!cleanStr) return false;
-
-        // Must contain at least one letter or digit (alphanumeric check)
-        // If it's just dashes (-), underscores (_), dots (.), slashes (/), or symbols, it is empty/invalid
-        if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) {
-          return false;
-        }
+        if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) return false;
 
         const lower = String(cleanStr || '').toLowerCase();
-
-        // 1. Generic empty / null / blank / placeholder values
         const emptyValues = new Set([
           '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
           'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
@@ -660,31 +695,17 @@ const App: React.FC = () => {
           'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
           'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
         ]);
+        if (emptyValues.has(lower)) return false;
 
-        if (emptyValues.has(lower)) {
-          return false;
-        }
-
-        // 2. Value repeating key name or label
         const labelValues = new Set([
           'segment id', 'segment_id', 'segmentid', 'segment no', 'segment_no', 'segmentno',
           'segment number', 'segment', 'seg id', 'seg_id', 'segid', 'seg no', 'seg_no', 'segno',
           'layer', 'شريحة', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم شريحة', 'كود شريحة',
           'معرف شريحة', 'شريحة خريطة'
         ]);
-
-        if (labelValues.has(lower)) {
-          return false;
-        }
-
-        if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) {
-          return false;
-        }
-
-        // 3. Auto-generated default feature names (e.g., Segment_1, Feature_12, Layer_0)
-        if (/^(segment|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) {
-          return false;
-        }
+        if (labelValues.has(lower)) return false;
+        if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) return false;
+        if (/^(segment|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
 
         return true;
       };
@@ -713,35 +734,25 @@ const App: React.FC = () => {
 
       const extractSegmentIdFromDescription = (description?: string): string | null => {
         if (!description) return null;
-
-        // A) HTML table cell match e.g. <tr><td>Segment ID</td><td>SEG-1002</td></tr> or <td>SEGMENT</td><td>1002</td>
         const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
         const tableMatch = description.match(tableCellRegex);
         if (tableMatch && tableMatch[1]) {
           const val = stripHtml(tableMatch[1]);
-          if (isValidValue(val, 'segment id')) {
-            return val;
-          }
+          if (isValidValue(val, 'segment id')) return val;
         }
-
-        // B) Key-value pattern match e.g. "SEGMENT: SEG-9912" or "Segment ID: SEG-9912" or "رقم الشريحة: 4410"
         const textRegex = /(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
         const textMatch = description.match(textRegex);
         if (textMatch && textMatch[1]) {
           const val = stripHtml(textMatch[1]);
-          if (isValidValue(val, 'segment id')) {
-            return val;
-          }
+          if (isValidValue(val, 'segment id')) return val;
         }
-
         return null;
       };
 
       const processPoints = (pts: GeoPoint[]) => {
         return pts.map(pt => {
+          totalChecked++;
           let foundVal: string | null = null;
-
-          // 1. Check attributes dictionary for explicit segment id key and non-empty valid content value
           if (pt.attributes) {
             for (const [key, val] of Object.entries(pt.attributes)) {
               if (isSegmentKey(key) && isValidValue(val, key)) {
@@ -750,8 +761,6 @@ const App: React.FC = () => {
               }
             }
           }
-
-          // 2. Check description ONLY if explicit key:value pair or HTML table for segment id exists with valid value
           if (!foundVal && pt.description) {
             foundVal = extractSegmentIdFromDescription(pt.description);
           }
@@ -761,27 +770,51 @@ const App: React.FC = () => {
             uniqueSegmentIdsSet.add(foundVal.trim());
             return {
               ...pt,
-              color: '#9000FF' // Vivid Electric Purple
+              color: '#9000FF'
             };
           }
-
           return pt;
         });
       };
 
       if (globalPoints.length > 0) {
-        const nextGlobal = processPoints(globalPoints);
-        setGlobalPoints(nextGlobal);
+        setGlobalPoints(processPoints(globalPoints));
       }
       if (plannedStreets.length > 0) {
-        const nextPlanned = processPoints(plannedStreets);
-        setPlannedStreets(nextPlanned);
+        setPlannedStreets(processPoints(plannedStreets));
       }
 
       setDataId(`segment-check-${Date.now()}`);
       setProgressPercent(100);
       setLoading(false);
       setProgressPercent(null);
+
+      const missingCount = Math.max(0, totalChecked - matchedCount);
+
+      setCheckResultModal({
+        type: 'segment',
+        titleAr: 'نتائج فحص عناصر (Segment ID)',
+        titleEn: 'Segment ID Content Audit',
+        icon: 'segment',
+        totalChecked,
+        issuesCount: missingCount,
+        successCount: matchedCount,
+        uniqueCount: uniqueSegmentIdsSet.size,
+        badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة (عناصر بدون Segment ID)` : 'جميع العناصر تحوي Segment ID (لا توجد مشاكل)',
+        badgeTextEn: missingCount > 0 ? `${missingCount} Issues (Missing Segment ID)` : 'All Elements Have Segment ID (No Issues)',
+        detailsAr: missingCount > 0
+          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي (Segment ID) صحيح ومكتمل (تم تلوينها باللون البنفسجي)، بينما يوجد ${missingCount} عنصر بدون Segment ID. وُجدت ${uniqueSegmentIdsSet.size} قيمة فريدة.`
+          : `تم فحص جميع العناصر (${totalChecked} عنصر)، وجميعها تحوي رقم شريحة (Segment ID) صحيح ومكتمل بنجاح، بإجمالي ${uniqueSegmentIdsSet.size} قيمة فريدة.`,
+        detailsEn: missingCount > 0
+          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Segment ID (colored purple), and ${missingCount} elements missing Segment ID. Total unique IDs: ${uniqueSegmentIdsSet.size}.`
+          : `Audited ${totalChecked} elements. All elements contain valid Segment ID content with ${uniqueSegmentIdsSet.size} unique values.`,
+        stats: [
+          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
+          { labelAr: 'عناصر بـ Segment ID', labelEn: 'Valid Segment ID', value: matchedCount, colorClass: 'text-[#d8b4fe] font-black' },
+          { labelAr: 'عدد المشاكل (بدون Segment ID)', labelEn: 'Issues (Missing Segment ID)', value: missingCount, colorClass: missingCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400 font-black' },
+          { labelAr: 'قيم فريدة غير مكررة', labelEn: 'Unique Segment IDs', value: uniqueSegmentIdsSet.size, colorClass: 'text-cyan-300 font-black' }
+        ]
+      });
 
       if (matchedCount > 0) {
         setStatusMessage(
@@ -806,6 +839,7 @@ const App: React.FC = () => {
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (Permit No)...' : 'Verifying content of Permit No...');
 
     setTimeout(() => {
+      let totalChecked = 0;
       let matchedCount = 0;
       const uniquePermitSet = new Set<string>();
 
@@ -839,7 +873,6 @@ const App: React.FC = () => {
           'رقم الترخيص', 'رقم ترخيص', 'الترخيص', 'رقم الرخصة', 'رقم رخصة', 'الرخصة', 'ترخيص'
         ]);
         if (labelValues.has(lower)) return false;
-
         if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) return false;
         if (/^(permit|license|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
         return true;
@@ -875,6 +908,7 @@ const App: React.FC = () => {
 
       const processPoints = (pts: GeoPoint[]) => {
         return pts.map(pt => {
+          totalChecked++;
           let foundVal: string | null = null;
           if (pt.attributes) {
             for (const [key, val] of Object.entries(pt.attributes)) {
@@ -893,7 +927,7 @@ const App: React.FC = () => {
             uniquePermitSet.add(foundVal.trim());
             return {
               ...pt,
-              color: '#FF6D00' // Vivid Neon Orange
+              color: '#FF6D00'
             };
           }
           return pt;
@@ -912,6 +946,33 @@ const App: React.FC = () => {
       setLoading(false);
       setProgressPercent(null);
 
+      const missingCount = Math.max(0, totalChecked - matchedCount);
+
+      setCheckResultModal({
+        type: 'permit',
+        titleAr: 'نتائج فحص رقم الترخيص (Permit No)',
+        titleEn: 'Permit No Content Audit',
+        icon: 'permit',
+        totalChecked,
+        issuesCount: missingCount,
+        successCount: matchedCount,
+        uniqueCount: uniquePermitSet.size,
+        badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة (عناصر بدون رقم ترخيص)` : 'جميع العناصر تحوي رقم ترخيص (لا توجد مشاكل)',
+        badgeTextEn: missingCount > 0 ? `${missingCount} Issues (Missing Permit No)` : 'All Elements Have Permit No (No Issues)',
+        detailsAr: missingCount > 0
+          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي رقم ترخيص (Permit No) صحيح (تم تلوينها باللون البرتقالي)، بينما يوجد ${missingCount} عنصر بدون رقم ترخيص. وُجدت ${uniquePermitSet.size} ترخيصات فريدة.`
+          : `تم فحص جميع العناصر (${totalChecked} عنصر)، وجميعها تحوي رقم ترخيص (Permit No) صحيح ومكتمل بنجاح، بإجمالي ${uniquePermitSet.size} ترخيص فريد.`,
+        detailsEn: missingCount > 0
+          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Permit No (colored neon orange), and ${missingCount} elements missing Permit No. Total unique permits: ${uniquePermitSet.size}.`
+          : `Audited ${totalChecked} elements. All elements contain valid Permit No with ${uniquePermitSet.size} unique values.`,
+        stats: [
+          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
+          { labelAr: 'عناصر برقم ترخيص', labelEn: 'With Permit No', value: matchedCount, colorClass: 'text-[#ffc499] font-black' },
+          { labelAr: 'عدد المشاكل (بدون ترخيص)', labelEn: 'Issues (Missing Permit No)', value: missingCount, colorClass: missingCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400 font-black' },
+          { labelAr: 'ترخيصات فريدة (Unique)', labelEn: 'Unique Permit Numbers', value: uniquePermitSet.size, colorClass: 'text-cyan-300 font-black' }
+        ]
+      });
+
       if (matchedCount > 0) {
         setStatusMessage(
           lang === 'ar'
@@ -927,6 +988,60 @@ const App: React.FC = () => {
       }
       setTimeout(() => setStatusMessage(''), 5000);
     }, 500);
+  };
+
+  const verifySaudiBuildingCodeSbc = () => {
+    const pts = getPointsToCheck();
+
+    if (!pts || pts.length === 0) {
+      setCheckResultModal({
+        type: 'sbc',
+        titleAr: 'فحص مطابقة كود البناء السعودي (SBC)',
+        titleEn: 'Saudi Building Code (SBC) Compliance Audit',
+        icon: 'sbc',
+        totalChecked: 0,
+        issuesCount: 0,
+        successCount: 0,
+        badgeTextAr: 'لا توجد بيانات خريطة',
+        badgeTextEn: 'No Map Data',
+        detailsAr: 'لا توجد عناصر مكانية أو شبكات خريطة محملة حالياً لفحص مطابقة كود البناء السعودي. يرجى استيراد ملف (KMZ / DXF / GeoJSON / Excel) أولاً.',
+        detailsEn: 'No spatial elements loaded for SBC audit. Please import a map file first.',
+        stats: [
+          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: 0, colorClass: 'text-white' }
+        ]
+      });
+      return;
+    }
+
+    const issues = performSbcAuditEngine(pts);
+    const errorsCount = issues.filter(i => i.severity === 'error').length;
+    const warningsCount = issues.filter(i => i.severity === 'warning').length;
+    const totalIssues = errorsCount + warningsCount;
+    const compliantCount = Math.max(0, pts.length - totalIssues);
+
+    setCheckResultModal({
+      type: 'sbc',
+      titleAr: 'نتائج فحص مطابقة كود البناء السعودي (SBC)',
+      titleEn: 'Saudi Building Code (SBC) Audit Results',
+      icon: 'sbc',
+      totalChecked: pts.length,
+      issuesCount: totalIssues,
+      successCount: compliantCount,
+      badgeTextAr: totalIssues > 0 ? `وُجدت ${totalIssues} مخالفة / ملاحظة كود` : 'ممتاز! لا توجد مشاكل - مطبق للكود السعودي',
+      badgeTextEn: totalIssues > 0 ? `${totalIssues} SBC Issues Found` : 'No Issues - Fully SBC Compliant',
+      detailsAr: totalIssues > 0
+        ? `تم إجراء تدقيق كود البناء السعودي (SBC) على ${pts.length} عنصر شبكة. كشف التدقيق عن ${totalIssues} ملاحظة (تتضمن ${errorsCount} مخالفة صريحة في الأعماق أو مسافات الفصل الأفقية، و ${warningsCount} تحذير أقطار).`
+        : `تم فحص جميع عناصر الخريطة (${pts.length} عنصر) وفقاً لاشتراطات كود البناء السعودي (SBC)، وتبين أنها مطابقة كلياً بجميع الأعماق والأقطار والمجاورات ولا توجد أي مخالفات.`,
+      detailsEn: totalIssues > 0
+        ? `Audited ${pts.length} network elements against SBC specs. Discovered ${totalIssues} issues (${errorsCount} critical errors in depth/separation, ${warningsCount} diameter warnings).`
+        : `Audited ${pts.length} elements against SBC standard specifications. Zero violations found; networks fully comply.`,
+      stats: [
+        { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Elements Audited', value: pts.length, colorClass: 'text-white' },
+        { labelAr: 'إجمالي المشاكل والملاحظات', labelEn: 'Total SBC Issues', value: totalIssues, colorClass: totalIssues > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
+        { labelAr: 'مخالفات صريحة (Errors)', labelEn: 'Critical Errors', value: errorsCount, colorClass: errorsCount > 0 ? 'text-red-400 font-black' : 'text-emerald-400' },
+        { labelAr: 'تحذيرات (Warnings)', labelEn: 'Warnings', value: warningsCount, colorClass: warningsCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400' }
+      ]
+    });
   };
 
   const getPointsToCheck = (): GeoPoint[] => {
@@ -4599,9 +4714,9 @@ const App: React.FC = () => {
                                 <FileText className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF6D00] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص رقم الترخيص (Permit No) برتقالي' : 'Highlight Permit No (Neon Orange)'}
                             </button>
-                            <button onClick={() => setActiveTab('sbc-checker')} className="w-full bg-[#0b281d] border border-emerald-500/50 text-emerald-300 font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-emerald-500 hover:text-black transition-all text-sm group">
+                            <button onClick={verifySaudiBuildingCodeSbc} className="w-full bg-[#0b281d] border border-emerald-500/50 text-emerald-300 font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-emerald-500 hover:text-black transition-all text-sm group">
                                 <ShieldCheck className="w-6 h-6 group-hover:scale-110 transition-transform text-emerald-400 group-hover:text-black" />
-                                {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC - تحت التطوير)' : 'Saudi Building Code (SBC) Compliance Audit (In Dev)'}
+                                {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC)' : 'Saudi Building Code (SBC) Compliance Audit'}
                             </button>
 
                             {segmentIdAnalysis && segmentIdAnalysis.totalElements > 0 && (
@@ -5292,8 +5407,11 @@ const App: React.FC = () => {
                 )}
 
                 {activeTab === 'attribute-formatter' && (
-                  <DataFormatter onVerifyMissingAttributes={verifyEssentialAttributes}
+                  <DataFormatter
+                    onVerifyMissingAttributes={verifyEssentialAttributes}
                     onVerifyPermitSegment={verifyPermitAndSegmentId}
+                    onVerifyPermitNo={verifyPermitNo}
+                    onVerifySbc={verifySaudiBuildingCodeSbc}
                     points={globalPoints}
                     headers={activeFile?.headers}
                     lang={lang}
@@ -5832,6 +5950,13 @@ const App: React.FC = () => {
               </div>
           )}
 
+          <CheckResultModalPopup
+            checkResultModal={checkResultModal}
+            setCheckResultModal={setCheckResultModal}
+            lang={lang}
+            setActiveTab={setActiveTab}
+          />
+
          {showOverlapModal && overlapResults && (
              <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                  <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
@@ -6336,6 +6461,136 @@ const App: React.FC = () => {
             isStandalone={isStandalone}
          />
       </main>
+      </div>
+    </div>
+  );
+};
+
+export const CheckResultModalPopup: React.FC<{
+  checkResultModal: CheckResultModalState | null;
+  setCheckResultModal: (val: CheckResultModalState | null) => void;
+  lang: 'ar' | 'en';
+  setActiveTab: (tab: any) => void;
+}> = ({ checkResultModal, setCheckResultModal, lang, setActiveTab }) => {
+  if (!checkResultModal) return null;
+  return (
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+      <div 
+        className="bg-[#0b2d3d] border border-accent/40 rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] max-w-xl w-full overflow-hidden flex flex-col text-right animate-in zoom-in-95 duration-200"
+        dir={lang === 'ar' ? 'rtl' : 'ltr'}
+      >
+        {/* Modal Header */}
+        <div className={cn(
+          "p-6 flex items-center justify-between border-b shrink-0",
+          checkResultModal.issuesCount > 0
+            ? "bg-gradient-to-r from-rose-950/80 via-rose-900/40 to-[#0b2d3d] border-rose-500/30"
+            : "bg-gradient-to-r from-emerald-950/80 via-teal-900/40 to-[#0b2d3d] border-emerald-500/30"
+        )}>
+          <div className="flex items-center gap-3">
+            <div className={cn(
+              "p-3 rounded-2xl border shadow-inner flex items-center justify-center",
+              checkResultModal.issuesCount > 0
+                ? "bg-rose-500/10 border-rose-500/40 text-rose-400"
+                : "bg-emerald-500/10 border-emerald-500/40 text-emerald-400"
+            )}>
+              {checkResultModal.issuesCount > 0 ? (
+                <AlertTriangle className="w-7 h-7 animate-bounce" />
+              ) : (
+                <CheckCircle2 className="w-7 h-7" />
+              )}
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-white leading-snug">
+                {lang === 'ar' ? checkResultModal.titleAr : checkResultModal.titleEn}
+              </h3>
+              <span className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black mt-1 border shadow-sm",
+                checkResultModal.issuesCount > 0
+                  ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
+                  : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+              )}>
+                <span className={cn("w-2 h-2 rounded-full", checkResultModal.issuesCount > 0 ? "bg-rose-400 animate-pulse" : "bg-emerald-400")} />
+                {lang === 'ar' ? checkResultModal.badgeTextAr : checkResultModal.badgeTextEn}
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setCheckResultModal(null)}
+            className="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Modal Content Body */}
+        <div className="p-6 space-y-6 overflow-y-auto max-h-[70vh]">
+          {/* Detailed summary paragraph */}
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-white/80 leading-relaxed font-semibold">
+            {lang === 'ar' ? checkResultModal.detailsAr : checkResultModal.detailsEn}
+          </div>
+
+          {/* Statistics Grid */}
+          <div className="grid grid-cols-2 gap-3">
+            {checkResultModal.stats.map((st, i) => (
+              <div key={i} className="p-4 rounded-2xl bg-[#071f2b] border border-white/5 shadow-inner flex flex-col justify-between space-y-1">
+                <span className="text-[10px] text-white/50 font-bold uppercase tracking-wide">
+                  {lang === 'ar' ? st.labelAr : st.labelEn}
+                </span>
+                <span className={cn("text-2xl font-black tracking-tight", st.colorClass)}>
+                  {st.value}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Informational Guidance */}
+          {checkResultModal.issuesCount > 0 ? (
+            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 font-bold space-y-1">
+              <p className="flex items-center gap-2">
+                <span>💡</span>
+                <span>
+                  {lang === 'ar' 
+                    ? 'تم إبراز وتظليل العناصر التي بها ملاحظات بألوان خاصة على الخريطة للوصول السريع والتعامل معها.' 
+                    : 'Elements with issues have been highlighted with specific colors on the map for quick identification.'}
+                </span>
+              </p>
+            </div>
+          ) : (
+            <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-200 font-bold space-y-1">
+              <p className="flex items-center gap-2">
+                <span>✨</span>
+                <span>
+                  {lang === 'ar' 
+                    ? 'ممتاز! تفي شبكة العناصر الحالية بجميع معايير هذا الفحص دون أي استثناءات.' 
+                    : 'Excellent! Current network elements meet all check parameters without exceptions.'}
+                </span>
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Modal Footer */}
+        <div className="p-5 bg-black/30 border-t border-white/5 flex items-center justify-end gap-3 shrink-0">
+          {checkResultModal.type === 'sbc' && checkResultModal.issuesCount > 0 && (
+            <button
+              onClick={() => {
+                setCheckResultModal(null);
+                setActiveTab('sbc-checker');
+              }}
+              className="px-5 py-3 rounded-2xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-black transition-all flex items-center gap-2"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              {lang === 'ar' ? 'عرض تقرير SBC التفصيلي' : 'View Full SBC Report'}
+            </button>
+          )}
+          <button
+            onClick={() => setCheckResultModal(null)}
+            className="px-6 py-3 rounded-2xl bg-accent hover:bg-accent/90 text-primary text-xs font-black shadow-lg transition-all"
+          >
+            {lang === 'ar' ? 'فهمت (موافق)' : 'Got it (Close)'}
+          </button>
+        </div>
       </div>
     </div>
   );
