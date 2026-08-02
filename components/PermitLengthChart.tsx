@@ -16,7 +16,7 @@ export interface PermitDetailItem {
   projectId?: string;
   contractor?: string;
   primaryColor?: string;
-  primaryStatusKey?: 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining' | string;
+  primaryStatusKey?: 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining' | 'cancelled' | string;
   primaryStatusNameAr?: string;
   primaryStatusNameEn?: string;
   statusBreakdown?: Record<string, { count: number; totalLength: number }>;
@@ -34,7 +34,7 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
   onHighlightPermit
 }) => {
   const [sortBy, setSortBy] = useState<'length-desc' | 'length-asc' | 'count-desc' | 'color-status' | 'name'>('length-desc');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining' | 'cancelled'>('all');
   const [unit, setUnit] = useState<'km' | 'm'>('km');
   const [searchQuery, setSearchQuery] = useState('');
   const [hoveredBarIndex, setHoveredBarIndex] = useState<number | null>(null);
@@ -46,6 +46,7 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
       executed_sewer: { count: 0, totalLength: 0 },
       in_progress: { count: 0, totalLength: 0 },
       remaining: { count: 0, totalLength: 0 },
+      cancelled: { count: 0, totalLength: 0 },
     };
 
     if (!permitDetails) return summary;
@@ -119,7 +120,8 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
       executed_water: 1,
       executed_sewer: 2,
       in_progress: 3,
-      remaining: 4
+      remaining: 4,
+      cancelled: 5
     };
 
     list.sort((a, b) => {

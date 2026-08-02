@@ -350,7 +350,7 @@ const App: React.FC = () => {
   const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
   const [segmentFilterQuery, setSegmentFilterQuery] = useState('');
   const [permitFilterQuery, setPermitFilterQuery] = useState('');
-  const [permitStatusFilter, setPermitStatusFilter] = useState<'all' | 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining'>('all');
+  const [permitStatusFilter, setPermitStatusFilter] = useState<'all' | 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining' | 'cancelled'>('all');
   const [permitSortBy, setPermitSortBy] = useState<'count-desc' | 'length-desc' | 'color-status' | 'name'>('count-desc');
   const [analyzerNetworkType, setAnalyzerNetworkType] = useState<'all' | 'water' | 'sewer'>('all');
 
@@ -1537,6 +1537,7 @@ const App: React.FC = () => {
       'executed_sewer': 0,
       'in_progress': 0,
       'remaining': 0,
+      'cancelled': 0,
     };
     const diaGroups: Record<string, number> = {};
 
@@ -2150,6 +2151,7 @@ const App: React.FC = () => {
         executed_sewer: { count: 0, totalLength: 0 },
         in_progress: { count: 0, totalLength: 0 },
         remaining: { count: 0, totalLength: 0 },
+        cancelled: { count: 0, totalLength: 0 },
       };
 
       data.points.forEach(pt => {

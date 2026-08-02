@@ -6,7 +6,11 @@ export interface RGB {
 }
 
 export const hexToRgb = (hex: string): RGB | null => {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  let cleanHex = String(hex || '').trim().toUpperCase();
+  if (cleanHex.startsWith('#')) cleanHex = cleanHex.substring(1);
+  if (cleanHex.length === 8) cleanHex = cleanHex.substring(2); // Strip alpha
+  
+  const result = /^([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(cleanHex);
   return result ? {
     r: parseInt(result[1], 16),
     g: parseInt(result[2], 16),
@@ -57,7 +61,7 @@ export const getCanonicalColorMap = (colors: string[], threshold: number = 45): 
 };
 
 export interface StatusCategory {
-  key: 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining';
+  key: 'executed_water' | 'executed_sewer' | 'in_progress' | 'remaining' | 'cancelled';
   nameAr: string;
   nameEn: string;
   color: string;
@@ -68,6 +72,7 @@ export const STATUS_CATEGORIES: StatusCategory[] = [
   { key: 'executed_sewer', nameAr: 'منفذ - صرف', nameEn: 'Executed - Sewer', color: '#097138' },
   { key: 'in_progress', nameAr: 'جاري العمل', nameEn: 'Work in Progress', color: '#FFEA00' },
   { key: 'remaining', nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: '#A52714' },
+  { key: 'cancelled', nameAr: 'خطوط تم الغائها', nameEn: 'Cancelled Works', color: '#D86DCD' },
 ];
 
 export const matchStatusByColor = (colorHex: string): StatusCategory => {

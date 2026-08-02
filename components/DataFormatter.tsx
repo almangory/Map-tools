@@ -18,11 +18,16 @@ const STANDARD_COLORS = [
   { name: 'Water', hex: '#01579B' },
   { name: 'Wastewater', hex: '#097138' },
   { name: 'Work in Progress', hex: '#ffea00' },
-  { name: 'Remaining Works', hex: '#a52714' }
+  { name: 'Remaining Works', hex: '#a52714' },
+  { name: 'Cancelled Works', hex: '#D86DCD' }
 ];
 
 function hexToRgb(hex: string) {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  let cleanHex = String(hex || '').trim().toUpperCase();
+  if (cleanHex.startsWith('#')) cleanHex = cleanHex.substring(1);
+  if (cleanHex.length === 8) cleanHex = cleanHex.substring(2); // Strip alpha
+  
+  const result = /^([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(cleanHex);
   return result ? {
     r: parseInt(result[1], 16),
     g: parseInt(result[2], 16),

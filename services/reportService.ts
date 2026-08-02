@@ -308,7 +308,8 @@ export const generateAnalysisPPTX = async (
       executed_water: { order: 1, nameAr: 'منفذ - مياه', nameEn: 'Executed - Water', color: '01579B' },
       executed_sewer: { order: 2, nameAr: 'منفذ - صرف', nameEn: 'Executed - Sewer', color: '097138' },
       in_progress: { order: 3, nameAr: 'جاري العمل', nameEn: 'Work in Progress', color: 'FFEA00' },
-      remaining: { order: 4, nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: 'A52714' }
+      remaining: { order: 4, nameAr: 'أعمال متبقية', nameEn: 'Remaining Work', color: 'A52714' },
+      cancelled: { order: 5, nameAr: 'خطوط تم الغائها', nameEn: 'Cancelled Works', color: 'D86DCD' }
     };
 
     const getPermitStatus = (item: any) => {
@@ -321,7 +322,8 @@ export const generateAnalysisPPTX = async (
       executed_water: { countPermits: 0, countElements: 0, totalLength: 0 },
       executed_sewer: { countPermits: 0, countElements: 0, totalLength: 0 },
       in_progress: { countPermits: 0, countElements: 0, totalLength: 0 },
-      remaining: { countPermits: 0, countElements: 0, totalLength: 0 }
+      remaining: { countPermits: 0, countElements: 0, totalLength: 0 },
+      cancelled: { countPermits: 0, countElements: 0, totalLength: 0 }
     };
 
     perAnalysis.uniqueDetails.forEach(item => {
@@ -956,7 +958,8 @@ export const generateAnalysisPDF = (
         executed_water: { order: 1, nameEn: 'Executed - Water', colorHex: '#01579B' },
         executed_sewer: { order: 2, nameEn: 'Executed - Sewer', colorHex: '#097138' },
         in_progress: { order: 3, nameEn: 'Work in Progress', colorHex: '#FFEA00' },
-        remaining: { order: 4, nameEn: 'Remaining Work', colorHex: '#A52714' }
+        remaining: { order: 4, nameEn: 'Remaining Work', colorHex: '#A52714' },
+        cancelled: { order: 5, nameEn: 'Cancelled Works', colorHex: '#D86DCD' }
       };
 
       const getPermitPdfStatus = (item: any) => {
@@ -974,7 +977,8 @@ export const generateAnalysisPDF = (
         executed_water: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
         executed_sewer: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
         in_progress: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
-        remaining: { uniqueCount: 0, elementsCount: 0, totalLength: 0 }
+        remaining: { uniqueCount: 0, elementsCount: 0, totalLength: 0 },
+        cancelled: { uniqueCount: 0, elementsCount: 0, totalLength: 0 }
       };
 
       perAnalysis.uniqueDetails.forEach(item => {
