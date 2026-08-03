@@ -180,61 +180,49 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     let html = `<div class="p-3 bg-[#0b1329]/95 backdrop-blur-md text-white rounded-2xl border border-cyan-500/40 shadow-2xl font-sans text-xs min-w-[220px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">`;
     
     html += `<div class="flex items-center justify-between border-b border-slate-700/80 pb-2 mb-2 gap-2">
-      <div class="flex items-center gap-1.5 font-black text-amber-400 text-[12px] truncate">
+      <div class="flex items-center gap-1.5 font-bold text-amber-400 text-[12px] truncate">
         <span>📍</span>
         <span class="truncate">${pt.id}</span>
       </div>
-      ${pt.layer ? `<span class="bg-slate-800 text-slate-300 border border-slate-700 text-[9px] font-bold px-2 py-0.5 rounded-full truncate">${pt.layer}</span>` : ''}
+      ${pt.layer ? `<span class="bg-slate-800 text-slate-300 border border-slate-700 text-[9px] font-semibold px-2 py-0.5 rounded-full truncate">${pt.layer}</span>` : ''}
     </div>`;
 
     html += `<div class="space-y-1.5 text-[11px]">`;
 
     if (segId) {
       html += `<div class="flex items-center justify-between gap-3 bg-purple-950/40 px-2.5 py-1 rounded-xl border border-purple-500/30">
-        <span class="text-purple-200/80 font-bold">${lang === 'ar' ? 'رقم الشريحة (Segment ID):' : 'Segment ID:'}</span>
-        <span class="font-black text-purple-300">${segId}</span>
+        <span class="text-purple-200/80 font-medium">${lang === 'ar' ? 'رقم الشريحة (Segment ID):' : 'Segment ID:'}</span>
+        <span class="font-bold text-purple-300">${segId}</span>
       </div>`;
     }
 
     if (permitNo) {
       html += `<div class="flex items-center justify-between gap-3 bg-orange-950/40 px-2.5 py-1 rounded-xl border border-orange-500/30">
-        <span class="text-orange-200/80 font-bold">${lang === 'ar' ? 'رقم الترخيص (Permit No):' : 'Permit No:'}</span>
-        <span class="font-black text-orange-300">${permitNo}</span>
+        <span class="text-orange-200/80 font-medium">${lang === 'ar' ? 'رقم الترخيص (Permit):' : 'Permit No:'}</span>
+        <span class="font-bold text-orange-300">${permitNo}</span>
       </div>`;
     }
 
     if (diameter) {
       html += `<div class="flex items-center justify-between gap-3 bg-cyan-950/40 px-2.5 py-1 rounded-xl border border-cyan-500/30">
-        <span class="text-cyan-200/80 font-bold">${lang === 'ar' ? 'القطر (Diameter):' : 'Diameter:'}</span>
-        <span class="font-black text-cyan-300">${diameter}</span>
+        <span class="text-cyan-200/80 font-medium">${lang === 'ar' ? 'القطر (Diameter):' : 'Diameter:'}</span>
+        <span class="font-bold text-cyan-300">${diameter}</span>
       </div>`;
     }
-
-    if (pt.length) {
-      const lenStr = pt.length >= 1000 ? `${(pt.length / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` : `${pt.length.toFixed(1)} ${lang === 'ar' ? 'م' : 'm'}`;
-      html += `<div class="flex items-center justify-between gap-3 px-1 py-0.5">
-        <span class="text-slate-400 font-bold">${lang === 'ar' ? 'الطول:' : 'Length:'}</span>
-        <span class="font-black text-emerald-400">${lenStr}</span>
-      </div>`;
-    }
-
-    if (pt.street || pt.district) {
-      html += `<div class="flex items-center justify-between gap-3 px-1 py-0.5">
-        <span class="text-slate-400 font-bold">${lang === 'ar' ? 'الموقع:' : 'Location:'}</span>
-        <span class="font-bold text-slate-200 truncate max-w-[130px]">${[pt.street, pt.district].filter(Boolean).join(' - ')}</span>
-      </div>`;
-    }
-
-    html += `</div>`;
 
     if (hasIssue) {
-      html += `<div class="mt-2 pt-1.5 border-t border-rose-500/40 text-rose-300 font-black text-[10px] flex items-center gap-1">
-        <span>⚠️</span>
-        <span class="truncate">${pt.issueReason || (lang === 'ar' ? 'ملاحظة تدقيق' : 'Audit Issue')}</span>
+      html += `<div class="mt-2 flex items-center justify-center gap-1.5 bg-red-500/10 px-2.5 py-1.5 rounded-xl border border-red-500/30 text-red-400 font-bold">
+        <span class="animate-pulse">⚠️</span>
+        <span>${lang === 'ar' ? 'تحذير: توجد ملاحظة / خطأ' : 'Warning: Issue Detected'}</span>
+      </div>`;
+    } else if (pt.type !== 'Polygon') {
+      html += `<div class="mt-2 flex items-center justify-center gap-1.5 bg-emerald-500/10 px-2.5 py-1.5 rounded-xl border border-emerald-500/30 text-emerald-400 font-bold">
+        <span>✨</span>
+        <span>${lang === 'ar' ? 'مطابق وسليم' : 'Valid and Compliant'}</span>
       </div>`;
     }
 
-    html += `</div>`;
+    html += `</div></div>`;
     return html;
   };
 
@@ -302,8 +290,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     const bounds = L.latLngBounds([]);
     let validCount = 0;
     
-    points.forEach(pt => {
-        if (isValidLatLng(pt.y, pt.x)) {
+    points.forEach(pt => { 
+        const hasValidCoords = isValidLatLng(pt.y, pt.x) || (pt.path && Array.isArray(pt.path) && pt.path.some(p => isValidLatLng(p.y, p.x))); 
+        if (hasValidCoords) {
             if (pt.path && Array.isArray(pt.path)) {
                 pt.path.forEach(p => {
                     if (isValidLatLng(p.y, p.x)) {
@@ -398,8 +387,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
     const renderPoints = showIssuesOnly ? points.filter(isIssuePoint) : points;
 
-    renderPoints.forEach(pt => {
-      if (isValidLatLng(pt.y, pt.x)) {
+    renderPoints.forEach(pt => { 
+      const hasValidCoords = isValidLatLng(pt.y, pt.x) || (pt.path && Array.isArray(pt.path) && pt.path.some(p => isValidLatLng(p.y, p.x))); 
+      if (hasValidCoords) { 
         const isOverlap = overlapResults?.some(o => !o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         const isIntersectionLine = overlapResults?.some(o => o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         const hasIssue = isIssuePoint(pt);
@@ -409,38 +399,36 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           featColor = pt.color === '#000000' ? '#000000' : '#ef4444';
         }
         
-        if (focusedColor && featColor !== String(focusedColor || '').toLowerCase() && !isOverlap && !isIntersectionLine && !hasIssue) return;
-
-        let marker: L.Marker | L.CircleMarker | L.Polyline | null = null;
-
         let popupContent = `<div class="p-3 min-w-[240px] font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
-          <div class="font-black text-primary border-b border-slate-100 pb-2 mb-2 text-[13px] flex items-center justify-between">
+          <div class="font-bold text-primary border-b border-slate-200 pb-2 mb-2 text-[13px] flex items-center justify-between">
             <span>${pt.id}</span>
-            ${hasIssue ? `<span class="bg-red-500/10 text-red-600 border border-red-500/30 text-[9px] font-black px-2 py-0.5 rounded-full">⚠️ ${lang === 'ar' ? 'عنصر به ملاحظة' : 'Issue Found'}</span>` : ''}
+            ${hasIssue ? `<span class="bg-red-50 text-red-600 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">⚠️ ${lang === 'ar' ? 'عنصر به ملاحظة' : 'Issue Found'}</span>` : ''}
           </div>`;
-
         if (hasIssue) {
-          popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] font-bold space-y-1 shadow-sm">
-            <div class="flex items-center gap-1.5 font-black text-red-800">
+          popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-red-50/50 border border-red-200 text-red-700 text-[11px] font-medium space-y-1 shadow-sm">
+            <div class="flex items-center gap-1.5 font-bold text-red-800">
               <span>⚠️</span>
               <span>${lang === 'ar' ? 'تفاصيل الملاحظة / التدقيق:' : 'Audit Issue Details:'}</span>
             </div>
-            <p class="text-[10px] leading-relaxed text-slate-700">
+            <p class="text-[10px] leading-relaxed text-slate-700 font-semibold">
               ${pt.issueReason || pt.description || (lang === 'ar' ? 'عنصر ناتج عن فحص البيانات' : 'Validation audit item')}
             </p>
           </div>`;
         }
         
         if (pt.street || pt.district) {
-          popupContent += `<div class="space-y-1.5 mb-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
-            ${pt.street ? `<div class="text-[10px] leading-tight"><span class="text-slate-400 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الشارع' : 'Street'}</span> <span class="font-black text-slate-800">${pt.street}</span></div>` : ''}
-            ${pt.district ? `<div class="text-[10px] leading-tight"><span class="text-slate-400 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الحي' : 'District'}</span> <span class="font-black text-slate-800">${pt.district}</span></div>` : ''}
+          popupContent += `<div class="space-y-1.5 mb-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
+            ${pt.street ? `<div class="text-[10px] leading-tight"><span class="text-slate-500 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الشارع' : 'Street'}</span> <span class="font-bold text-slate-800">${pt.street}</span></div>` : ''}
+            ${pt.district ? `<div class="text-[10px] leading-tight"><span class="text-slate-500 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الحي' : 'District'}</span> <span class="font-bold text-slate-800">${pt.district}</span></div>` : ''}
           </div>`;
         }
         
-        popupContent += `<div class="flex items-center justify-center text-[10px] text-slate-500 font-bold border-t border-slate-100 pt-2 mt-1" dir="ltr">
+        popupContent += `<div class="flex items-center justify-center text-[10px] text-slate-500 font-medium border-t border-slate-200 pt-2 mt-1" dir="ltr">
           <span>${pt.y.toFixed(6)}, ${pt.x.toFixed(6)}</span>
         </div></div>`;
+        if (focusedColor && featColor !== String(focusedColor || '').toLowerCase() && !isOverlap && !isIntersectionLine && !hasIssue) return;
+        let marker: L.Marker | L.CircleMarker | L.Polyline | L.Polygon | null = null;
+
 
         if (pt.type === 'Polygon' && pt.path && Array.isArray(pt.path)) {
           if (!showPolygons) return;

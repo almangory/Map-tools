@@ -38,7 +38,8 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
         const potentialCRS = identifyPotentialCRS(result.data as GeoPoint[]);
         const sourceData = result.data as GeoPoint[];
         if (potentialCRS) {
-            pts = transformPoints(sourceData, potentialCRS);
+            const def = COMMON_EPSG.find(e => e.code === potentialCRS)?.def || potentialCRS;
+            pts = transformPoints(sourceData, def);
         } else {
             pts = sourceData;
         }
@@ -165,7 +166,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
         const potentialCRS = identifyPotentialCRS(result.data as GeoPoint[]);
         const sourceData = result.data as GeoPoint[];
         if (potentialCRS) {
-            pts = transformPoints(sourceData, potentialCRS);
+            const def = COMMON_EPSG.find(e => e.code === potentialCRS)?.def || potentialCRS; pts = transformPoints(sourceData, def);
         } else {
             pts = sourceData;
         }

@@ -511,6 +511,7 @@ const App: React.FC = () => {
   }, []);
 
   const verifyEssentialAttributes = () => {
+    setActiveIssueItems([]);
     setLoading(true);
     setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? 'جاري فحص العناصر الناقصة (قطر/منطقة)...' : 'Verifying missing diameter/zone attributes...');
@@ -694,7 +695,9 @@ const App: React.FC = () => {
                 return {
                     ...pt,
                     originalColor: origColor,
-                    originalLayer: origLayer
+                    originalLayer: origLayer,
+                    isIssue: false,
+                    issueReason: undefined
                 };
             });
         };
@@ -748,6 +751,7 @@ const App: React.FC = () => {
   };
 
   const verifyPermitAndSegmentId = () => {
+    setActiveIssueItems([]);
     setLoading(true);
     setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (segment id)...' : 'Verifying content of segment id...');
@@ -866,20 +870,21 @@ const App: React.FC = () => {
               ...pt,
               originalColor: origColor,
               originalLayer: origLayer,
-              color: '#9000FF'
+              color: '#9000FF',
+              isIssue: false,
+              issueReason: undefined
             };
           }
 
-          const issuePt: GeoPoint = {
+          // Ignore parts that do not contain a segment id
+          return {
             ...pt,
             originalColor: origColor,
             originalLayer: origLayer,
-            color: '#ef4444',
-            isIssue: true,
-            issueReason: lang === 'ar' ? 'ينقصه رقم الشريحة (Segment ID)' : 'Missing Segment ID'
+            color: origColor,
+            isIssue: false,
+            issueReason: undefined
           };
-          missingSegmentList.push(issuePt);
-          return issuePt;
         });
       };
 
@@ -903,22 +908,18 @@ const App: React.FC = () => {
         titleEn: 'Segment ID Content Audit',
         icon: 'segment',
         totalChecked,
-        issuesCount: missingCount,
+        issuesCount: 0,
         successCount: matchedCount,
         uniqueCount: uniqueSegmentIdsSet.size,
-        badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة (عناصر بدون Segment ID)` : 'جميع العناصر تحوي Segment ID (لا توجد مشاكل)',
-        badgeTextEn: missingCount > 0 ? `${missingCount} Issues (Missing Segment ID)` : 'All Elements Have Segment ID (No Issues)',
-        detailsAr: missingCount > 0
-          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي (Segment ID) صحيح ومكتمل (باللون البنفسجي)، بينما يوجد ${missingCount} عنصر بدون Segment ID. تم تحديد مواقع المشاكل على الخريطة.`
-          : `تم فحص جميع العناصر (${totalChecked} عنصر)، وجميعها تحوي رقم شريحة (Segment ID) صحيح ومكتمل بنجاح، بإجمالي ${uniqueSegmentIdsSet.size} قيمة فريدة.`,
-        detailsEn: missingCount > 0
-          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Segment ID (colored purple), and ${missingCount} elements missing Segment ID. Highlighted on map.`
-          : `Audited ${totalChecked} elements. All elements contain valid Segment ID content with ${uniqueSegmentIdsSet.size} unique values.`,
+        badgeTextAr: `تم تلوين ${matchedCount} عنصر يحوي Segment ID`,
+        badgeTextEn: `Highlighted ${matchedCount} Elements with Segment ID`,
+        detailsAr: `تم فحص ${totalChecked} عنصر، وتم بنجاح إبراز ${matchedCount} عنصر يحتوي على (Segment ID) باللون البنفسجي، وتم تجاهل بقية العناصر التي لا تحتوي على Segment ID (عددها ${missingCount}).`,
+        detailsEn: `Audited ${totalChecked} elements. Successfully highlighted ${matchedCount} elements containing Segment ID in vivid purple, ignoring the ${missingCount} remaining elements.`,
         issueItems: missingSegmentList,
         stats: [
           { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
           { labelAr: 'عناصر بـ Segment ID', labelEn: 'Valid Segment ID', value: matchedCount, colorClass: 'text-[#d8b4fe] font-black' },
-          { labelAr: 'عدد المشاكل (بدون Segment ID)', labelEn: 'Issues (Missing Segment ID)', value: missingCount, colorClass: missingCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400 font-black' },
+          { labelAr: 'عناصر تم تجاهلها', labelEn: 'Ignored Elements', value: missingCount, colorClass: 'text-slate-400' },
           { labelAr: 'قيم فريدة غير مكررة', labelEn: 'Unique Segment IDs', value: uniqueSegmentIdsSet.size, colorClass: 'text-cyan-300 font-black' }
         ]
       });
@@ -941,6 +942,7 @@ const App: React.FC = () => {
   };
 
   const verifyPermitNo = () => {
+    setActiveIssueItems([]);
     setLoading(true);
     setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (Permit No)...' : 'Verifying content of Permit No...');
@@ -1044,20 +1046,21 @@ const App: React.FC = () => {
               ...pt,
               originalColor: origColor,
               originalLayer: origLayer,
-              color: '#FF6D00'
+              color: '#FF6D00',
+              isIssue: false,
+              issueReason: undefined
             };
           }
 
-          const issuePt: GeoPoint = {
+          // Ignore parts that do not contain a Permit No
+          return {
             ...pt,
             originalColor: origColor,
             originalLayer: origLayer,
-            color: '#ef4444',
-            isIssue: true,
-            issueReason: lang === 'ar' ? 'ينقصه رقم الترخيص (Permit No)' : 'Missing Permit No'
+            color: origColor,
+            isIssue: false,
+            issueReason: undefined
           };
-          missingPermitList.push(issuePt);
-          return issuePt;
         });
       };
 
@@ -1073,33 +1076,6 @@ const App: React.FC = () => {
       setLoading(false);
       setProgressPercent(null);
 
-      const missingCount = Math.max(0, totalChecked - matchedCount);
-
-      setCheckResultModal({
-        type: 'permit',
-        titleAr: 'نتائج فحص رقم الترخيص (Permit No)',
-        titleEn: 'Permit No Content Audit',
-        icon: 'permit',
-        totalChecked,
-        issuesCount: missingCount,
-        successCount: matchedCount,
-        uniqueCount: uniquePermitSet.size,
-        badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة (عناصر بدون رقم ترخيص)` : 'جميع العناصر تحوي رقم ترخيص (لا توجد مشاكل)',
-        badgeTextEn: missingCount > 0 ? `${missingCount} Issues (Missing Permit No)` : 'All Elements Have Permit No (No Issues)',
-        detailsAr: missingCount > 0
-          ? `تم فحص ${totalChecked} عنصر، وتبين أن ${matchedCount} عنصر يحوي رقم ترخيص (Permit No) صحيح، بينما يوجد ${missingCount} عنصر بدون رقم ترخيص. تم تحديد كافة مواقع المشاكل على الخريطة.`
-          : `تم فحص جميع العناصر (${totalChecked} عنصر)، وجميعها تحوي رقم ترخيص (Permit No) صحيح ومكتمل بنجاح، بإجمالي ${uniquePermitSet.size} ترخيص فريد.`,
-        detailsEn: missingCount > 0
-          ? `Audited ${totalChecked} elements. Found ${matchedCount} elements with valid Permit No, and ${missingCount} elements missing Permit No. Highlighted on map.`
-          : `Audited ${totalChecked} elements. All elements contain valid Permit No with ${uniquePermitSet.size} unique values.`,
-        issueItems: missingPermitList,
-        stats: [
-          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
-          { labelAr: 'عناصر برقم ترخيص', labelEn: 'With Permit No', value: matchedCount, colorClass: 'text-[#ffc499] font-black' },
-          { labelAr: 'عدد المشاكل (بدون ترخيص)', labelEn: 'Issues (Missing Permit No)', value: missingCount, colorClass: missingCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400 font-black' },
-          { labelAr: 'ترخيصات فريدة (Unique)', labelEn: 'Unique Permit Numbers', value: uniquePermitSet.size, colorClass: 'text-cyan-300 font-black' }
-        ]
-      });
 
       if (matchedCount > 0) {
         setStatusMessage(
@@ -1348,6 +1324,10 @@ const App: React.FC = () => {
     setShowIssuesOnly(false);
     setActiveIssueItems([]);
     setFocusedPoint(null);
+    setOverlapResults(null);
+    setAutoAlertInfo(null);
+    setShowOverlapModal(false);
+    setShowAutoAlertModal(false);
     setDataId(`clear-audit-${Date.now()}`);
 
     setStatusMessage(
@@ -3294,6 +3274,41 @@ const App: React.FC = () => {
       }
       if (detected) { setSourceEPSG(detected); setAutoDetected(COMMON_EPSG.find(c => c.code === detected)?.name || detected); }
       if (result.suggestedMapping) setMapping(prev => ({ ...prev, ...result.suggestedMapping }));
+
+      try {
+        let displayPts: GeoPoint[] = [];
+        if (fName.endsWith('.dxf')) {
+            displayPts = extractPointsFromDXF(result.data);
+        } else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) {
+            displayPts = result.data;
+        } else if ((fName.endsWith('.xlsx') || fName.endsWith('.csv')) && result.suggestedMapping?.xColumn && result.suggestedMapping?.yColumn) {
+            const xIdx = result.headers?.indexOf(result.suggestedMapping.xColumn) ?? -1;
+            const yIdx = result.headers?.indexOf(result.suggestedMapping.yColumn) ?? -1;
+            const idIdx = result.suggestedMapping.idColumn ? (result.headers?.indexOf(result.suggestedMapping.idColumn) ?? -1) : -1;
+            if (xIdx !== -1 && yIdx !== -1) {
+                displayPts = result.data.map((row: any, idx: number) => ({
+                    id: idIdx !== -1 ? String(row[idIdx]) : `PT_${idx + 1}`,
+                    x: parseFloat(row[xIdx]) || 0,
+                    y: parseFloat(row[yIdx]) || 0,
+                    type: 'Point',
+                    layer: 'Imported',
+                    color: '#dcb13c',
+                    originalRow: row
+                }));
+            }
+        }
+        
+        if (displayPts.length > 0) {
+            if (detected) {
+                const def = COMMON_EPSG.find(e => e.code === detected)?.def || detected;
+                setGlobalPoints(transformPoints(displayPts, def));
+            } else {
+                setGlobalPoints(displayPts);
+            }
+        }
+      } catch (e) {
+         console.warn("Failed to auto-display points on map", e);
+      }
     } catch (err: any) { setError(err.message); } finally { setLoading(false); setProgressPercent(null); }
   };
 
@@ -6725,10 +6740,7 @@ const App: React.FC = () => {
                                  <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
                                      {lang === 'ar' ? (
                                          <>
-                                             <li>ارفع الملف الأساسي (Base) والملف المقارن (Compare).</li>
-                                             <li>قم بتشغيل الفحص لاكتشاف الخطوط والنقاط المتطابقة (Duplicates).</li>
-                                             <li>اكتشف التقاطعات (Intersections) بين الشبكتين بدقة.</li>
-                                             <li>تصفح النتائج بشكل تفاعلي على الخريطة وقم بتصدير عناصر التقاطع/التطابق منفردة.</li>
+                                             <li>ارفع الملف الأساسي (Base) والالملف المقارن (Compare).</li>
                                          </>
                                      ) : (
                                          <>
@@ -6964,8 +6976,8 @@ export const CheckResultModalPopup: React.FC<{
                 <span>💡</span>
                 <span>
                   {lang === 'ar' 
-                    ? 'انقر على "تحديد موقع المشاكل" للذهاب فوراً للخريطة وتحديد أماكن الـ 15 عنصر المعنية مع التكبير المباشر.' 
-                    : 'Click "Locate Issues" to jump directly to the map and view all 15 issue elements in high focus.'}
+                    ? `انقر على "تحديد موقع المشاكل" للذهاب فوراً للخريطة وتحديد أماكن الـ (${checkResultModal.issuesCount}) عنصر المعنية مع التكبير المباشر.` 
+                    : `Click "Locate Issues" to jump directly to the map and view all ${checkResultModal.issuesCount} issue elements in high focus.`}
                 </span>
               </p>
             </div>

@@ -903,16 +903,18 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
   return (
     <div className="bg-[#0b1726]/95 p-6 rounded-[2.5rem] border border-emerald-500/40 shadow-2xl space-y-6 text-white my-4">
       {/* Top Banner Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-5">
-        <div className="flex items-center gap-3.5">
-          <div className="p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 shrink-0">
-            <ShieldCheck className="w-7 h-7" />
+      <div className="flex flex-col gap-4 border-b border-white/10 pb-5">
+        <div className="flex items-start gap-3.5">
+          <div className="p-3 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 shrink-0 mt-1">
+            <ShieldCheck className="w-6 h-6" />
           </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-white font-black text-base uppercase tracking-wider">
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <h2 className="text-white font-black text-sm uppercase tracking-wider leading-snug">
                 {lang === 'ar' ? 'مُدقق السلامة والمطابقة لكود البناء السعودي (SBC)' : 'Saudi Building Code (SBC) Compliance Validator'}
               </h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-black px-2.5 py-0.5 rounded-full border border-emerald-500/30">
                 SBC Standards
               </span>
@@ -921,7 +923,7 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
                 <span>{lang === 'ar' ? 'تحت التطوير' : 'Under Development'}</span>
               </span>
             </div>
-            <p className="text-white/60 text-xs font-semibold mt-1">
+            <p className="text-white/60 text-[11px] font-semibold leading-relaxed">
               {lang === 'ar'
                 ? 'فحص شبكات الصرف الصحي، مياه الشرب، ومسافات الفصل الإلزامية بين الخطوط'
                 : 'Audits Sewer lines, Drinking Water networks & Mandatory separation distances per SBC'}
@@ -930,13 +932,13 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
         </div>
 
         {/* Development Notice Banner */}
-        <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-2xl flex items-center gap-3 text-amber-200 text-xs shadow-inner">
-          <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+        <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-2xl flex items-start gap-3 text-amber-200 shadow-inner">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
           <div className="flex-1">
-            <span className="font-black block text-amber-300 text-[11px] uppercase tracking-wide">
+            <span className="font-black block text-amber-300 text-[10px] uppercase tracking-wide mb-1">
               {lang === 'ar' ? '⚠️ موديول تحت التطوير والاختبار (Under Development)' : '⚠️ Module Under Active Development'}
             </span>
-            <p className="text-white/80 text-[11px] leading-relaxed mt-0.5">
+            <p className="text-white/80 text-[10px] leading-relaxed">
               {lang === 'ar'
                 ? 'تنويه: قسم فحص كود البناء السعودي قيد التحديث والتطوير المستمر لاختبار الاشتراطات وإضافة الخوارزميات التفصيلية لشبكات الخدمات.'
                 : 'Notice: The Saudi Building Code (SBC) compliance audit module is currently under active development and testing.'}
@@ -946,7 +948,7 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
 
         {/* Action Controls & Export Dropdown */}
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="bg-black/50 p-1 rounded-xl border border-white/10 flex items-center">
+          <div className="bg-black/50 p-1 rounded-xl border border-white/10 flex items-center w-full">
             <button
               onClick={() => setActiveTab('audit')}
               className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 ${
@@ -1042,7 +1044,7 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
         </div>
 
         {/* Quick Selection Buttons */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setNetworkTypeMode('auto')}
             className={`py-2 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-all border ${
@@ -1186,14 +1188,14 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
       </div>
 
       {/* Overview Statistics & Score */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {/* Compliance Score */}
-        <div className="bg-gradient-to-br from-emerald-950/60 to-black p-4 rounded-2xl border border-emerald-500/30 text-center flex flex-col items-center justify-center col-span-2 md:col-span-1">
+        <div className="bg-gradient-to-br from-emerald-950/60 to-black p-4 rounded-2xl border border-emerald-500/30 text-center flex flex-col items-center justify-center col-span-2">
           <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">
             {lang === 'ar' ? 'مؤشر المطابقة للكود' : 'SBC Compliance Score'}
           </span>
           <div className="flex items-baseline gap-1">
-            <span className={`text-3xl font-black ${
+            <span className={`text-4xl font-black ${
               stats.complianceScore >= 80 ? 'text-emerald-400' : stats.complianceScore >= 50 ? 'text-amber-400' : 'text-red-400'
             }`}>
               {stats.complianceScore}%
@@ -1206,52 +1208,52 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
 
         {/* Detected Sewer Points */}
         <div className="bg-black/40 p-3.5 rounded-2xl border border-white/5 text-center flex flex-col justify-center">
-          <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">
-            {lang === 'ar' ? 'خطوط الصرف الصحى' : 'Sewer Network'}
+          <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+            {lang === 'ar' ? 'صرف صحي' : 'Sewer Network'}
           </span>
           <span className="text-xl font-black text-amber-400">
             {parsedNetworks.sewerPoints.length}
           </span>
-          <span className="text-[9px] text-white/40 font-bold mt-0.5">{lang === 'ar' ? 'عنصر/نقطة' : 'elements'}</span>
+          <span className="text-[8px] text-white/40 font-bold mt-0.5">{lang === 'ar' ? 'عنصر/نقطة' : 'elements'}</span>
         </div>
 
         {/* Detected Water Points */}
         <div className="bg-black/40 p-3.5 rounded-2xl border border-white/5 text-center flex flex-col justify-center">
-          <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">
-            {lang === 'ar' ? 'خطوط مياه الشرب' : 'Drinking Water'}
+          <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+            {lang === 'ar' ? 'مياه شرب' : 'Drinking Water'}
           </span>
           <span className="text-xl font-black text-cyan-400">
             {parsedNetworks.waterPoints.length}
           </span>
-          <span className="text-[9px] text-white/40 font-bold mt-0.5">{lang === 'ar' ? 'عنصر/نقطة' : 'elements'}</span>
+          <span className="text-[8px] text-white/40 font-bold mt-0.5">{lang === 'ar' ? 'عنصر/نقطة' : 'elements'}</span>
         </div>
 
         {/* Total Critical Errors */}
         <div className="bg-black/40 p-3.5 rounded-2xl border border-red-500/20 text-center flex flex-col justify-center">
-          <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">
+          <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
             {lang === 'ar' ? 'مخالفات صريحة' : 'Critical Violations'}
           </span>
           <span className="text-xl font-black text-red-400">
             {stats.errors}
           </span>
-          <span className="text-[9px] text-red-400/70 font-bold mt-0.5">{lang === 'ar' ? 'تستدعي التصحيح' : 'Requires fix'}</span>
+          <span className="text-[8px] text-red-400/70 font-bold mt-0.5">{lang === 'ar' ? 'تستدعي التصحيح' : 'Requires fix'}</span>
         </div>
 
         {/* Total Warnings */}
         <div className="bg-black/40 p-3.5 rounded-2xl border border-amber-500/20 text-center flex flex-col justify-center">
-          <span className="text-[10px] font-bold text-white/50 uppercase block mb-1">
-            {lang === 'ar' ? 'تحذيرات وملاحظات' : 'SBC Warnings'}
+          <span className="text-[9px] font-bold text-white/50 uppercase block mb-1">
+            {lang === 'ar' ? 'تحذيرات' : 'SBC Warnings'}
           </span>
           <span className="text-xl font-black text-amber-300">
             {stats.warnings}
           </span>
-          <span className="text-[9px] text-amber-300/70 font-bold mt-0.5">{lang === 'ar' ? 'تعديل أو مراجعة' : 'Review needed'}</span>
+          <span className="text-[8px] text-amber-300/70 font-bold mt-0.5">{lang === 'ar' ? 'تعديل أو مراجعة' : 'Review needed'}</span>
         </div>
       </div>
 
       {/* MAP HIGHLIGHT & COLOR CODING TOOLBAR */}
       <div className="bg-gradient-to-r from-[#0d2238] via-black to-[#0d2238] p-4 rounded-2xl border border-emerald-500/30 space-y-3">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+        <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <Palette className="w-5 h-5 text-emerald-400" />
             <h3 className="text-xs font-black text-white uppercase tracking-wider">
@@ -1277,7 +1279,7 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
         </div>
 
         {/* Action Buttons for Color Classification */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+        <div className="grid grid-cols-2 gap-2 pt-1">
           <button
             onClick={() => handleApplySbcColorCodingToMap('full')}
             className={`py-2 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-all border ${
