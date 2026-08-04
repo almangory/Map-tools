@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import L from 'leaflet';
-import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2, MapPin } from 'lucide-react';
+import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2, MapPin, RotateCcw } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GeoPoint } from '../types';
@@ -25,6 +25,7 @@ export interface MapPreviewProps {
   showIssuesOnly?: boolean;
   onToggleShowIssuesOnly?: (val: boolean) => void;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
+  onClearAudit?: () => void;
 }
 
 /**
@@ -50,7 +51,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   showIssuesOnly = false,
   onToggleShowIssuesOnly,
   overlapResults, 
-  globalBaseMap 
+  globalBaseMap,
+  onClearAudit
 }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
@@ -85,11 +87,35 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const isIssuePoint = (pt: GeoPoint): boolean => {
     return Boolean(
       pt.isIssue ||
-      pt.color === '#000000' ||
-      pt.color === '#ef4444' ||
-      (pt.layer && pt.layer.includes('MISSING')) ||
+      Boolean(pt.issueReason && pt.issueReason.trim()) ||
+      (pt.layer && pt.layer.includes('_MISSING_ATTRS')) ||
       (pt.description && pt.description.includes('[MISSING:'))
     );
+  };
+
+  const getIssueReasonText = (pt: GeoPoint, language: 'ar' | 'en'): string => {
+    if (pt.issueReason && pt.issueReason.trim()) {
+      return pt.issueReason.trim();
+    }
+    if (pt.description && pt.description.includes('[MISSING:')) {
+      const match = pt.description.match(/\[MISSING:\s*([^\]]+)\]/i);
+      if (match && match[1]) {
+        return language === 'ar' 
+          ? `عنصر ينقصه البيانات التالية: (${match[1]})` 
+          : `Element missing required fields: (${match[1]})`;
+      }
+    }
+    if (pt.layer && pt.layer.includes('_MISSING_ATTRS')) {
+      return language === 'ar' 
+        ? 'عنصر ينقصه القطر أو المنطقة (Diameter / Zone)' 
+        : 'Missing Diameter or Zone attributes';
+    }
+    if (pt.isIssue) {
+      return language === 'ar' 
+        ? 'ملاحظة تدقيق في بيانات العنصر' 
+        : 'Data validation audit issue';
+    }
+    return '';
   };
 
   // Helper functions for extracting critical attributes (Segment ID, Permit No, Diameter)
@@ -393,6 +419,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         const isOverlap = overlapResults?.some(o => !o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         const isIntersectionLine = overlapResults?.some(o => o.isIntersection && (String(o.id1) === String(pt.id) || String(o.id2) === String(pt.id)));
         const hasIssue = isIssuePoint(pt);
+        const issueReasonText = getIssueReasonText(pt, lang);
         
         let featColor = isOverlap ? '#000000' : String(pt.color || '#dcb13c').toLowerCase();
         if (hasIssue && !isOverlap) {
@@ -402,16 +429,16 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         let popupContent = `<div class="p-3 min-w-[240px] font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
           <div class="font-bold text-primary border-b border-slate-200 pb-2 mb-2 text-[13px] flex items-center justify-between">
             <span>${pt.id}</span>
-            ${hasIssue ? `<span class="bg-red-50 text-red-600 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">⚠️ ${lang === 'ar' ? 'عنصر به ملاحظة' : 'Issue Found'}</span>` : ''}
+            ${hasIssue && issueReasonText ? `<span class="bg-red-50 text-red-600 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">⚠️ ${lang === 'ar' ? 'عنصر به ملاحظة' : 'Issue Found'}</span>` : ''}
           </div>`;
-        if (hasIssue) {
-          popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-red-50/50 border border-red-200 text-red-700 text-[11px] font-medium space-y-1 shadow-sm">
-            <div class="flex items-center gap-1.5 font-bold text-red-800">
+        if (hasIssue && issueReasonText) {
+          popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-[11px] font-medium space-y-1 shadow-sm">
+            <div class="flex items-center gap-1.5 font-bold text-red-800 border-b border-red-200/60 pb-1 mb-1">
               <span>⚠️</span>
-              <span>${lang === 'ar' ? 'تفاصيل الملاحظة / التدقيق:' : 'Audit Issue Details:'}</span>
+              <span>${lang === 'ar' ? 'نوع الملاحظة / التدقيق:' : 'Audit Issue Type:'}</span>
             </div>
-            <p class="text-[10px] leading-relaxed text-slate-700 font-semibold">
-              ${pt.issueReason || pt.description || (lang === 'ar' ? 'عنصر ناتج عن فحص البيانات' : 'Validation audit item')}
+            <p class="text-[11px] leading-relaxed text-red-950 font-black">
+              ${issueReasonText}
             </p>
           </div>`;
         }
@@ -648,42 +675,61 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         `}</style>
         <div ref={mapContainer} className="w-full h-full z-0" />
         
-        {/* Floating Top Banner for Issue Control */}
-        {detectedIssuePoints.length > 0 && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[600] flex items-center gap-2 bg-[#0b2d3d]/95 backdrop-blur-md border border-rose-500/50 p-1.5 sm:p-2 rounded-2xl shadow-2xl animate-in slide-in-from-top duration-300">
+        {/* Floating Top Banner for Issue & Auto-Audit Control */}
+        {(detectedIssuePoints.length > 0 || (overlapResults && overlapResults.length > 0) || showIssuesOnly) && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[600] flex flex-wrap items-center justify-center gap-2 bg-[#0b2d3d]/95 backdrop-blur-md border border-rose-500/50 p-1.5 sm:p-2 rounded-2xl shadow-2xl animate-in slide-in-from-top duration-300">
             <div className="flex items-center gap-2 px-3 py-1 bg-rose-500/20 text-rose-300 rounded-xl text-xs font-black">
               <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
-              <span>{lang === 'ar' ? `تم رصد ${detectedIssuePoints.length} مشكلة` : `${detectedIssuePoints.length} Issues Detected`}</span>
+              <span>
+                {overlapResults && overlapResults.length > 0
+                  ? (lang === 'ar' ? `تم رصد ${overlapResults.length} تداخل مكاني (فحص تلقائي)` : `${overlapResults.length} Spatial Overlaps (Auto Audit)`)
+                  : (lang === 'ar' ? `تم رصد ${detectedIssuePoints.length} ملاحظات فحص` : `${detectedIssuePoints.length} Issues Detected`)}
+              </span>
             </div>
 
-            <button
-              onClick={() => {
-                if (onToggleShowIssuesOnly) {
-                  onToggleShowIssuesOnly(!showIssuesOnly);
-                }
-              }}
-              className={cn(
-                "px-3 py-1.5 rounded-xl text-xs font-black transition-all border flex items-center gap-1.5",
-                showIssuesOnly
-                  ? "bg-rose-600 text-white border-rose-400 shadow-lg"
-                  : "bg-white/10 text-white hover:bg-white/20 border-white/20"
-              )}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              <span>
-                {showIssuesOnly
-                  ? (lang === 'ar' ? 'عرض الكل' : 'Show All')
-                  : (lang === 'ar' ? 'عزل المشاكل فقط' : 'Isolate Issues')}
-              </span>
-            </button>
+            {detectedIssuePoints.length > 0 && (
+              <>
+                <button
+                  onClick={() => {
+                    if (onToggleShowIssuesOnly) {
+                      onToggleShowIssuesOnly(!showIssuesOnly);
+                    }
+                  }}
+                  className={cn(
+                    "px-3 py-1.5 rounded-xl text-xs font-black transition-all border flex items-center gap-1.5",
+                    showIssuesOnly
+                      ? "bg-rose-600 text-white border-rose-400 shadow-lg"
+                      : "bg-white/10 text-white hover:bg-white/20 border-white/20"
+                  )}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>
+                    {showIssuesOnly
+                      ? (lang === 'ar' ? 'عرض الكل' : 'Show All')
+                      : (lang === 'ar' ? 'عزل المشاكل فقط' : 'Isolate Issues')}
+                  </span>
+                </button>
 
-            <button
-              onClick={zoomToIssuesExtent}
-              className="px-3 py-1.5 bg-accent text-primary hover:bg-accent/90 rounded-xl text-xs font-black transition-all shadow-md flex items-center gap-1.5 active:scale-95"
-            >
-              <Maximize className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'تقريب وتحديد الأماكن' : 'Zoom & Focus'}</span>
-            </button>
+                <button
+                  onClick={zoomToIssuesExtent}
+                  className="px-3 py-1.5 bg-accent text-primary hover:bg-accent/90 rounded-xl text-xs font-black transition-all shadow-md flex items-center gap-1.5 active:scale-95"
+                >
+                  <Maximize className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'تقريب وتحديد الأماكن' : 'Zoom & Focus'}</span>
+                </button>
+              </>
+            )}
+
+            {onClearAudit && (
+              <button
+                onClick={onClearAudit}
+                className="px-3 py-1.5 bg-rose-500/30 hover:bg-rose-600 text-rose-100 border border-rose-400/50 rounded-xl text-xs font-black transition-all shadow-md flex items-center gap-1.5 active:scale-95"
+                title={lang === 'ar' ? 'إزالة نتائج الفحص والتظليل والتنبيهات التلقائية' : 'Clear Audit Highlights'}
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-rose-300" />
+                <span>{lang === 'ar' ? 'إزالة نتائج الفحص' : 'Clear Audit'}</span>
+              </button>
+            )}
           </div>
         )}
 

@@ -115,7 +115,17 @@ export const transformPoints = (points: GeoPoint[], sourceDef: string): GeoPoint
           }
       }
 
-      return { ...pt, x: finalLon, y: finalLat, path: transformedPath };
+      const origColor = (pt as any).originalColor || pt.color || '#dcb13c';
+      const origLayer = (pt as any).originalLayer || pt.layer || '0';
+
+      return {
+        ...pt,
+        originalColor: origColor,
+        originalLayer: origLayer,
+        x: finalLon,
+        y: finalLat,
+        path: transformedPath
+      };
     } catch (e) {
       return { ...pt, x: 0, y: 0, layer: 'Error' }; 
     }

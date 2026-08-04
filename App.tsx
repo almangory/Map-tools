@@ -47,7 +47,7 @@ const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule a
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
-const PALETTE = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#d946ef'];
+const PALETTE = ['#3b82f6', '#0284c7', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#d946ef'];
 
 const SAMPLE_GDB_POINTS: GeoPoint[] = [
   {
@@ -1330,7 +1330,10 @@ const App: React.FC = () => {
     const resetPoints = (pts: GeoPoint[]) => {
       return pts.map(pt => {
         if (!pt) return pt;
-        const originalColor = (pt as any).originalColor || pt.color;
+        let originalColor = (pt as any).originalColor;
+        if (!originalColor || ['#000000', '#ef4444', '#9000FF', '#FF6D00'].includes(String(originalColor).toUpperCase())) {
+          originalColor = pt.color && !['#000000', '#ef4444', '#9000FF', '#FF6D00'].includes(String(pt.color).toUpperCase()) ? pt.color : '#DCB13C';
+        }
         const originalLayer = (pt as any).originalLayer || (pt.layer ? pt.layer.replace('_MISSING_ATTRS', '') : pt.layer);
 
         if (pt.isIssue || pt.issueReason || (pt.color && pt.color !== originalColor) || (pt.layer && pt.layer.includes('_MISSING_ATTRS'))) {
@@ -1339,6 +1342,8 @@ const App: React.FC = () => {
 
         const cleanPt: GeoPoint = {
           ...pt,
+          originalColor,
+          originalLayer,
           isIssue: false,
           issueReason: undefined,
           color: originalColor,
@@ -1368,12 +1373,13 @@ const App: React.FC = () => {
     setAutoAlertInfo(null);
     setShowOverlapModal(false);
     setShowAutoAlertModal(false);
+    lastAlertedFileRef.current = '';
     setDataId(`clear-audit-${Date.now()}`);
 
     setStatusMessage(
       lang === 'ar'
-        ? 'تمت إزالة نتائج الفحص والتظليل وإعادة الخريطة إلى حالتها الأصلية بنجاح.'
-        : 'All audit highlights cleared and map restored to original state successfully.'
+        ? 'تمت إزالة جميع نتائج الفحص والتظليل والتنبيهات التلقائية وإعادة الخريطة إلى حالتها الأصلية بنجاح 🧹'
+        : 'All audit highlights and automatic alerts cleared successfully, restoring map to original state 🧹'
     );
     setTimeout(() => setStatusMessage(''), 4000);
   };
@@ -1490,7 +1496,12 @@ const App: React.FC = () => {
         const updateList = (list: GeoPoint[]) => list.map(pt => {
           if (dupIds.has(String(pt.id))) {
             coloredCount++;
-            return { ...pt, color: '#000000' };
+            return {
+              ...pt,
+              originalColor: (pt as any).originalColor || pt.color || '#DCB13C',
+              originalLayer: (pt as any).originalLayer || pt.layer || '0',
+              color: '#000000'
+            };
           }
           return pt;
         });
@@ -4021,6 +4032,16 @@ const App: React.FC = () => {
                         <GitBranch className="w-3.5 h-3.5" />
                         <span>{lang === 'ar' ? 'معاينة المعالجة ⚡' : 'Review & Resolve ⚡'}</span>
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={clearAuditResults}
+                        className="px-3 py-1.5 bg-rose-500/30 hover:bg-rose-500/50 text-rose-200 border border-rose-500/40 rounded-xl text-[10px] font-black transition-all flex items-center gap-1 active:scale-95 shadow"
+                        title={lang === 'ar' ? 'إزالة كافة نتائج التظليل والفحص والتنبيهات' : 'Clear all audit results and alerts'}
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-rose-300" />
+                        <span>{lang === 'ar' ? 'إزالة نتائج الفحص والتنبيهات 🧹' : 'Clear Audit & Alerts 🧹'}</span>
+                      </button>
                     </div>
                   </div>
                 )}
@@ -5844,6 +5865,7 @@ const App: React.FC = () => {
             issueItems={activeIssueItems}
             showIssuesOnly={showIssuesOnly}
             onToggleShowIssuesOnly={setShowIssuesOnly}
+            onClearAudit={clearAuditResults}
             isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
             onPolygonComplete={(poly) => {
               if (activeTab === 'splitter' && splitMode === 'spatial') {
@@ -6331,6 +6353,14 @@ const App: React.FC = () => {
                           >
                               {lang === 'ar' ? 'متابعة بدون معالجة (تجاهل التنبيه)' : 'Dismiss & Continue'}
                           </button>
+
+                          <button
+                              onClick={clearAuditResults}
+                              className="w-full py-2.5 px-4 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 active:scale-95"
+                          >
+                              <RotateCcw className="w-4 h-4 text-rose-400" />
+                              <span>{lang === 'ar' ? 'إزالة نتائج الفحص وإلغاء التظليل والتنبيهات 🧹' : 'Clear Audit & Auto-Alert Results 🧹'}</span>
+                          </button>
                       </div>
                   </div>
               </div>
@@ -6378,6 +6408,14 @@ const App: React.FC = () => {
                                              >
                                                  <Palette className="w-4 h-4 text-white" />
                                                  <span>{lang === 'ar' ? 'تلوين المتطابقة ⬛' : 'Color Duplicates ⬛'}</span>
+                                             </button>
+                                             <button
+                                                 onClick={clearAuditResults}
+                                                 className="px-3.5 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
+                                                 title={lang === 'ar' ? 'إزالة كافة نتائج الفحص والتظليل والتنبيهات' : 'Clear all audit results'}
+                                             >
+                                                 <RotateCcw className="w-4 h-4 text-rose-400" />
+                                                 <span>{lang === 'ar' ? 'إزالة نتائج الفحص 🧹' : 'Clear Audit 🧹'}</span>
                                              </button>
                                              <button
                                                  onClick={handleResolveDuplicates}
@@ -6997,7 +7035,7 @@ export const CheckResultModalPopup: React.FC<{
                           {item.id}
                         </div>
                         <div className="text-[10px] text-rose-300/80 truncate font-semibold">
-                          {item.issueReason || item.description || (lang === 'ar' ? 'ملاحظة تدقيق' : 'Audit issue')}
+                          {item.issueReason || (lang === 'ar' ? 'ملاحظة تدقيق في بيانات العنصر' : 'Audit validation issue')}
                         </div>
                       </div>
                     </div>
