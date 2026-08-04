@@ -497,7 +497,7 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
         downloadBlob(zipBlob, `${cleanDocName}_Grouped_KMZs.zip`);
     } catch (e: any) {
         console.error("Error creating KMZ ZIP:", e);
-        alert("خطأ أثناء إنشاء المجلد المضغوط (Error creating ZIP): " + e.message);
+        throw new Error("Error creating ZIP: " + e.message);
     }
 };
 
@@ -530,7 +530,7 @@ export const downloadKMZ = async (points: GeoPoint[], docName: string, options: 
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e: any) {
         console.error("Error creating KMZ:", e);
-        alert("خطأ أثناء إنشاء الملف (Error creating KMZ): " + e.message);
+        throw new Error("Error creating KMZ: " + e.message);
     }
 };
 

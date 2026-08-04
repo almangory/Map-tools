@@ -103,7 +103,7 @@ interface Props {
   points: GeoPoint[];
   headers?: string[];
   lang: 'ar' | 'en';
-  fetchStreets?: (points: GeoPoint[], headers: string[], action: () => void) => void;
+  fetchStreets?: (points: GeoPoint[], headers: string[]) => Promise<GeoPoint[]>;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
   geocodingMode?: 'accurate' | 'fast';
   onVerifyMissingAttributes?: () => void;
@@ -360,6 +360,8 @@ export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
 };
 
 export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc }: Props) => {
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('pipes');
@@ -560,7 +562,8 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   });
 
   
-  const getProcessedPoints = () => {
+  const getProcessedPoints = (overridePoints?: GeoPoint[]) => {
+    const pts = overridePoints || points;
     const currentSelected = selectedFields[targetTemplate] ?? TEMPLATES[targetTemplate].fields;
     let templateFields = TEMPLATES[targetTemplate].fields.filter(f => currentSelected.includes(f));
     
@@ -583,7 +586,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       return lower === 'district' || lower === 'اسمالحي' || lower === 'الحي';
     };
 
-    const processedPoints = points.map(p => {
+    const processedPoints = pts.map(p => {
       const newAttrs: Record<string, string> = {};
       const mappedSourceFields = new Set<string>();
 
@@ -803,9 +806,10 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     return `${prefix}_${suffix}_Formatted`;
   };
 
-  const handleApplyExportKMZ = () => {
-    const { processedPoints, templateFields } = getProcessedPoints();
-    downloadKMZ(processedPoints, getBaseFilename(), { 
+  const handleApplyExportKMZ = async (pts?: GeoPoint[]) => {
+    try {
+      const { processedPoints, templateFields } = getProcessedPoints(pts);
+      await downloadKMZ(processedPoints, getBaseFilename(), { 
         mode: keepFolders ? 'layer' : 'none', 
         groupByAttribute: keepFolders ? 'layer' : undefined,
         optimizeForMyMaps: optimizeForMyMaps,
@@ -820,21 +824,29 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             }
         } : {})
     }, templateFields, templateFields);
+      setSuccessMessage("تم تصدير ملف KMZ بنجاح!");
+    } catch (e: any) { setActionError("Error exporting KMZ: " + e.message); console.error(e); }
   };
 
-  const handleApplyExportDXF = () => {
-    const { processedPoints } = getProcessedPoints();
-    downloadDXF(processedPoints, getBaseFilename());
+  const handleApplyExportDXF = async (pts?: GeoPoint[]) => {
+    try {
+      const { processedPoints } = getProcessedPoints(pts);
+      await downloadDXF(processedPoints, getBaseFilename());
+      setSuccessMessage("تم تصدير ملف DXF بنجاح!");
+    } catch (e: any) { setActionError("Error exporting DXF: " + e.message); console.error(e); }
   };
 
-  const handleApplyExportPDF = () => {
-    const { processedPoints } = getProcessedPoints();
-    downloadDataPDF(processedPoints, getBaseFilename(), lang);
+  const handleApplyExportPDF = async (pts?: GeoPoint[]) => {
+    try {
+      const { processedPoints } = getProcessedPoints(pts);
+      await downloadDataPDF(processedPoints, getBaseFilename(), lang);
+    } catch (e: any) { setActionError("Error exporting PDF: " + e.message); console.error(e); }
   };
 
-  const handleApplyExportExcel = () => {
-    const { processedPoints, templateFields } = getProcessedPoints();
-    const data = processedPoints.map(p => {
+  const handleApplyExportExcel = async (pts?: GeoPoint[]) => {
+    try {
+      const { processedPoints, templateFields } = getProcessedPoints(pts);
+      const data = processedPoints.map(p => {
         const row: any = { ID: p.id, Type: p.type, Layer: p.layer || '', X: p.x, Y: p.y };
         
         const extracted = extractAllPointAttributes(p);
@@ -862,25 +874,46 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Formatted_Data");
     XLSX.writeFile(wb, `${getBaseFilename()}.xlsx`);
+      setSuccessMessage("تم تصدير ملف الإكسل بنجاح!");
+    } catch (e: any) { setActionError("Error exporting Excel: " + e.message); console.error(e); }
   };
 
 
-  const executeAction = (action: () => void) => {
-    if (autoFetchStreets && fetchStreets) {
-      const confirmMsg = lang === 'ar' 
-        ? 'لقد قمت بتفعيل خيار "جلب الشوارع". قد تستغرق هذه العملية بعض الوقت حسب عدد النقاط وسيتم استبدال قيم الشوارع الحالية. هل أنت متأكد من رغبتك في الاستمرار وتصدير البيانات؟'
-        : 'You have enabled "Fetch Streets". This process may take some time depending on the number of points and will overwrite current street values. Are you sure you want to continue and export?';
-      if (window.confirm(confirmMsg)) {
-        fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], () => {
-          action();
-        });
-      }
-    } else {
-      action();
+  const executeAction = async (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
+    setActionError(null);
+    setSuccessMessage(null);
+    try {
+        if (autoFetchStreets && fetchStreets) {
+          const confirmMsg = lang === 'ar' 
+            ? 'لقد قمت بتفعيل خيار "جلب الشوارع". قد تستغرق هذه العملية بعض الوقت حسب عدد النقاط وسيتم استبدال قيم الشوارع الحالية. هل أنت متأكد من رغبتك في الاستمرار وتصدير البيانات؟'
+            : 'You have enabled "Fetch Streets". This process may take some time depending on the number of points and will overwrite current street values. Are you sure you want to continue and export?';
+          
+          let proceed = true;
+          try {
+             proceed = window.confirm(confirmMsg);
+          } catch(e) {
+             console.warn("window.confirm not supported, proceeding automatically");
+             proceed = true;
+          }
+
+          if (proceed) {
+             const updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
+             await action(updatedPoints);
+          }
+
+        } else {
+          await action();
+        }
+    } catch (err: any) {
+        console.error("Export Action Error:", err);
+        setActionError("حدث خطأ أثناء التصدير: " + (err).message);
     }
   };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
+      {actionError && <div className="p-4 bg-red-500/20 border border-red-500 rounded-2xl text-red-100 font-bold mb-4">{actionError}</div>}
+      {successMessage && <div className="p-4 bg-green-500/20 border border-green-500 rounded-2xl text-green-100 font-bold mb-4">{successMessage}</div>}
       <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4">
         <Database className="w-16 h-16 text-accent mx-auto" />
         <h2 className="text-white font-black text-xl">{lang === 'ar' ? 'تنسيق البيانات للمشاريع' : 'Project Data Formatter'}</h2>

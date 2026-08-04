@@ -2663,7 +2663,7 @@ const App: React.FC = () => {
       const pId = item.projectId || extractAttrValueLocal(item.points, ['project_id', 'projectid', 'رقم_المشروع'], [/رقم\s*المشروع\s*[:=]\s*([^<\r\n]+)/i]);
       const contractor = item.contractor || extractAttrValueLocal(item.points, ['contractor', 'مقاول', 'المقاول'], [/المقاول\s*[:=]\s*([^<\r\n]+)/i]);
       const zone = cleanZoneValue(extractAttrValueLocal(item.points, ['zone', 'المنطقة', 'منطقة'], [/المنطقة\s*[:=]\s*([^<\r\n]+)/i]));
-      const street = extractAttrValueLocal(item.points, ['street', 'الشارع', 'streetname'], [/الشارع\s*[:=]\s*([^<\r\n]+)/i]);
+      const street = extractAttrValueLocal(item.points, ['street', 'الشارع', 'اسم الشارع', 'streetname'], [/الشارع\s*[:=]\s*([^<\r\n]+)/i]);
       const mapUrl = getMapLink(item.points);
 
       return {
@@ -2879,7 +2879,7 @@ const App: React.FC = () => {
             originalHeaders.forEach((h, i) => {
                 if (selectedHeaders.includes(h)) {
                     const hLower = String(h || '').toLowerCase();
-                    if (['streetname', 'street', 'الشارع'].includes(hLower) && pt && pt.street) {
+                    if (['streetname', 'street', 'الشارع', 'اسم الشارع'].includes(hLower) && pt && pt.street) {
                         rowObj[h] = pt.street;
                     } else {
                         rowObj[h] = row[i];
@@ -3459,13 +3459,15 @@ const App: React.FC = () => {
   const executeWithStreetFetching = async (
     points: GeoPoint[],
     headers: string[] | undefined,
-    action: () => Promise<void> | void
-  ) => {
-    const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'streetname', 'district', 'الحي'].includes(String(h || '').toLowerCase()));
+    callback?: (pts: GeoPoint[]) => void | Promise<void>
+  ): Promise<GeoPoint[]> => {
+    let newGlobalPoints = points.map(p => ({ ...p, attributes: { ...(p.attributes || {}) } }));
+    const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'اسم الشارع', 'streetname', 'district', 'الحي'].includes(String(h || '').toLowerCase()));
     if (hasStreetHeader) {
       setLoading(true);
+      await new Promise(r => setTimeout(r, 100)); // Force UI to paint loading state
       try {
-        const total = points.length;
+        const total = newGlobalPoints.length;
         const batchSize = geocodingMode === 'accurate' ? 3 : 8;
 
         for (let i = 0; i < total; i += batchSize) {
@@ -3476,7 +3478,7 @@ const App: React.FC = () => {
                 ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${processed} من ${total})`
                 : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${processed} of ${total})`
             );
-            const chunk = points.slice(i, i + batchSize);
+            const chunk = newGlobalPoints.slice(i, i + batchSize);
             await Promise.all(chunk.map(async (pt) => {
                 let street = pt.street;
                 if (!street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف") {
@@ -3497,7 +3499,7 @@ const App: React.FC = () => {
                 }
                 pt.attributes = { ...(pt.attributes || {}) };
                 const matchStreet = headers.find(h => String(h || '').toLowerCase() === 'street');
-                const matchArabic = headers.find(h => h === 'الشارع');
+                const matchArabic = headers.find(h => h === 'الشارع' || h === 'اسم الشارع');
                 const matchStreetName = headers.find(h => String(h || '').toLowerCase() === 'streetname');
 
                 if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
@@ -3515,6 +3517,7 @@ const App: React.FC = () => {
               await new Promise(res => setTimeout(res, 80));
             }
         }
+        setGlobalPoints(newGlobalPoints);
       } catch (err) {
         console.error("Error in executeWithStreetFetching:", err);
       } finally {
@@ -3523,7 +3526,10 @@ const App: React.FC = () => {
         setStatusMessage('');
       }
     }
-    await action();
+    if (callback) {
+       await callback(newGlobalPoints);
+    }
+    return newGlobalPoints;
   };
 
   const handleFetchStreets = async () => {
