@@ -611,9 +611,10 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
     return points;
 };
 
-/**
- * دالة داخلية لتحليل محتوى KML النصي وتحويله إلى GeoPoints
- */
+const yieldToMain = async () => {
+  await new Promise(resolve => setTimeout(resolve, 0));
+};
+
 export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
     // 1. Preprocess the KML to clean up common issues (like unescaped '&')
     const preprocessed = preprocessKML(kmlContent);
@@ -675,7 +676,7 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
            const name = pm.getElementsByTagName("name")[0]?.textContent || `Element ${i+1}`;
            const desc = pm.getElementsByTagName("description")[0]?.textContent || "";
            
-                      let color = undefined; 
+           let color = undefined; 
            let iconUrl = undefined;
            const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent;
            if (styleUrl) {
@@ -801,37 +802,207 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
  
 
 /**
- * Async wrapper for parseKMLContent to handle NetworkLinks
+ * Async wrapper for parseKMLContent to handle NetworkLinks with UI yielding & progress
  */
 export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (percent: number) => void): Promise<GeoPoint[]> => {
-    const points = parseKMLContent(kmlContent);
-    
+    const preprocessed = preprocessKML(kmlContent);
+    if (onProgress) onProgress(10);
+    await yieldToMain();
+
     try {
         const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(kmlContent, "text/xml");
-        const networkLinks = xmlDoc.getElementsByTagName("NetworkLink");
+        const xmlDoc = parser.parseFromString(preprocessed, "text/xml");
         
+        const parserError = xmlDoc.getElementsByTagName("parsererror");
+        if (parserError.length > 0) {
+            console.warn("DOMParser encountered XML parsing error, attempting transparent regex recovery:", parserError[0]?.textContent);
+            const recoveredPoints = fallbackRegexParseKML(kmlContent);
+            if (recoveredPoints.length > 0) {
+                if (onProgress) onProgress(100);
+                return recoveredPoints;
+            }
+            throw new Error(parserError[0]?.textContent || "الملف المرفوع يحتوي على أخطاء في بنية XML.");
+        }
+
+        const stylesMap: Record<string, string> = {};
+        const iconUrlMap: Record<string, string> = {};
+        const styles = xmlDoc.getElementsByTagName("Style");
+        for (let i = 0; i < styles.length; i++) {
+            const id = styles[i].getAttribute("id");
+            if (id) {
+                const lineStyle = styles[i].getElementsByTagName("LineStyle")[0];
+                const lineColor = lineStyle?.getElementsByTagName("color")[0]?.textContent;
+                const iconStyle = styles[i].getElementsByTagName("IconStyle")[0];
+                const iconColor = iconStyle?.getElementsByTagName("color")[0]?.textContent;
+                const polyStyle = styles[i].getElementsByTagName("PolyStyle")[0];
+                const polyColor = polyStyle?.getElementsByTagName("color")[0]?.textContent;
+                const finalColor = lineColor || iconColor || polyColor;
+                const iconHref = iconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
+                if (iconHref) iconUrlMap[`#${id}`] = iconHref;
+                if (finalColor) stylesMap[`#${id}`] = kmlColorToHex(finalColor);
+            }
+        }
+
+        const styleMaps = xmlDoc.getElementsByTagName("StyleMap");
+        for (let i = 0; i < styleMaps.length; i++) {
+            const mapId = styleMaps[i].getAttribute("id");
+            if (mapId) {
+                const pairs = styleMaps[i].getElementsByTagName("Pair");
+                for (let j = 0; j < pairs.length; j++) {
+                    const key = pairs[j].getElementsByTagName("key")[0]?.textContent;
+                    const styleUrl = pairs[j].getElementsByTagName("styleUrl")[0]?.textContent;
+                    if (key === 'normal' && styleUrl) {
+                        if (stylesMap[styleUrl]) stylesMap[`#${mapId}`] = stylesMap[styleUrl];
+                        if (iconUrlMap[styleUrl]) iconUrlMap[`#${mapId}`] = iconUrlMap[styleUrl];
+                    }
+                }
+            }
+        }
+
+        const placemarks = Array.from(xmlDoc.getElementsByTagName("Placemark"));
+        const points: GeoPoint[] = [];
+        let lastYieldTime = Date.now();
+
+        for (let i = 0; i < placemarks.length; i++) {
+            if (Date.now() - lastYieldTime > 20) {
+                if (onProgress) onProgress(10 + Math.round((i / placemarks.length) * 80));
+                await yieldToMain();
+                lastYieldTime = Date.now();
+            }
+
+            const pm = placemarks[i];
+            const name = pm.getElementsByTagName("name")[0]?.textContent || `Element ${i+1}`;
+            const desc = pm.getElementsByTagName("description")[0]?.textContent || "";
+            
+            let color = undefined; 
+            let iconUrl = undefined;
+            const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent;
+            if (styleUrl) {
+                if (stylesMap[styleUrl]) color = stylesMap[styleUrl];
+                if (iconUrlMap[styleUrl]) iconUrl = iconUrlMap[styleUrl];
+            }
+            if (!styleUrl || !stylesMap[styleUrl]) {
+                const inlineLineStyle = pm.getElementsByTagName("LineStyle")[0];
+                const inlineIconStyle = pm.getElementsByTagName("IconStyle")[0];
+                const inlinePolyStyle = pm.getElementsByTagName("PolyStyle")[0];
+                const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent || 
+                                    inlineIconStyle?.getElementsByTagName("color")[0]?.textContent || 
+                                    inlinePolyStyle?.getElementsByTagName("color")[0]?.textContent;
+                if (inlineColor) color = kmlColorToHex(inlineColor);
+                
+                const inlineIconHref = inlineIconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
+                if (inlineIconHref) iconUrl = inlineIconHref;
+            }
+
+            let layerName = 'KML Import';
+            let parent = pm.parentElement;
+            while (parent) {
+                const lowerTag = String(parent.localName || parent.tagName || '').toLowerCase();
+                if (lowerTag === 'folder' || lowerTag === 'document') {
+                    const nameNode = Array.from(parent.childNodes).find(n => {
+                        const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                        return nName === 'name';
+                    });
+                    const folderName = nameNode?.textContent;
+                    if (folderName) {
+                        layerName = folderName;
+                        break;
+                    }
+                }
+                parent = parent.parentElement;
+            }
+
+            const attributes: Record<string, string> = {};
+            const extendedDataTags = Array.from(pm.getElementsByTagName("ExtendedData"));
+            extendedDataTags.forEach(extendedData => {
+                const dataElements = extendedData.getElementsByTagName("Data");
+                for (let j = 0; j < dataElements.length; j++) {
+                    const nameAttr = dataElements[j].getAttribute("name");
+                    const val = dataElements[j].getElementsByTagName("value")[0]?.textContent;
+                    if (nameAttr && val) attributes[nameAttr.trim()] = val.trim();
+                }
+                const simpleDataElements = extendedData.getElementsByTagName("SimpleData");
+                for (let j = 0; j < simpleDataElements.length; j++) {
+                    const nameAttr = simpleDataElements[j].getAttribute("name");
+                    const val = simpleDataElements[j].textContent;
+                    if (nameAttr && val) attributes[nameAttr.trim()] = val.trim();
+                }
+            });
+            
+            if (desc) {
+                parseDescriptionToAttributes(desc, attributes);
+            }
+       
+            const coordsTags = Array.from(pm.getElementsByTagName("coordinates"));
+            coordsTags.forEach((tag) => {
+                 const text = tag.textContent?.trim();
+                 if(!text) return;
+                 const tuples = text.split(/\s+/);
+                 if (tuples.length > 1) {
+                     const path: {x:number, y:number, z:number}[] = [];
+                     tuples.forEach(t => {
+                         const parts = t.split(',');
+                         if(parts.length >= 2) path.push({ x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0 });
+                     });
+                     if (path.length > 0) {
+                         let isPolygon = false;
+                         let isInnerBoundary = false;
+                         let isLineString = false;
+                         let isPointTag = false;
+
+                         let ancestor: Node | null = tag.parentNode;
+                         while (ancestor && ancestor !== pm) {
+                             const tagLower = String(ancestor.nodeName || '').toLowerCase();
+                             if (tagLower === 'innerboundaryis') {
+                                 isInnerBoundary = true;
+                             }
+                             if (tagLower === 'polygon' || tagLower === 'outerboundaryis' || tagLower === 'linearring') {
+                                 isPolygon = true;
+                             } else if (tagLower === 'linestring') {
+                                 isLineString = true;
+                             } else if (tagLower === 'point') {
+                                 isPointTag = true;
+                             }
+                             ancestor = ancestor.parentNode;
+                         }
+
+                         if (isInnerBoundary) return;
+
+                         if (!isPolygon && !isLineString && !isPointTag) {
+                             if (pm.getElementsByTagName("Polygon").length > 0 || pm.getElementsByTagName("outerBoundaryIs").length > 0) {
+                                 isPolygon = true;
+                             }
+                         }
+
+                         const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
+                         const uniqueId = name ? `${name}_${points.length + 1}` : `Feature_${points.length + 1}`;
+                         points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: featureType, path: path, color, attributes, iconUrl });
+                     }
+                 } else {
+                     const parts = tuples[0].split(',');
+                     if (parts.length >= 2) {
+                         const uniqueId = name ? `${name}_${points.length + 1}` : `Point_${points.length + 1}`;
+                         points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
+                     }
+                 }
+            });
+        }
+
+        const networkLinks = xmlDoc.getElementsByTagName("NetworkLink");
         for (let i = 0; i < networkLinks.length; i++) {
-            // Find Link > href
             let href = "";
             const linkNode = networkLinks[i].getElementsByTagName("Link")[0];
             if (linkNode) {
                 href = linkNode.getElementsByTagName("href")[0]?.textContent?.trim() || "";
             } else {
-                // Sometimes it's direct Url > href
                 const urlNode = networkLinks[i].getElementsByTagName("Url")[0];
                 if (urlNode) {
                     href = urlNode.getElementsByTagName("href")[0]?.textContent?.trim() || "";
                 }
             }
 
-            if (href) {
+            if (href && href.startsWith('http')) {
                 try {
-                    // Check if it's already an absolute URL. If not, it might be relative, but for web KML it usually is absolute.
-                    if (!href.startsWith('http')) {
-                        console.warn("Relative NetworkLink not supported for web fetch:", href);
-                        continue;
-                    }
                     const parsedLink = await fetchNetworkFile(href);
                     if (parsedLink && parsedLink.data) {
                         points.push(...(parsedLink.data as GeoPoint[]));
@@ -841,11 +1012,18 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                 }
             }
         }
-    } catch(e) {
-        console.error("Error parsing for NetworkLinks", e);
-    }
 
-    return points;
+        if (onProgress) onProgress(100);
+        return points;
+    } catch(e) {
+        console.warn("XML parser threw exception, trying transparent regex recovery:", e);
+        const recoveredPoints = fallbackRegexParseKML(kmlContent);
+        if (recoveredPoints.length > 0) {
+            if (onProgress) onProgress(100);
+            return recoveredPoints;
+        }
+        throw new Error("الملف المرفوع يحتوي على أخطاء في بنية XML ولا يمكن استرجاع البيانات منه.");
+    }
 };
 
 

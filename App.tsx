@@ -1420,7 +1420,7 @@ const App: React.FC = () => {
   // ==========================================
   const handleCheckDuplicates = () => {
     setLoading(true);
-    setProgressPercent(15);
+    setProgressPercent(10);
     setStatusMessage(
       lang === 'ar'
         ? 'جاري فحص التداخل الجغرافي والتطابق المكاني...'
@@ -1428,12 +1428,9 @@ const App: React.FC = () => {
     );
 
     setTimeout(async () => {
-      setProgressPercent(40);
-      await new Promise(resolve => setTimeout(resolve, 80));
       try {
         const pointsToCheck = getPointsToCheck();
-        setProgressPercent(70);
-        const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
+        const dups = await detectExactDuplicates(pointsToCheck, duplicateTolerance, p => setProgressPercent(10 + Math.round(p * 0.85)));
         setProgressPercent(95);
         setOverlapResults(dups);
         setOverlapModalType('duplicates');
@@ -1455,12 +1452,12 @@ const App: React.FC = () => {
         setLoading(false);
         setProgressPercent(null);
       }
-    }, 100);
+    }, 50);
   };
 
   const handleColorDuplicatesBlack = () => {
     setLoading(true);
-    setProgressPercent(15);
+    setProgressPercent(10);
     setStatusMessage(
       lang === 'ar'
         ? 'جاري تلوين الخطوط المتطابقة باللون الأسود ⬛...'
@@ -1468,12 +1465,9 @@ const App: React.FC = () => {
     );
 
     setTimeout(async () => {
-      setProgressPercent(40);
-      await new Promise(resolve => setTimeout(resolve, 80));
       try {
         const pointsToCheck = getPointsToCheck();
-        setProgressPercent(70);
-        const dups = detectExactDuplicates(pointsToCheck, duplicateTolerance);
+        const dups = await detectExactDuplicates(pointsToCheck, duplicateTolerance, p => setProgressPercent(10 + Math.round(p * 0.75)));
 
         if (dups.length === 0) {
           setStatusMessage(
@@ -1527,12 +1521,12 @@ const App: React.FC = () => {
         setLoading(false);
         setProgressPercent(null);
       }
-    }, 100);
+    }, 50);
   };
 
   const handleResolveDuplicates = () => {
     setLoading(true);
-    setProgressPercent(15);
+    setProgressPercent(10);
     setStatusMessage(
       lang === 'ar'
         ? 'جاري حذف وتصفية العناصر المكررة والمتطابقة 🗑️...'
@@ -1540,22 +1534,20 @@ const App: React.FC = () => {
     );
 
     setTimeout(async () => {
-      setProgressPercent(40);
-      await new Promise(resolve => setTimeout(resolve, 80));
       try {
         let totalRemoved = 0;
         let nextGlobal = [...globalPoints];
         let nextPlanned = [...plannedStreets];
 
         if (nextGlobal.length > 0) {
-          const { cleanedPoints, removedCount } = resolveExactDuplicates(nextGlobal, duplicateTolerance);
+          const { cleanedPoints, removedCount } = await resolveExactDuplicates(nextGlobal, duplicateTolerance, p => setProgressPercent(10 + Math.round(p * 0.4)));
           totalRemoved += removedCount;
           nextGlobal = cleanedPoints;
         }
 
-        setProgressPercent(70);
+        setProgressPercent(50);
         if (nextPlanned.length > 0) {
-          const { cleanedPoints: cleanedStreets, removedCount: count2 } = resolveExactDuplicates(nextPlanned, duplicateTolerance);
+          const { cleanedPoints: cleanedStreets, removedCount: count2 } = await resolveExactDuplicates(nextPlanned, duplicateTolerance, p => setProgressPercent(50 + Math.round(p * 0.4)));
           totalRemoved += count2;
           nextPlanned = cleanedStreets;
         }
@@ -1570,8 +1562,8 @@ const App: React.FC = () => {
         setDataId(`resolved-dups-${Date.now()}`);
 
         const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
-        const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
-        const remainingIntersections = detectLineIntersections(checkTarget);
+        const remainingDups = await detectExactDuplicates(checkTarget, duplicateTolerance);
+        const remainingIntersections = await detectLineIntersections(checkTarget);
         const remainingTotal = remainingDups.length + remainingIntersections.length;
 
         setOverlapResults(remainingDups);
@@ -1604,7 +1596,7 @@ const App: React.FC = () => {
         setLoading(false);
         setProgressPercent(null);
       }
-    }, 100);
+    }, 50);
   };
 
   // ==========================================
@@ -1612,7 +1604,7 @@ const App: React.FC = () => {
   // ==========================================
   const handleCheckIntersections = () => {
     setLoading(true);
-    setProgressPercent(15);
+    setProgressPercent(10);
     setStatusMessage(
       lang === 'ar'
         ? 'جاري فحص التداخل الجغرافي وتقاطعات الخطوط...'
@@ -1620,12 +1612,9 @@ const App: React.FC = () => {
     );
 
     setTimeout(async () => {
-      setProgressPercent(40);
-      await new Promise(resolve => setTimeout(resolve, 80));
       try {
         const pointsToCheck = getPointsToCheck();
-        setProgressPercent(70);
-        const intersections = detectLineIntersections(pointsToCheck);
+        const intersections = await detectLineIntersections(pointsToCheck, p => setProgressPercent(10 + Math.round(p * 0.85)));
         setProgressPercent(95);
         setOverlapResults(intersections);
         setOverlapModalType('intersections');
@@ -1646,12 +1635,12 @@ const App: React.FC = () => {
         setLoading(false);
         setProgressPercent(null);
       }
-    }, 100);
+    }, 50);
   };
 
   const handleTrimIntersections = () => {
     setLoading(true);
-    setProgressPercent(15);
+    setProgressPercent(10);
     setStatusMessage(
       lang === 'ar'
         ? 'جاري تقليم الخطوط والمسارات عند نقاط التقاطع ✂️...'
@@ -1659,22 +1648,20 @@ const App: React.FC = () => {
     );
 
     setTimeout(async () => {
-      setProgressPercent(40);
-      await new Promise(resolve => setTimeout(resolve, 80));
       try {
         let totalTrimmed = 0;
         let nextGlobal = [...globalPoints];
         let nextPlanned = [...plannedStreets];
 
         if (nextGlobal.length > 0) {
-          const { cleanedPoints, trimmedCount } = trimLinesAtIntersections(nextGlobal);
+          const { cleanedPoints, trimmedCount } = await trimLinesAtIntersections(nextGlobal, p => setProgressPercent(10 + Math.round(p * 0.4)));
           totalTrimmed += trimmedCount;
           nextGlobal = cleanedPoints;
         }
 
-        setProgressPercent(70);
+        setProgressPercent(50);
         if (nextPlanned.length > 0) {
-          const { cleanedPoints: cleanedStreets, trimmedCount: count2 } = trimLinesAtIntersections(nextPlanned);
+          const { cleanedPoints: cleanedStreets, trimmedCount: count2 } = await trimLinesAtIntersections(nextPlanned, p => setProgressPercent(50 + Math.round(p * 0.4)));
           totalTrimmed += count2;
           nextPlanned = cleanedStreets;
         }
@@ -1689,8 +1676,8 @@ const App: React.FC = () => {
         setDataId(`trimmed-inters-${Date.now()}`);
 
         const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
-        const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
-        const remainingIntersections = detectLineIntersections(checkTarget);
+        const remainingDups = await detectExactDuplicates(checkTarget, duplicateTolerance);
+        const remainingIntersections = await detectLineIntersections(checkTarget);
         const remainingTotal = remainingDups.length + remainingIntersections.length;
 
         setOverlapResults(remainingIntersections);
@@ -1723,12 +1710,12 @@ const App: React.FC = () => {
         setLoading(false);
         setProgressPercent(null);
       }
-    }, 100);
+    }, 50);
   };
 
   const handleDeleteDuplicateItem = (targetId: string | number) => {
     setLoading(true);
-    setProgressPercent(20);
+    setProgressPercent(10);
     setStatusMessage(
       lang === 'ar'
         ? 'جاري حذف العنصر وإعادة حساب التداخل الجغرافي...'
@@ -1736,8 +1723,6 @@ const App: React.FC = () => {
     );
 
     setTimeout(async () => {
-      setProgressPercent(60);
-      await new Promise(resolve => setTimeout(resolve, 80));
       try {
         const filterFn = (p: GeoPoint) => String(p.id) !== String(targetId);
 
@@ -1753,8 +1738,8 @@ const App: React.FC = () => {
 
         setDataId(`deleted-${Date.now()}`);
         const checkTarget = nextGlobal.length > 0 ? nextGlobal : nextPlanned;
-        const remainingDups = detectExactDuplicates(checkTarget, duplicateTolerance);
-        const remainingIntersections = detectLineIntersections(checkTarget);
+        const remainingDups = await detectExactDuplicates(checkTarget, duplicateTolerance);
+        const remainingIntersections = await detectLineIntersections(checkTarget);
         const remainingTotal = remainingDups.length + remainingIntersections.length;
 
         if (overlapModalType === 'duplicates') {
@@ -1784,7 +1769,7 @@ const App: React.FC = () => {
         setLoading(false);
         setProgressPercent(null);
       }
-    }, 100);
+    }, 50);
   };
 
   const handleLoadSavedProjectToMap = (points: GeoPoint[], name: string) => {
@@ -3221,7 +3206,7 @@ const App: React.FC = () => {
       if (lastAlertedFileRef.current !== currentFileName && transformed.length > 0) {
         lastAlertedFileRef.current = currentFileName;
         setLoading(true);
-        setProgressPercent(15);
+        setProgressPercent(10);
         setStatusMessage(
           lang === 'ar'
             ? 'جاري فحص التداخل الجغرافي والتطابق المكاني...'
@@ -3229,12 +3214,10 @@ const App: React.FC = () => {
         );
 
         setTimeout(async () => {
-          setProgressPercent(45);
-          await new Promise(resolve => setTimeout(resolve, 80));
           try {
-            const dups = detectExactDuplicates(transformed, duplicateTolerance);
-            setProgressPercent(80);
-            const intersections = detectLineIntersections(transformed);
+            const dups = await detectExactDuplicates(transformed, duplicateTolerance, p => setProgressPercent(10 + Math.round(p * 0.40)));
+            setProgressPercent(50);
+            const intersections = await detectLineIntersections(transformed, p => setProgressPercent(50 + Math.round(p * 0.45)));
             const totalOverlaps = dups.length + intersections.length;
             setProgressPercent(100);
 

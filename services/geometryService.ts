@@ -817,17 +817,128 @@ export const isLineOverlay = (l1: GeoPoint, l2: GeoPoint, maxMeters = 1.5): bool
   return isOverlay;
 };
 
+// Helper interface for Bounding Box
+export interface BBox {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+export const getGeoPointBBox = (pt: GeoPoint): BBox => {
+  if ((pt.type === 'LineString' || pt.type === 'Polygon') && pt.path && pt.path.length > 0) {
+    let minX = pt.path[0].x, maxX = pt.path[0].x;
+    let minY = pt.path[0].y, maxY = pt.path[0].y;
+    for (let i = 1; i < pt.path.length; i++) {
+      const p = pt.path[i];
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return { minX, maxX, minY, maxY };
+  }
+  return { minX: pt.x, maxX: pt.x, minY: pt.y, maxY: pt.y };
+};
+
+export const bboxesIntersect = (b1: BBox, b2: BBox, marginDegrees: number): boolean => {
+  return (
+    b1.minX - marginDegrees <= b2.maxX &&
+    b1.maxX + marginDegrees >= b2.minX &&
+    b1.minY - marginDegrees <= b2.maxY &&
+    b1.maxY + marginDegrees >= b2.minY
+  );
+};
+
+export const buildSpatialGridIndex = (
+  points: GeoPoint[],
+  marginMeters: number = 5.0
+): {
+  bboxes: BBox[];
+  marginDegrees: number;
+  getCandidateIndices: (index: number) => number[];
+} => {
+  const marginDegrees = Math.max(marginMeters / 111000, 0.00005);
+  const CELL_SIZE = 0.005; // ~500m grid cell size for fast spatial lookups
+
+  const bboxes = points.map(p => getGeoPointBBox(p));
+  const grid = new Map<string, number[]>();
+
+  for (let i = 0; i < points.length; i++) {
+    const b = bboxes[i];
+    const minCellX = Math.floor((b.minX - marginDegrees) / CELL_SIZE);
+    const maxCellX = Math.floor((b.maxX + marginDegrees) / CELL_SIZE);
+    const minCellY = Math.floor((b.minY - marginDegrees) / CELL_SIZE);
+    const maxCellY = Math.floor((b.maxY + marginDegrees) / CELL_SIZE);
+
+    for (let cx = minCellX; cx <= maxCellX; cx++) {
+      for (let cy = minCellY; cy <= maxCellY; cy++) {
+        const key = `${cx},${cy}`;
+        let cell = grid.get(key);
+        if (!cell) {
+          cell = [];
+          grid.set(key, cell);
+        }
+        cell.push(i);
+      }
+    }
+  }
+
+  const getCandidateIndices = (i: number): number[] => {
+    const b1 = bboxes[i];
+    const minCellX = Math.floor((b1.minX - marginDegrees) / CELL_SIZE);
+    const maxCellX = Math.floor((b1.maxX + marginDegrees) / CELL_SIZE);
+    const minCellY = Math.floor((b1.minY - marginDegrees) / CELL_SIZE);
+    const maxCellY = Math.floor((b1.maxY + marginDegrees) / CELL_SIZE);
+
+    const resultSet = new Set<number>();
+    for (let cx = minCellX; cx <= maxCellX; cx++) {
+      for (let cy = minCellY; cy <= maxCellY; cy++) {
+        const cell = grid.get(`${cx},${cy}`);
+        if (cell) {
+          for (const j of cell) {
+            if (j > i && bboxesIntersect(b1, bboxes[j], marginDegrees)) {
+              resultSet.add(j);
+            }
+          }
+        }
+      }
+    }
+    return Array.from(resultSet);
+  };
+
+  return { bboxes, marginDegrees, getCandidateIndices };
+};
+
+const yieldToMain = async () => {
+  await new Promise(resolve => setTimeout(resolve, 0));
+};
+
 // ==========================================
 // 1. التطابق (Duplicates / Line-on-Line Overlays): خط فوق خط
 // ==========================================
-export const detectExactDuplicates = (points: GeoPoint[], maxMeters = 0.5): OverlapResult[] => {
+export const detectExactDuplicates = async (
+  points: GeoPoint[],
+  maxMeters = 0.5,
+  onProgress?: (percent: number) => void
+): Promise<OverlapResult[]> => {
   const overlaps: OverlapResult[] = [];
-  
-  // A. Detect Point / Polygon duplicate overlaps
-  for (let i = 0; i < points.length; i++) {
-    const pt1 = points[i];
+  if (points.length === 0) return overlaps;
 
-    for (let j = i + 1; j < points.length; j++) {
+  const { getCandidateIndices } = buildSpatialGridIndex(points, Math.max(maxMeters, 5.0));
+  let lastYieldTime = Date.now();
+
+  for (let i = 0; i < points.length; i++) {
+    if (Date.now() - lastYieldTime > 20) {
+      if (onProgress) onProgress(Math.round((i / points.length) * 100));
+      await yieldToMain();
+      lastYieldTime = Date.now();
+    }
+
+    const pt1 = points[i];
+    const candidateIndices = getCandidateIndices(i);
+
+    for (const j of candidateIndices) {
       const pt2 = points[j];
       if (pt1.type !== pt2.type) continue;
 
@@ -835,53 +946,44 @@ export const detectExactDuplicates = (points: GeoPoint[], maxMeters = 0.5): Over
         if (getPointDistanceMeters(pt1, pt2) <= maxMeters) {
           overlaps.push({ id1: pt1.id, id2: pt2.id, type: 'Point' });
         }
-      } else if (pt1.type === 'Polygon') {
-        // Skip polygon overlap checks completely as requested
+      } else if (pt1.type === 'LineString' && pt1.path && pt2.path) {
+        if (isLineOverlay(pt1, pt2, maxMeters)) {
+          const len1 = calculatePathLength(pt1.path);
+          const len2 = calculatePathLength(pt2.path);
+          
+          const minLen = Math.min(len1, len2);
+          const maxLen = Math.max(len1, len2);
+          const lengthDiff = maxLen - minLen;
+          
+          const isFullDuplicate = lengthDiff < 1.5 && (lengthDiff / maxLen) < 0.05;
+          const overlayType = isFullDuplicate ? 'تطابق كامل' : 'تطابق جزئي';
+
+          overlaps.push({
+            id1: pt1.id,
+            id2: pt2.id,
+            type: overlayType
+          });
+        }
       }
     }
   }
 
-  // B. Detect LineString direct overlays (خط فوق خط)
-  const lines = points.filter(p => p.type === 'LineString' && p.path && p.path.length > 1);
-
-  for (let i = 0; i < lines.length; i++) {
-    for (let j = i + 1; j < lines.length; j++) {
-      const l1 = lines[i];
-      const l2 = lines[j];
-
-      if (isLineOverlay(l1, l2, maxMeters)) {
-        const len1 = calculatePathLength(l1.path!);
-        const len2 = calculatePathLength(l2.path!);
-        
-        const minLen = Math.min(len1, len2);
-        const maxLen = Math.max(len1, len2);
-        const lengthDiff = maxLen - minLen;
-        
-        // Full match if length difference is less than 1.5 meters AND less than 5% of max length
-        const isFullDuplicate = lengthDiff < 1.5 && (lengthDiff / maxLen) < 0.05;
-        
-        const overlayType = isFullDuplicate ? 'تطابق كامل' : 'تطابق جزئي';
-
-        overlaps.push({
-          id1: l1.id,
-          id2: l2.id,
-          type: overlayType
-        });
-      }
-    }
-  }
-
+  if (onProgress) onProgress(100);
   return overlaps;
 };
 
 // ==========================================
 // 2. التداخل (Line Intersections / Junctions): منطقة التقاء الخطوط
 // ==========================================
-export const detectLineIntersections = (points: GeoPoint[]): OverlapResult[] => {
+export const detectLineIntersections = async (
+  points: GeoPoint[],
+  onProgress?: (percent: number) => void
+): Promise<OverlapResult[]> => {
   const overlaps: OverlapResult[] = [];
   const lines = points.filter(p => p.type === 'LineString' && p.path && p.path.length > 1);
+  if (lines.length === 0) return overlaps;
+
   const EPSILON = 1e-9;
-  
   const getIntersection = (p1: {x:number, y:number}, p2: {x:number, y:number}, p3: {x:number, y:number}, p4: {x:number, y:number}) => {
     const denom = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
     if (Math.abs(denom) < EPSILON) return null;
@@ -904,12 +1006,22 @@ export const detectLineIntersections = (points: GeoPoint[]): OverlapResult[] => 
     return null;
   };
 
+  const { getCandidateIndices } = buildSpatialGridIndex(lines, 10.0);
+  let lastYieldTime = Date.now();
+
   for (let i = 0; i < lines.length; i++) {
-    for (let j = i + 1; j < lines.length; j++) {
-      const l1 = lines[i];
+    if (Date.now() - lastYieldTime > 20) {
+      if (onProgress) onProgress(Math.round((i / lines.length) * 100));
+      await yieldToMain();
+      lastYieldTime = Date.now();
+    }
+
+    const l1 = lines[i];
+    const candidateIndices = getCandidateIndices(i);
+
+    for (const j of candidateIndices) {
       const l2 = lines[j];
 
-      // Check for line overlays: if lines overlay each other collinear, skip intersection check (handled as duplicate/match)
       if (isLineOverlay(l1, l2, 5.0)) {
         continue;
       }
@@ -933,21 +1045,44 @@ export const detectLineIntersections = (points: GeoPoint[]): OverlapResult[] => 
     }
   }
 
+  if (onProgress) onProgress(100);
   return overlaps;
 };
 
 // ==========================================
 // 3. معالجة التطابق (حذف العناصر المتطابقة)
 // ==========================================
-export const resolveExactDuplicates = (points: GeoPoint[], maxMeters = 5.0): { cleanedPoints: GeoPoint[]; removedCount: number } => {
+export const resolveExactDuplicates = async (
+  points: GeoPoint[],
+  maxMeters = 5.0,
+  onProgress?: (percent: number) => void
+): Promise<{ cleanedPoints: GeoPoint[]; removedCount: number }> => {
   const cleanedPoints: GeoPoint[] = [];
   let removedCount = 0;
+  if (points.length === 0) return { cleanedPoints, removedCount };
 
-  for (const pt of points) {
+  let lastYieldTime = Date.now();
+  const cleanedBBoxes: BBox[] = [];
+  const marginDegrees = Math.max(maxMeters / 111000, 0.00005);
+
+  for (let i = 0; i < points.length; i++) {
+    if (Date.now() - lastYieldTime > 20) {
+      if (onProgress) onProgress(Math.round((i / points.length) * 100));
+      await yieldToMain();
+      lastYieldTime = Date.now();
+    }
+
+    const pt = points[i];
+    const ptBBox = getGeoPointBBox(pt);
     let isDup = false;
 
-    for (const existing of cleanedPoints) {
+    for (let cIdx = 0; cIdx < cleanedPoints.length; cIdx++) {
+      const existing = cleanedPoints[cIdx];
       if (pt.type !== existing.type && (pt.type === 'LineString' || existing.type === 'LineString')) {
+        continue;
+      }
+
+      if (!bboxesIntersect(ptBBox, cleanedBBoxes[cIdx], marginDegrees)) {
         continue;
       }
 
@@ -960,15 +1095,11 @@ export const resolveExactDuplicates = (points: GeoPoint[], maxMeters = 5.0): { c
         // Skip resolving polygons
       } else if (pt.type === 'LineString' && pt.path && existing.path) {
         if (isLineOverlay(pt, existing, maxMeters)) {
-          if (pt.type === 'LineString') {
-            const len1 = calculatePathLength(pt.path);
-            const len2 = calculatePathLength(existing.path);
-            const minLen = Math.min(len1, len2);
-            if (minLen <= 5.0) {
-              // User specified: If the element length is <= 5m, it's an intersection, not a duplicate.
-              // So we do not remove it as a duplicate.
-              continue;
-            }
+          const len1 = calculatePathLength(pt.path);
+          const len2 = calculatePathLength(existing.path);
+          const minLen = Math.min(len1, len2);
+          if (minLen <= 5.0) {
+            continue;
           }
           isDup = true;
           break;
@@ -980,23 +1111,27 @@ export const resolveExactDuplicates = (points: GeoPoint[], maxMeters = 5.0): { c
       removedCount++;
     } else {
       cleanedPoints.push(pt);
+      cleanedBBoxes.push(ptBBox);
     }
   }
 
+  if (onProgress) onProgress(100);
   return { cleanedPoints, removedCount };
 };
 
 // ==========================================
 // 4. معالجة التداخل (تقصير طول الخط فقط عند منطقة التقاء الخطوط بدون حذف العنصر)
 // ==========================================
-export const trimLinesAtIntersections = (points: GeoPoint[]): { cleanedPoints: GeoPoint[]; trimmedCount: number } => {
-  const intersections = detectLineIntersections(points);
+export const trimLinesAtIntersections = async (
+  points: GeoPoint[],
+  onProgress?: (percent: number) => void
+): Promise<{ cleanedPoints: GeoPoint[]; trimmedCount: number }> => {
+  const intersections = await detectLineIntersections(points, onProgress);
   
   if (intersections.length === 0) {
     return { cleanedPoints: points, trimmedCount: 0 };
   }
 
-  // Map of line ID -> array of intersection points
   const lineIntersectionsMap = new Map<string, {x: number, y: number}[]>();
 
   for (const item of intersections) {
@@ -1013,22 +1148,29 @@ export const trimLinesAtIntersections = (points: GeoPoint[]): { cleanedPoints: G
   }
 
   let trimmedCount = 0;
+  let lastYieldTime = Date.now();
+  const cleanedPoints: GeoPoint[] = [];
 
-  // Process EVERY point (1:1 mapping - no elements are EVER deleted)
-  const cleanedPoints = points.map(pt => {
+  for (let pIdx = 0; pIdx < points.length; pIdx++) {
+    if (Date.now() - lastYieldTime > 20) {
+      await yieldToMain();
+      lastYieldTime = Date.now();
+    }
+
+    const pt = points[pIdx];
     if (pt.type !== 'LineString' || !pt.path || pt.path.length < 2) {
-      return pt;
+      cleanedPoints.push(pt);
+      continue;
     }
 
     const ptId = String(pt.id);
     const inters = lineIntersectionsMap.get(ptId);
 
     if (!inters || inters.length === 0) {
-      // Unrelated line: 100% untouched
-      return pt;
+      cleanedPoints.push(pt);
+      continue;
     }
 
-    // Line has intersection with another line
     let currentPath = [...pt.path];
     let isModified = false;
 
@@ -1055,15 +1197,12 @@ export const trimLinesAtIntersections = (points: GeoPoint[]): { cleanedPoints: G
         const isNearEnd = (segIndex === currentPath.length - 2 && distPB <= 25);
 
         if (isNearEnd && distPB > 0.1 && distAP > 0.1) {
-          // Trim end overshoot to stop cleanly at junction ip
           currentPath[segIndex + 1] = { x: ip.x, y: ip.y };
           isModified = true;
         } else if (isNearStart && distAP > 0.1 && distPB > 0.1) {
-          // Trim start overshoot to start cleanly at junction ip
           currentPath[segIndex] = { x: ip.x, y: ip.y };
           isModified = true;
         } else if (distAP > 0.5 && distPB > 0.5) {
-          // Insert junction vertex ip into line path
           currentPath.splice(segIndex + 1, 0, { x: ip.x, y: ip.y });
           isModified = true;
         }
@@ -1072,18 +1211,26 @@ export const trimLinesAtIntersections = (points: GeoPoint[]): { cleanedPoints: G
 
     if (isModified) {
       trimmedCount++;
-      return { ...pt, path: currentPath };
+      cleanedPoints.push({ ...pt, path: currentPath });
+    } else {
+      cleanedPoints.push(pt);
     }
-
-    return pt;
-  });
+  }
 
   return { cleanedPoints, trimmedCount };
 };
 
-export const resolveSpatialOverlaps = (points: GeoPoint[]): { cleanedPoints: GeoPoint[]; removedCount: number; trimmedCount: number } => {
-  const { cleanedPoints: deduplicated, removedCount } = resolveExactDuplicates(points);
-  const { cleanedPoints, trimmedCount } = trimLinesAtIntersections(deduplicated);
+export const resolveSpatialOverlaps = async (
+  points: GeoPoint[],
+  onProgress?: (percent: number) => void
+): Promise<{ cleanedPoints: GeoPoint[]; removedCount: number; trimmedCount: number }> => {
+  const { cleanedPoints: deduplicated, removedCount } = await resolveExactDuplicates(points, 5.0, (p) => {
+    if (onProgress) onProgress(Math.round(p * 0.5));
+  });
+  const { cleanedPoints, trimmedCount } = await trimLinesAtIntersections(deduplicated, (p) => {
+    if (onProgress) onProgress(Math.round(50 + p * 0.5));
+  });
   return { cleanedPoints, removedCount, trimmedCount };
 };
+
 
