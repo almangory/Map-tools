@@ -867,9 +867,14 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
   const executeAction = (action: () => void) => {
     if (autoFetchStreets && fetchStreets) {
-      fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], () => {
-        action();
-      });
+      const confirmMsg = lang === 'ar' 
+        ? 'لقد قمت بتفعيل خيار "جلب الشوارع". قد تستغرق هذه العملية بعض الوقت حسب عدد النقاط وسيتم استبدال قيم الشوارع الحالية. هل أنت متأكد من رغبتك في الاستمرار وتصدير البيانات؟'
+        : 'You have enabled "Fetch Streets". This process may take some time depending on the number of points and will overwrite current street values. Are you sure you want to continue and export?';
+      if (window.confirm(confirmMsg)) {
+        fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], () => {
+          action();
+        });
+      }
     } else {
       action();
     }

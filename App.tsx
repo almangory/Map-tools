@@ -3479,7 +3479,7 @@ const App: React.FC = () => {
             const chunk = points.slice(i, i + batchSize);
             await Promise.all(chunk.map(async (pt) => {
                 let street = pt.street;
-                if (!street || street === "غير متوفر") {
+                if (!street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف") {
                     try {
                         const timeoutPromise = new Promise<{street: string, district: string}>((resolve) => {
                           setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 4500);
