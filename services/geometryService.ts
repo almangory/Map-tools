@@ -705,12 +705,11 @@ export const isBlackLine = (pt: GeoPoint): boolean => {
   return c === '#000000' || c === '#000' || c === 'black' || c === 'rgb(0,0,0)' || c === '#000000ff';
 };
 
-export const isLineOverlay = (l1: GeoPoint, l2: GeoPoint, maxMeters = 1.0): boolean => {
+export const isLineOverlay = (l1: GeoPoint, l2: GeoPoint, maxMeters = 1.5): boolean => {
   if (!l1.path || !l2.path || l1.path.length < 2 || l2.path.length < 2) return false;
 
-  // Strict tolerance limit for direct line-on-line overlays (خط فوق خط):
-  // Lines running parallel beside each other (lines side-by-side, e.g. 1.5m to 5m apart) must NOT be flagged as duplicates.
-  const strictMaxMeters = Math.min(maxMeters, 1.0);
+  // Use a reasonable tolerance for line-on-line overlays (minimum 1.5m)
+  const toleranceMeters = Math.max(maxMeters, 1.5);
 
   // Helper to compute minimum distance from a point P to a polyline path
   const pointToPolylineDist = (p: {x: number, y: number}, path: {x: number, y: number}[]): number => {
@@ -723,14 +722,12 @@ export const isLineOverlay = (l1: GeoPoint, l2: GeoPoint, maxMeters = 1.0): bool
   };
 
   // Sample points uniformly along polyline path
-  const samplePointsOnPath = (path: {x: number, y: number}[], targetSamples = 20): {x: number, y: number}[] => {
+  const samplePointsOnPath = (path: {x: number, y: number}[], targetSamples = 30): {x: number, y: number}[] => {
     const pts: {x: number, y: number}[] = [];
     if (path.length === 0) return pts;
 
-    // Add all actual vertices
     for (const p of path) pts.push(p);
 
-    // Compute total path length
     let totalLen = 0;
     for (let i = 0; i < path.length - 1; i++) {
       totalLen += getPointDistanceMeters(path[i], path[i+1]);
@@ -759,43 +756,65 @@ export const isLineOverlay = (l1: GeoPoint, l2: GeoPoint, maxMeters = 1.0): bool
     return pts;
   };
 
-  const samples1 = samplePointsOnPath(l1.path, 20);
-  const samples2 = samplePointsOnPath(l2.path, 20);
+  const len1 = calculatePathLength(l1.path);
+  const len2 = calculatePathLength(l2.path);
+  if (len1 <= 0 || len2 <= 0) return false;
+
+  const targetSamples1 = Math.max(30, Math.ceil(len1 / 0.5));
+  const targetSamples2 = Math.max(30, Math.ceil(len2 / 0.5));
+
+  const samples1 = samplePointsOnPath(l1.path, targetSamples1);
+  const samples2 = samplePointsOnPath(l2.path, targetSamples2);
 
   if (samples1.length === 0 || samples2.length === 0) return false;
 
-  // Count sample points of l1 close to l2 and track average distance
+  // Track near sample points of l1 close to l2
   let near1 = 0;
-  let totalDist1 = 0;
+  let sumNearDist1 = 0;
   for (const s of samples1) {
     const dist = pointToPolylineDist(s, l2.path);
-    totalDist1 += dist;
-    if (dist <= strictMaxMeters) {
+    if (dist <= toleranceMeters) {
       near1++;
+      sumNearDist1 += dist;
     }
   }
 
-  // Count sample points of l2 close to l1 and track average distance
+  // Track near sample points of l2 close to l1
   let near2 = 0;
-  let totalDist2 = 0;
+  let sumNearDist2 = 0;
   for (const s of samples2) {
     const dist = pointToPolylineDist(s, l1.path);
-    totalDist2 += dist;
-    if (dist <= strictMaxMeters) {
+    if (dist <= toleranceMeters) {
       near2++;
+      sumNearDist2 += dist;
     }
   }
 
-  const avgDist1 = totalDist1 / samples1.length;
-  const avgDist2 = totalDist2 / samples2.length;
-
-  // If average distance exceeds tolerance, lines are adjacent (جوار بعض) not direct line-on-line overlays (فوق بعض)
-  if (avgDist1 > strictMaxMeters || avgDist2 > strictMaxMeters) return false;
+  if (near1 === 0 || near2 === 0) return false;
 
   const ratio1 = near1 / samples1.length;
   const ratio2 = near2 / samples2.length;
 
-  return (ratio1 >= 0.7 && ratio2 >= 0.7) || (ratio1 >= 0.85 && ratio2 >= 0.4) || (ratio2 >= 0.85 && ratio1 >= 0.4);
+  const approxOverlapLen1 = ratio1 * len1;
+  const approxOverlapLen2 = ratio2 * len2;
+  const maxOverlapLen = Math.max(approxOverlapLen1, approxOverlapLen2);
+
+  const avgNearDist1 = sumNearDist1 / near1;
+  const avgNearDist2 = sumNearDist2 / near2;
+
+  // Average distance of the overlapping sample points must be within toleranceMeters
+  if (avgNearDist1 > toleranceMeters || avgNearDist2 > toleranceMeters) return false;
+
+  // Lines are considered collinear overlays (تطابق كامل / تطابق جزئي) if:
+  // 1. Either line is mostly covered by the other (ratio2 >= 0.5 or ratio1 >= 0.5)
+  // 2. OR both lines have significant overlap ratio (ratio1 >= 0.25 && ratio2 >= 0.25)
+  // 3. OR the overlapping length in meters is >= 3.0 meters (and both have at least 5% overlap)
+  const isOverlay = 
+    (ratio1 >= 0.5 || ratio2 >= 0.5) ||
+    (ratio1 >= 0.25 && ratio2 >= 0.25) ||
+    (maxOverlapLen >= 3.0 && ratio1 >= 0.05 && ratio2 >= 0.05);
+
+  return isOverlay;
 };
 
 // ==========================================
@@ -838,24 +857,16 @@ export const detectExactDuplicates = (points: GeoPoint[], maxMeters = 0.5): Over
         const maxLen = Math.max(len1, len2);
         const lengthDiff = maxLen - minLen;
         
-        const isFullDuplicate = lengthDiff < 1.0 || (lengthDiff / maxLen) < 0.05;
+        // Full match if length difference is less than 1.5 meters AND less than 5% of max length
+        const isFullDuplicate = lengthDiff < 1.5 && (lengthDiff / maxLen) < 0.05;
         
-        let overlayType = 'LineString';
-        if (isFullDuplicate) {
-            overlayType = 'تطابق كامل';
-        } else if (minLen > 5.0) {
-            overlayType = 'تطابق جزئي';
-        } else {
-            overlayType = 'تقاطع';
-        }
+        const overlayType = isFullDuplicate ? 'تطابق كامل' : 'تطابق جزئي';
 
-        if (overlayType !== 'تقاطع') {
-            overlaps.push({
-              id1: l1.id,
-              id2: l2.id,
-              type: overlayType
-            });
-        }
+        overlaps.push({
+          id1: l1.id,
+          id2: l2.id,
+          type: overlayType
+        });
       }
     }
   }
@@ -898,28 +909,9 @@ export const detectLineIntersections = (points: GeoPoint[]): OverlapResult[] => 
       const l1 = lines[i];
       const l2 = lines[j];
 
-      // Check for line overlays
+      // Check for line overlays: if lines overlay each other collinear, skip intersection check (handled as duplicate/match)
       if (isLineOverlay(l1, l2, 5.0)) {
-          const len1 = calculatePathLength(l1.path!);
-          const len2 = calculatePathLength(l2.path!);
-          const minLen = Math.min(len1, len2);
-          
-          if (minLen <= 5.0) {
-              // It's a short overlay, considered an intersection!
-              // Use the midpoint of the shorter line as the intersection point
-              const shorterLine = len1 < len2 ? l1 : l2;
-              const midIndex = Math.floor(shorterLine.path!.length / 2);
-              const ixPt = shorterLine.path![midIndex];
-              
-              overlaps.push({
-                  id1: l1.id,
-                  id2: l2.id,
-                  type: 'تقاطع (تطابق قصير)',
-                  isIntersection: true,
-                  intersectionPoint: { x: ixPt.x, y: ixPt.y }
-              });
-          }
-          continue; // Skip further mathematical intersection checks for overlays
+        continue;
       }
 
       let found = false;

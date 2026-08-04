@@ -563,12 +563,38 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     if (overlapResults) {
       overlapResults.forEach(o => {
         if (o.isIntersection && o.intersectionPoint && isValidLatLng(o.intersectionPoint.y, o.intersectionPoint.x)) {
-           L.circleMarker([o.intersectionPoint.y, o.intersectionPoint.x], { radius: 8, fillColor: '#9c27b0', color: '#ffffff', weight: 3, fillOpacity: 1 }).addTo(layerGroup.current!).bindPopup(`
-             <div class="p-2 font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
-               <div class="font-black text-purple-700 mb-1 text-[12px]">${lang === 'ar' ? 'نقطة تداخل' : 'Intersection Point'}</div>
-               <div class="text-[10px] text-slate-500">${o.id1} × ${o.id2}</div>
+           const lat = o.intersectionPoint.y;
+           const lng = o.intersectionPoint.x;
+           const marker = L.circleMarker([lat, lng], { radius: 8, fillColor: '#9c27b0', color: '#ffffff', weight: 3, fillOpacity: 1 }).addTo(layerGroup.current!);
+           
+           marker.bindPopup(`
+             <div class="p-2.5 font-sans min-w-[210px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+               <div class="font-black text-purple-700 mb-1 text-[13px] flex items-center justify-between gap-2 border-b border-purple-100 pb-1">
+                 <span>📍 ${lang === 'ar' ? 'نقطة تقاطع / تداخل' : 'Intersection Point'}</span>
+                 <span class="text-[9px] bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded-full font-bold">${o.type || 'Intersection'}</span>
+               </div>
+               <div class="text-[10px] text-slate-500 font-mono mb-2 dir-ltr">
+                 ${o.id1} × ${o.id2}
+               </div>
+               <div class="bg-purple-50/70 border border-purple-200/80 rounded-lg p-2 text-[11px] font-mono space-y-1 text-slate-800">
+                 <div class="flex items-center justify-between">
+                   <span class="text-slate-500 text-[10px] font-sans">${lang === 'ar' ? 'خط العرض (Lat):' : 'Latitude:'}</span>
+                   <span class="font-bold text-purple-950 dir-ltr">${lat.toFixed(6)}</span>
+                 </div>
+                 <div class="flex items-center justify-between">
+                   <span class="text-slate-500 text-[10px] font-sans">${lang === 'ar' ? 'خط الطول (Lng):' : 'Longitude:'}</span>
+                   <span class="font-bold text-purple-950 dir-ltr">${lng.toFixed(6)}</span>
+                 </div>
+               </div>
              </div>
            `);
+
+           marker.bindTooltip(`${lang === 'ar' ? 'نقطة تقاطع' : 'Intersection'}: Lat ${lat.toFixed(5)}, Lng ${lng.toFixed(5)}`, {
+             sticky: true,
+             direction: 'top',
+             offset: [0, -8],
+             opacity: 0.95
+           });
         }
       });
     }
