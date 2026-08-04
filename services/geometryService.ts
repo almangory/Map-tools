@@ -833,11 +833,31 @@ export const detectExactDuplicates = (points: GeoPoint[], maxMeters = 0.5): Over
       const l2 = lines[j];
 
       if (isLineOverlay(l1, l2, maxMeters)) {
-        overlaps.push({
-          id1: l1.id,
-          id2: l2.id,
-          type: 'LineString'
-        });
+        const len1 = calculatePathLength(l1.path!);
+        const len2 = calculatePathLength(l2.path!);
+        
+        const minLen = Math.min(len1, len2);
+        const maxLen = Math.max(len1, len2);
+        const lengthDiff = maxLen - minLen;
+        
+        const isFullDuplicate = lengthDiff < 1.0 || (lengthDiff / maxLen) < 0.05;
+        
+        let overlayType = 'LineString';
+        if (isFullDuplicate) {
+            overlayType = 'تطابق كامل';
+        } else if (minLen > 5.0) {
+            overlayType = 'تطابق جزئي';
+        } else {
+            overlayType = 'تقاطع';
+        }
+
+        if (overlayType !== 'تقاطع') {
+            overlaps.push({
+              id1: l1.id,
+              id2: l2.id,
+              type: overlayType
+            });
+        }
       }
     }
   }
@@ -880,8 +900,29 @@ export const detectLineIntersections = (points: GeoPoint[]): OverlapResult[] => 
       const l1 = lines[i];
       const l2 = lines[j];
 
-      // Skip duplicate line overlays (handled in detectExactDuplicates)
-      if (isLineOverlay(l1, l2, 5.0)) continue;
+      // Check for line overlays
+      if (isLineOverlay(l1, l2, 5.0)) {
+          const len1 = calculatePathLength(l1.path!);
+          const len2 = calculatePathLength(l2.path!);
+          const minLen = Math.min(len1, len2);
+          
+          if (minLen <= 5.0) {
+              // It's a short overlay, considered an intersection!
+              // Use the midpoint of the shorter line as the intersection point
+              const shorterLine = len1 < len2 ? l1 : l2;
+              const midIndex = Math.floor(shorterLine.path!.length / 2);
+              const ixPt = shorterLine.path![midIndex];
+              
+              overlaps.push({
+                  id1: l1.id,
+                  id2: l2.id,
+                  type: 'تقاطع (تطابق قصير)',
+                  isIntersection: true,
+                  intersectionPoint: { x: ixPt.x, y: ixPt.y }
+              });
+          }
+          continue; // Skip further mathematical intersection checks for overlays
+      }
 
       let found = false;
       for (let m = 0; m < l1.path!.length - 1 && !found; m++) {
@@ -927,6 +968,16 @@ export const resolveExactDuplicates = (points: GeoPoint[], maxMeters = 5.0): { c
         }
       } else if ((pt.type === 'Polygon' || pt.type === 'LineString') && pt.path && existing.path) {
         if (isLineOverlay(pt, existing, maxMeters)) {
+          if (pt.type === 'LineString') {
+            const len1 = calculatePathLength(pt.path);
+            const len2 = calculatePathLength(existing.path);
+            const minLen = Math.min(len1, len2);
+            if (minLen <= 5.0) {
+              // User specified: If the element length is <= 5m, it's an intersection, not a duplicate.
+              // So we do not remove it as a duplicate.
+              continue;
+            }
+          }
           isDup = true;
           break;
         }
