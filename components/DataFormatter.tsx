@@ -365,7 +365,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('pipes');
   const [networkType, setNetworkType] = useState<'water' | 'wastewater'>('water');
   const [keepFolders, setKeepFolders] = useState(true);
-  const [retainUnmapped, setRetainUnmapped] = useState(true);
+  const [retainUnmapped, setRetainUnmapped] = useState(false);
   const [optimizeForMyMaps, setOptimizeForMyMaps] = useState(false);
   const [keepOriginalDescription, setKeepOriginalDescription] = useState(false);
   const [removeImagesOnly, setRemoveImagesOnly] = useState(false);
@@ -708,33 +708,42 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         }
       }
 
-            let newId = p.id;
+      let newId = p.layer || TEMPLATES[targetTemplate].name || p.id;
+      let foundName = false;
       if (nameSourceField) {
          if (nameSourceField === 'الشارع (مسترجع)') {
-             if (p.street) newId = String(p.street);
+             if (p.street) { newId = String(p.street); foundName = true; }
          } else if (nameSourceField === 'الحي (مسترجع)') {
-             if (p.district) newId = String(p.district);
+             if (p.district) { newId = String(p.district); foundName = true; }
          } else if (newAttrs[nameSourceField] !== undefined && newAttrs[nameSourceField] !== '') {
              newId = String(newAttrs[nameSourceField]);
+             foundName = true;
          } else if (p.attributes) {
              const matchedKey = Object.keys(p.attributes).find(k => String(k || '').toLowerCase() === String(nameSourceField || '').toLowerCase());
              if (matchedKey && p.attributes[matchedKey]) {
                  newId = String(p.attributes[matchedKey]);
+                 foundName = true;
              }
          }
          
-         if (newId === p.id && !newAttrs[nameSourceField] && p.originalRow && headers && nameSourceField) {
+         if (!foundName && p.originalRow && headers && nameSourceField) {
              const matchedIndex = headers.findIndex(h => String(h || '').toLowerCase() === String(nameSourceField || '').toLowerCase());
              if (matchedIndex !== -1 && p.originalRow[matchedIndex]) {
                  newId = String(p.originalRow[matchedIndex]);
+                 foundName = true;
              }
+         }
+
+         if (!foundName) {
+             // If selected nameSourceField yields no value, fallback to the field name itself or the layer name
+             newId = p.layer || nameSourceField || TEMPLATES[targetTemplate].name || p.id;
          }
       }
 
       // Format element name as "Zone <Number>" when targetTemplate is polygons or when nameSourceField is a zone field
       if (targetTemplate === 'polygons' || (nameSourceField && isZoneField(nameSourceField))) {
          let valToFormat = newId;
-         if (!nameSourceField || newId === p.id) {
+         if (!foundName || !nameSourceField) {
             valToFormat = newAttrs['ZONE'] || p.attributes?.['ZONE'] || p.attributes?.['zone_nu'] || p.attributes?.['zone'] || p.attributes?.['منطقة'] || p.id;
          }
          if (valToFormat) {
