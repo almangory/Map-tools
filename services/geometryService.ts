@@ -533,9 +533,9 @@ export const detectSpatialOverlap = (points: GeoPoint[]): OverlapResult[] => {
   const getSignature = (pt: GeoPoint) => {
     if (pt.type === 'Point' || !pt.type) {
       return `PT:${pt.x.toFixed(5)},${pt.y.toFixed(5)}`;
-    } else if (pt.type === 'Polygon' && pt.path && pt.path.length > 0) {
-      const pathStrs = [...pt.path].map(p => `${p.x.toFixed(5)},${p.y.toFixed(5)}`).sort().join('|');
-      return `PL:${pathStrs}`;
+    } else if (pt.type === 'Polygon') {
+      // Skip polygon overlap checks completely as requested
+      return '';
     }
     return '';
   };
@@ -816,10 +816,8 @@ export const detectExactDuplicates = (points: GeoPoint[], maxMeters = 0.5): Over
         if (getPointDistanceMeters(pt1, pt2) <= maxMeters) {
           overlaps.push({ id1: pt1.id, id2: pt2.id, type: 'Point' });
         }
-      } else if (pt1.type === 'Polygon' && pt1.path && pt2.path) {
-        if (isLineOverlay(pt1, pt2, maxMeters)) {
-          overlaps.push({ id1: pt1.id, id2: pt2.id, type: 'Polygon' });
-        }
+      } else if (pt1.type === 'Polygon') {
+        // Skip polygon overlap checks completely as requested
       }
     }
   }
@@ -966,7 +964,9 @@ export const resolveExactDuplicates = (points: GeoPoint[], maxMeters = 5.0): { c
           isDup = true;
           break;
         }
-      } else if ((pt.type === 'Polygon' || pt.type === 'LineString') && pt.path && existing.path) {
+      } else if (pt.type === 'Polygon') {
+        // Skip resolving polygons
+      } else if (pt.type === 'LineString' && pt.path && existing.path) {
         if (isLineOverlay(pt, existing, maxMeters)) {
           if (pt.type === 'LineString') {
             const len1 = calculatePathLength(pt.path);
