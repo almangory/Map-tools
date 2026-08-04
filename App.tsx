@@ -945,7 +945,7 @@ const App: React.FC = () => {
     setActiveIssueItems([]);
     setLoading(true);
     setProgressPercent(10);
-    setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (Permit No)...' : 'Verifying content of Permit No...');
+    setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى أرقام التراخيص (Permit No)...' : 'Verifying content of Permit No...');
 
     setTimeout(() => {
       let totalChecked = 0;
@@ -979,34 +979,47 @@ const App: React.FC = () => {
 
         const labelValues = new Set([
           'permit no', 'permit_no', 'permitno', 'permit', 'permit id', 'permit_id', 'permitid',
-          'رقم الترخيص', 'رقم ترخيص', 'الترخيص', 'رقم الرخصة', 'رقم رخصة', 'الرخصة', 'ترخيص'
+          'رقم الترخيص', 'رقم ترخيص', 'الترخيص', 'رقم الرخصة', 'رقم رخصة', 'الرخصة', 'ترخيص',
+          'رقم التصريح', 'رقم تصريح', 'التصريح', 'تصريح'
         ]);
         if (labelValues.has(lower)) return false;
         if (keyName && lower === String(stripHtml(keyName) || '').toLowerCase()) return false;
-        if (/^(permit|license|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
+        if (/^(feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
         return true;
       };
 
       const normalizeKey = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
 
       const isPermitKey = (key: string): boolean => {
+        if (!key) return false;
         const norm = normalizeKey(key);
+        if (!norm) return false;
         const permitKeys = new Set([
-          'permitno', 'permitid', 'permit_no', 'permit_id', 'permit', 'permitnumber',
-          'رقمالترخيص', 'رقمترخيص', 'الترخيص', 'رقمالرخصة', 'رقمرخصة', 'كودالترخيص', 'معرفالترخيص'
+          'permitno', 'permitid', 'permit_no', 'permit_id', 'permit', 'permitnumber', 'permitnum', 'permitcode', 'permitref',
+          'licenseno', 'licenceno', 'license', 'licence', 'licenseid', 'licenceid',
+          'رقمالترخيص', 'رقمترخيص', 'الترخيص', 'رقمالرخصة', 'رقمرخصة', 'كودالترخيص', 'معرفالترخيص',
+          'رقمالتصريح', 'رقمتصريح', 'التصريح', 'تصريح', 'ترخيص', 'رخصة'
         ]);
-        return permitKeys.has(norm);
+        if (permitKeys.has(norm)) return true;
+        return (
+          norm.includes('permit') ||
+          norm.includes('license') ||
+          norm.includes('licence') ||
+          norm.includes('ترخيص') ||
+          norm.includes('رخصة') ||
+          norm.includes('تصريح')
+        );
       };
 
       const extractPermitNoFromDescription = (description?: string): string | null => {
         if (!description) return null;
-        const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:permit\s*no|permit_no|permit\s*id|permit|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+        const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
         const tableMatch = description.match(tableCellRegex);
         if (tableMatch && tableMatch[1]) {
           const val = stripHtml(tableMatch[1]);
           if (isValidValue(val, 'permit no')) return val;
         }
-        const textRegex = /(?:permit\s*no|permit_no|permit\s*id|permit|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+        const textRegex = /(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
         const textMatch = description.match(textRegex);
         if (textMatch && textMatch[1]) {
           const val = stripHtml(textMatch[1]);
@@ -1053,6 +1066,10 @@ const App: React.FC = () => {
           }
 
           // Ignore parts that do not contain a Permit No
+          missingPermitList.push({
+            ...pt,
+            issueReason: lang === 'ar' ? 'عنصر لا يحتوي على رقم ترخيص (Permit No)' : 'Missing Permit No'
+          });
           return {
             ...pt,
             originalColor: origColor,
@@ -1076,6 +1093,29 @@ const App: React.FC = () => {
       setLoading(false);
       setProgressPercent(null);
 
+      const missingCount = Math.max(0, totalChecked - matchedCount);
+
+      setCheckResultModal({
+        type: 'permit',
+        titleAr: 'نتائج فحص أرقام التراخيص (Permit No)',
+        titleEn: 'Permit No Content Audit',
+        icon: 'permit',
+        totalChecked,
+        issuesCount: 0,
+        successCount: matchedCount,
+        uniqueCount: uniquePermitSet.size,
+        badgeTextAr: `تم تلوين ${matchedCount} عنصر يحوي رقم ترخيص`,
+        badgeTextEn: `Highlighted ${matchedCount} Elements with Permit No`,
+        detailsAr: `تم فحص ${totalChecked} عنصر، وتم بنجاح إبراز ${matchedCount} عنصر يحتوي على رقم ترخيص (Permit No) باللون البرتقالي البرّاق، مع وجود ${uniquePermitSet.size} رقم ترخيص فريد غير مكرر، وتم تجاهل بقية العناصر التي لا تحتوي على ترخيص (عددها ${missingCount}).`,
+        detailsEn: `Audited ${totalChecked} elements. Successfully highlighted ${matchedCount} elements containing Permit No in neon orange (${uniquePermitSet.size} unique values), ignoring the ${missingCount} remaining elements.`,
+        issueItems: missingPermitList,
+        stats: [
+          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
+          { labelAr: 'عناصر برقم ترخيص', labelEn: 'Valid Permit No', value: matchedCount, colorClass: 'text-[#ffc499] font-black' },
+          { labelAr: 'عناصر تم تجاهلها', labelEn: 'Ignored Elements', value: missingCount, colorClass: 'text-slate-400' },
+          { labelAr: 'تراخيص فريدة (بدون تكرار)', labelEn: 'Unique Permit Numbers', value: uniquePermitSet.size, colorClass: 'text-amber-300 font-black' }
+        ]
+      });
 
       if (matchedCount > 0) {
         setStatusMessage(
