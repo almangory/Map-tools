@@ -28,6 +28,7 @@ import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from 
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
+import { formatProjectIdForExcel } from './services/storageService';
 import { downloadDXF } from './services/dxfExportService';
 import { downloadDataPDF } from './services/pdfExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
@@ -2010,11 +2011,16 @@ const App: React.FC = () => {
         }
     });
 
+    const totalMeters = Object.values(statusTotals).reduce((a, b) => a + b, 0);
     const statusData = STATUS_CATEGORIES.map(cat => {
       const meters = statusTotals[cat.key] || 0;
+      const km = Number((meters / 1000).toFixed(2));
+      const pct = totalMeters > 0 ? (meters / totalMeters) * 100 : 0;
       return {
         name: lang === 'ar' ? cat.nameAr : cat.nameEn,
-        value: Number((meters / 1000).toFixed(2)),
+        value: km,
+        meters,
+        percent: pct,
         color: cat.color,
         key: cat.key,
       };
@@ -2370,7 +2376,7 @@ const App: React.FC = () => {
     // Sheet 1: Detailed / Statistical Report (Unique Segment IDs Summary)
     const rowsSheet1 = segmentIdAnalysis.uniqueDetails.map((item, index) => ({
       'PROJECTNAME': item.projectName || '',
-      'PROJECTID': item.projectId || '',
+      'PROJECTID': formatProjectIdForExcel(item.projectId),
       'CONTRACTOR': item.contractor || '',
       'م': index + 1,
       'Segment ID': item.idValue,
@@ -2422,7 +2428,7 @@ const App: React.FC = () => {
 
         rowsSheet2.push({
           'PROJECTNAME': ptProjectName,
-          'PROJECTID': ptProjectId,
+          'PROJECTID': formatProjectIdForExcel(ptProjectId),
           'CONTRACTOR': ptContractor,
           'م': itemCounter,
           'Segment ID': item.idValue,
@@ -2709,7 +2715,7 @@ const App: React.FC = () => {
         [lang === 'ar' ? 'إجمالي الطول (متر)' : 'Total Length (m)']: Math.round(item.totalLength),
         [lang === 'ar' ? 'إجمالي الطول (كم)' : 'Total Length (km)']: Number((item.totalLength / 1000).toFixed(3)),
         [lang === 'ar' ? 'اسم المشروع' : 'Project Name']: pName || '-',
-        [lang === 'ar' ? 'رقم المشروع' : 'Project ID']: pId || '-',
+        [lang === 'ar' ? 'رقم المشروع' : 'Project ID']: formatProjectIdForExcel(pId) || '-',
         [lang === 'ar' ? 'المقاول' : 'Contractor']: contractor || '-',
         [lang === 'ar' ? 'المنطقة' : 'Zone']: zone || '-',
         [lang === 'ar' ? 'الشارع' : 'Street']: street || '-',
@@ -4685,55 +4691,154 @@ const App: React.FC = () => {
 
                                                         {/* Interactive Charts */}
                             <div className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-6 animate-in slide-in-from-bottom duration-700">
-                                <div className="flex items-center gap-2 border-b border-white/5 pb-2">
-                                    <BarChart3 className="w-4 h-4 text-accent" />
-                                    <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
-                                        {lang === 'ar' ? 'توزيع الأطوال (كم) حسب حالة التنفيذ والقطر' : 'Length Distribution (km) by Execution Status & Diameter'}
-                                    </h3>
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div className="space-y-3">
-                                        <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب حالة التنفيذ' : 'By Execution Status'}</h4>
-                                        <div className="h-[200px] w-full relative overflow-visible z-30">
-                                            {executionStatusDistribution.length > 0 ? (
-                                                <ResponsiveContainer width="100%" height="100%">
-                                                    <RechartsPieChart>
-                                                        <Pie data={executionStatusDistribution} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={(entry: any) => entry && entry.name ? `${entry.name} (${(((entry.percent || 0) * 100)).toFixed(0)}%)` : ''}>
-                                                            {executionStatusDistribution.map((entry, index) => (
-                                                                <Cell key={`cell-${index}`} fill={entry.color} />
-                                                            ))}
-                                                        </Pie>
-                                                        <RechartsTooltip position={{ x: 8, y: 8 }} formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} wrapperStyle={{ zIndex: 99999999 }} />
-                                                    </RechartsPieChart>
-                                                </ResponsiveContainer>
-                                            ) : (
-                                                <div className="w-full h-full flex flex-col items-center justify-center text-white/20 text-xs font-black">
-                                                    <PieChart className="w-8 h-8 mb-2 opacity-20" />
-                                                    {lang === 'ar' ? 'لا يوجد بيانات تنفيذ' : 'No execution status data'}
-                                                </div>
-                                            )}
-                                        </div>
+                                <div className="flex items-center justify-between border-b border-white/5 pb-3">
+                                    <div className="flex items-center gap-2">
+                                        <BarChart3 className="w-4 h-4 text-accent" />
+                                        <h3 className="text-white font-black text-[11px] uppercase tracking-wider">
+                                            {lang === 'ar' ? 'توزيع الأطوال (كم) حسب حالة التنفيذ والقطر' : 'Length Distribution (km) by Execution Status & Diameter'}
+                                        </h3>
                                     </div>
-                                    <div className="space-y-3">
-                                        <h4 className="text-white/60 text-[10px] font-bold uppercase text-center">{lang === 'ar' ? 'حسب القطر' : 'By Diameter'}</h4>
-                                        <div className="h-[200px] w-full relative overflow-visible z-30">
-                                            {diameterDistribution.length > 0 ? (
-                                                <ResponsiveContainer width="100%" height="100%">
-                                                    <BarChart data={diameterDistribution}>
-                                                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" />
-                                                        <XAxis dataKey="name" tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
-                                                        <YAxis tick={{ fill: '#ffffff60', fontSize: 9 }} axisLine={{ stroke: '#ffffff20' }} />
-                                                        <RechartsTooltip position={{ x: 8, y: 8 }} formatter={(value) => [value, lang === 'ar' ? 'الطول (كم)' : 'Length (km)']} contentStyle={{ backgroundColor: '#0b2d3d', borderColor: '#ffffff20', color: '#fff', fontSize: '10px', borderRadius: '12px', zIndex: 99999999 }} itemStyle={{ color: '#06b6d4' }} cursor={{ fill: '#ffffff05' }} wrapperStyle={{ zIndex: 99999999 }} />
-                                                        <Bar dataKey="value" fill="#06b6d4" radius={[4, 4, 0, 0]} />
-                                                    </BarChart>
-                                                </ResponsiveContainer>
-                                            ) : (
-                                                <div className="w-full h-full flex flex-col items-center justify-center text-white/20 text-xs font-black">
-                                                    <BarChart3 className="w-8 h-8 mb-2 opacity-20" />
-                                                    {lang === 'ar' ? 'لا يوجد بيانات قطر' : 'No diameter data'}
-                                                </div>
+                                    <span className="text-[9px] font-bold text-accent bg-accent/10 border border-accent/20 px-2.5 py-0.5 rounded-full">
+                                        {lang === 'ar' ? 'رسوم بيانية تفاعلية' : 'Interactive Charts'}
+                                    </span>
+                                </div>
+
+                                <div className="space-y-6">
+                                    {/* 1. By Execution Status Section */}
+                                    <div className="p-5 bg-black/20 rounded-2xl border border-white/5 space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-accent text-[11px] font-black uppercase flex items-center gap-1.5">
+                                                <PieChart className="w-3.5 h-3.5 text-accent" />
+                                                {lang === 'ar' ? '1. حسب حالة التنفيذ' : '1. By Execution Status'}
+                                            </h4>
+                                            {executionStatusDistribution.length > 0 && (
+                                                <span className="text-[10px] text-white/50 font-bold bg-white/5 px-2 py-0.5 rounded-lg border border-white/10">
+                                                    {lang === 'ar' 
+                                                        ? `الإجمالي: ${executionStatusDistribution.reduce((a, b) => a + b.value, 0).toFixed(2)} كم`
+                                                        : `Total: ${executionStatusDistribution.reduce((a, b) => a + b.value, 0).toFixed(2)} km`}
+                                                </span>
                                             )}
                                         </div>
+
+                                        {executionStatusDistribution.length > 0 ? (
+                                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+                                                {/* Donut Chart */}
+                                                <div className="sm:col-span-5 h-[180px] w-full relative flex items-center justify-center">
+                                                    <ResponsiveContainer width="100%" height="100%">
+                                                        <RechartsPieChart>
+                                                            <Pie 
+                                                                data={executionStatusDistribution} 
+                                                                dataKey="value" 
+                                                                nameKey="name" 
+                                                                cx="50%" 
+                                                                cy="50%" 
+                                                                innerRadius={42} 
+                                                                outerRadius={72}
+                                                                paddingAngle={3}
+                                                                label={false}
+                                                            >
+                                                                {executionStatusDistribution.map((entry, index) => (
+                                                                    <Cell key={`cell-${index}`} fill={entry.color} stroke="#0b2d3d" strokeWidth={2} />
+                                                                ))}
+                                                            </Pie>
+                                                            <RechartsTooltip 
+                                                                formatter={(value: any) => [`${value} ${lang === 'ar' ? 'كم' : 'km'}`, lang === 'ar' ? 'الطول' : 'Length']} 
+                                                                contentStyle={{ backgroundColor: '#031822', borderColor: '#ffffff20', color: '#fff', fontSize: '11px', borderRadius: '12px', padding: '8px 12px', zIndex: 99999 }} 
+                                                                itemStyle={{ color: '#00c8b3' }} 
+                                                            />
+                                                        </RechartsPieChart>
+                                                    </ResponsiveContainer>
+                                                </div>
+
+                                                {/* Clean Structured Legend */}
+                                                <div className="sm:col-span-7 space-y-2">
+                                                    {executionStatusDistribution.map((item, idx) => {
+                                                        const totalVal = executionStatusDistribution.reduce((a, b) => a + b.value, 0);
+                                                        const pct = item.percent !== undefined ? item.percent : (totalVal > 0 ? (item.value / totalVal) * 100 : 0);
+                                                        return (
+                                                            <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-xs">
+                                                                <div className="flex items-center gap-2 min-w-0">
+                                                                    <span className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: item.color }} />
+                                                                    <span className="font-bold text-white/90 truncate text-[11px]">{item.name}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-2 shrink-0">
+                                                                    <span className="font-black text-white text-[11px]">{item.value} {lang === 'ar' ? 'كم' : 'km'}</span>
+                                                                    <span className="px-1.5 py-0.5 rounded-md bg-accent/10 border border-accent/20 text-[9.5px] font-black text-accent">{pct.toFixed(0)}%</span>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="w-full h-28 flex flex-col items-center justify-center text-white/20 text-xs font-black">
+                                                <PieChart className="w-7 h-7 mb-1 opacity-20" />
+                                                {lang === 'ar' ? 'لا يوجد بيانات حالة تنفيذ' : 'No execution status data'}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* 2. By Diameter Section */}
+                                    <div className="p-5 bg-black/20 rounded-2xl border border-white/5 space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="text-accent text-[11px] font-black uppercase flex items-center gap-1.5">
+                                                <BarChart3 className="w-3.5 h-3.5 text-accent" />
+                                                {lang === 'ar' ? '2. حسب القطر' : '2. By Diameter'}
+                                            </h4>
+                                            {diameterDistribution.length > 0 && (
+                                                <span className="text-[10px] text-white/50 font-bold bg-white/5 px-2 py-0.5 rounded-lg border border-white/10">
+                                                    {lang === 'ar' ? `${diameterDistribution.length} أقطار` : `${diameterDistribution.length} Diameters`}
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        {diameterDistribution.length > 0 ? (
+                                            <div className="space-y-3">
+                                                <div className="h-[210px] w-full relative">
+                                                    <ResponsiveContainer width="100%" height="100%">
+                                                        <BarChart data={diameterDistribution} margin={{ top: 10, right: 10, left: -20, bottom: 25 }}>
+                                                            <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                                                            <XAxis 
+                                                                dataKey="name" 
+                                                                tick={{ fill: '#ffffff80', fontSize: 10, fontWeight: 700 }} 
+                                                                axisLine={{ stroke: '#ffffff20' }}
+                                                                tickLine={{ stroke: '#ffffff20' }}
+                                                                interval={0}
+                                                                angle={-20}
+                                                                textAnchor="end"
+                                                            />
+                                                            <YAxis 
+                                                                tick={{ fill: '#ffffff60', fontSize: 10 }} 
+                                                                axisLine={{ stroke: '#ffffff20' }}
+                                                                tickLine={{ stroke: '#ffffff20' }}
+                                                            />
+                                                            <RechartsTooltip 
+                                                                formatter={(value: any) => [`${value} ${lang === 'ar' ? 'كم' : 'km'}`, lang === 'ar' ? 'الطول' : 'Length']} 
+                                                                contentStyle={{ backgroundColor: '#031822', borderColor: '#ffffff20', color: '#fff', fontSize: '11px', borderRadius: '12px', padding: '8px 12px', zIndex: 99999 }} 
+                                                                itemStyle={{ color: '#00c8b3' }} 
+                                                                cursor={{ fill: '#ffffff08' }} 
+                                                            />
+                                                            <Bar dataKey="value" fill="#00c8b3" radius={[6, 6, 0, 0]} />
+                                                        </BarChart>
+                                                    </ResponsiveContainer>
+                                                </div>
+
+                                                {/* Mini Diameter Badges List */}
+                                                <div className="flex flex-wrap gap-1.5 pt-2 border-t border-white/5">
+                                                    {diameterDistribution.map((d, i) => (
+                                                        <div key={i} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-[11px]">
+                                                            <span className="text-white/60 font-bold">{d.name}:</span>
+                                                            <span className="text-accent font-black">{d.value} {lang === 'ar' ? 'كم' : 'km'}</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="w-full h-28 flex flex-col items-center justify-center text-white/20 text-xs font-black">
+                                                <BarChart3 className="w-7 h-7 mb-1 opacity-20" />
+                                                {lang === 'ar' ? 'لا يوجد بيانات قطر' : 'No diameter data'}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

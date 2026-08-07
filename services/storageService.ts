@@ -96,6 +96,39 @@ export async function clearAllProjectsFromDB(): Promise<void> {
 }
 
 // Attribute and geometry helpers
+export function formatProjectIdForExcel(val: any): number | string {
+  if (val === undefined || val === null) return '';
+  if (typeof val === 'number') {
+    return isNaN(val) ? '' : val;
+  }
+  let str = String(val)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#160;/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+    .trim();
+
+  if (!str || str === 'null' || str === 'undefined' || str === '-' || str === '0') return '';
+
+  // If pure integer or decimal string, return as JavaScript number so SheetJS exports cell as numeric type ('n')
+  // This eliminates leading/trailing spaces in Excel and enables numeric VLOOKUP/linking
+  if (/^\d+$/.test(str)) {
+    const num = parseInt(str, 10);
+    if (!isNaN(num)) return num;
+  }
+  if (/^\d+(\.\d+)?$/.test(str)) {
+    const num = Number(str);
+    if (!isNaN(num)) return num;
+  }
+
+  // If string contains multiple IDs or separators, clean each part around slashes/commas
+  if (str.includes('/') || str.includes('|') || str.includes(',')) {
+    return str.split(/[/|,]/).map(s => s.trim()).filter(Boolean).join(' / ');
+  }
+
+  return str;
+}
+
 export function extractAttrValue(points: GeoPoint[], keyCandidates: string[], regexCandidates: RegExp[]): string {
   const foundSet = new Set<string>();
   for (const pt of points) {
@@ -103,7 +136,12 @@ export function extractAttrValue(points: GeoPoint[], keyCandidates: string[], re
     if (pt.attributes) {
       for (const [k, v] of Object.entries(pt.attributes)) {
         if (v === undefined || v === null) continue;
-        const cleanV = String(v).replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, '').trim();
+        const cleanV = String(v)
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&#160;/gi, ' ')
+          .replace(/<[^>]+>/g, '')
+          .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+          .trim();
         if (!cleanV || cleanV === 'null' || cleanV === 'undefined' || cleanV === '-' || cleanV === '0') continue;
         const kNorm = k.toLowerCase().replace(/[\s_#-]/g, '');
         for (const candidate of keyCandidates) {
@@ -119,7 +157,12 @@ export function extractAttrValue(points: GeoPoint[], keyCandidates: string[], re
       for (const rgx of regexCandidates) {
         const match = pt.description.match(rgx);
         if (match && match[1]) {
-          const cleanV = String(match[1]).replace(/&nbsp;/gi, ' ').replace(/<[^>]+>/g, '').trim();
+          const cleanV = String(match[1])
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&#160;/gi, ' ')
+            .replace(/<[^>]+>/g, '')
+            .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+            .trim();
           if (cleanV && cleanV !== 'null' && cleanV !== 'undefined' && cleanV !== '-' && cleanV !== '0') {
             valFound = cleanV;
             break;
@@ -253,7 +296,7 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
       rowsSheet2.push({
         'اسم المشروع المصدر (Project File)': proj.name,
         'PROJECTNAME': ptProjName,
-        'PROJECTID': ptProjId,
+        'PROJECTID': formatProjectIdForExcel(ptProjId),
         'CONTRACTOR': ptContractor,
         'م': itemCounter,
         'Segment ID': segId,
@@ -268,7 +311,7 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
   // Sheet 1 rows: Unique Segment IDs Summary
   const rowsSheet1 = uniqueSegmentList.map((item, index) => ({
     'PROJECTNAME': Array.from(item.projectNames).join(' / '),
-    'PROJECTID': Array.from(item.projectIds).join(' / '),
+    'PROJECTID': formatProjectIdForExcel(Array.from(item.projectIds).join(' / ')),
     'CONTRACTOR': Array.from(item.contractors).join(' / '),
     'المشاريع المحفوظة المتضمنة (Source Projects)': Array.from(item.savedProjectNames).join(' | '),
     'م': index + 1,

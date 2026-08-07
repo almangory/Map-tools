@@ -9,6 +9,7 @@ import { downloadDataPDF } from '../services/pdfExportService';
 import { extractAllPointAttributes, parseDescriptionToAttributes, stripHtml, extractNumbersOnly, isNumericTargetField, cleanZoneValue, isZoneField } from '../services/parserService';
 import { matchStatusByColor } from '../services/colorUtils';
 import { calculatePathLength } from '../services/geometryService';
+import { formatProjectIdForExcel } from '../services/storageService';
 import * as XLSX from 'xlsx';
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -852,13 +853,19 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         
         const extracted = extractAllPointAttributes(p);
         templateFields.forEach(f => {
-            row[f] = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
+            let val = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
+            const fUpper = f.toUpperCase();
+            if (fUpper === 'PROJECTID' || fUpper === 'PROJECT_ID' || fUpper === 'PROJECT ID' || f === 'رقم المشروع') {
+                val = formatProjectIdForExcel(val);
+            }
+            row[f] = val;
         });
 
         // Also add any extra extracted attributes not in templateFields
         Object.entries(extracted).forEach(([k, v]) => {
             if (row[k] === undefined) {
-                row[k] = v;
+                const kUpper = k.toUpperCase();
+                row[k] = (kUpper === 'PROJECTID' || kUpper === 'PROJECT_ID' || kUpper === 'PROJECT ID' || k === 'رقم المشروع') ? formatProjectIdForExcel(v) : v;
             }
         });
 
