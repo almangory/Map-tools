@@ -254,7 +254,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
   const detectedIssuePoints = useMemo(() => {
     if (issueItems && issueItems.length > 0) return issueItems;
-    return points.filter(isIssuePoint);
+    return (points || []).filter(isIssuePoint);
   }, [points, issueItems]);
 
   const zoomToIssuesExtent = useCallback(() => {

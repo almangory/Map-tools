@@ -5,8 +5,10 @@ import { GeoPoint } from '../types';
  * دالة للتحقق مما إذا كانت النقطة داخل المضلع باستخدام خوارزمية Ray Casting
  */
 export const isPointInPolygon = (point: {x: number, y: number}, polygon: {x: number, y: number}[]): boolean => {
+    if (!point || !polygon || !Array.isArray(polygon) || polygon.length === 0) return false;
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        if (!polygon[i] || !polygon[j]) continue;
         const xi = polygon[i].x, yi = polygon[i].y;
         const xj = polygon[j].x, yj = polygon[j].y;
         
@@ -21,6 +23,7 @@ export const isPointInPolygon = (point: {x: number, y: number}, polygon: {x: num
  * دالة لتوسيع المضلع بنطاق معين (Buffer بسيط عبر توسيع المربع المحيط)
  */
 export const bufferPolygon = (polygon: {x: number, y: number}[], meters: number): {x: number, y: number}[] => {
+    if (!polygon || !Array.isArray(polygon) || polygon.length === 0) return [];
     if (meters <= 0) return polygon;
     // تحويل الأمتار إلى درجات تقريبية (0.00001 درجة تقريباً تساوي 1.1 متر)
     const degreeOffset = meters / 111320; 
@@ -42,12 +45,13 @@ export const bufferPolygon = (polygon: {x: number, y: number}[], meters: number)
  * حساب المربع المحيط (Bounding Box) لمجموعة من النقاط
  */
 export const calculateBoundingBox = (points: {x: number, y: number}[]): {x: number, y: number}[] => {
-    if (points.length === 0) return [];
+    if (!points || !Array.isArray(points) || points.length === 0) return [];
     
     let minX = points[0].x, maxX = points[0].x;
     let minY = points[0].y, maxY = points[0].y;
 
     points.forEach(p => {
+        if (!p) return;
         if (p.x < minX) minX = p.x;
         if (p.x > maxX) maxX = p.x;
         if (p.y < minY) minY = p.y;
@@ -66,7 +70,7 @@ export const calculateBoundingBox = (points: {x: number, y: number}[]): {x: numb
  * دالة لحساب الغلاف المحدب (Convex Hull) لمجموعة من النقاط
  */
 export const calculateConvexHull = (points: {x: number, y: number}[]): {x: number, y: number}[] => {
-    if (points.length <= 2) return points;
+    if (!points || !Array.isArray(points) || points.length <= 2) return points || [];
 
     const sorted = [...points].sort((a, b) => a.x !== b.x ? a.x - b.x : a.y - b.y);
 
@@ -97,6 +101,7 @@ export const calculateConvexHull = (points: {x: number, y: number}[]): {x: numbe
 };
 
 const getLineIntersection = (p1: any, p2: any, p3: any, p4: any) => {
+    if (!p1 || !p2 || !p3 || !p4) return null;
     const denominator = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
     if (denominator === 0) return null;
     let ua = ((p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x)) / denominator;
@@ -110,6 +115,7 @@ const getLineIntersection = (p1: any, p2: any, p3: any, p4: any) => {
 };
 
 export const clipLineToPolygon = (line: {x: number, y: number}[], polygon: {x: number, y: number}[]): {x: number, y: number}[][] => {
+    if (!line || !Array.isArray(line) || !polygon || !Array.isArray(polygon) || line.length < 2 || polygon.length < 3) return [];
     const clippedLines: {x: number, y: number}[][] = [];
     let currentSegment: {x: number, y: number}[] = [];
 
@@ -154,7 +160,7 @@ export const clipLineToPolygon = (line: {x: number, y: number}[], polygon: {x: n
 };
 
 export const splitLineString = (path: {x: number, y: number, z?: number}[], maxLength: number): {x: number, y: number, z?: number}[][] => {
-    if (path.length < 2) return [path];
+    if (!path || !Array.isArray(path) || path.length < 2) return path ? [path] : [];
     
     const segments: {x: number, y: number, z?: number}[][] = [];
     let currentSegment: {x: number, y: number, z?: number}[] = [path[0]];
@@ -214,9 +220,11 @@ export const getDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2
     return R * c;
 };
 
-export const calculatePathLength = (path: {x: number, y: number}[]): number => {
+export const calculatePathLength = (path?: {x: number, y: number}[], attributes?: any): number => {
+    if (!path || !Array.isArray(path) || path.length < 2) return 0;
     let total = 0;
     for (let i = 0; i < path.length - 1; i++) {
+        if (!path[i] || !path[i+1]) continue;
         total += getDistanceMeters(path[i].y, path[i].x, path[i+1].y, path[i+1].x);
     }
     return total;

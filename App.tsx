@@ -1887,10 +1887,10 @@ const App: React.FC = () => {
       // Also add the default fields themselves so they are always in selectedHeaders
       // even if they don't exist in the file's headers
       const allSelected = Array.from(new Set([...initialSelection, ...defaultFields]));
-      setSelectedHeaders(initialSelection.length > 0 ? allSelected : Array.from(new Set([...activeFile.headers, ...defaultFields])));
+      setSelectedHeaders(initialSelection.length > 0 ? allSelected : Array.from(new Set([...(activeFile.headers || []), ...defaultFields])));
 
-      if (activeFile.headers.length > 0) {
-        setGroupByColumnSelect(activeFile.headers[0]);
+      if ((activeFile.headers || []).length > 0) {
+        setGroupByColumnSelect(activeFile.headers![0]);
       }
     } else {
       setSelectedHeaders([]);
@@ -4006,8 +4006,8 @@ const App: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => {
-                          setOverlapResults(autoAlertInfo.duplicatesCount > 0 ? autoAlertInfo.dups : autoAlertInfo.intersections);
-                          setOverlapModalType(autoAlertInfo.duplicatesCount > 0 ? 'duplicates' : 'intersections');
+                          setOverlapResults(autoAlertInfo?.duplicatesCount > 0 ? (autoAlertInfo?.dups || []) : (autoAlertInfo?.intersections || []));
+                          setOverlapModalType(autoAlertInfo?.duplicatesCount > 0 ? 'duplicates' : 'intersections');
                           setShowOverlapModal(true);
                         }}
                         className="px-3 py-1.5 bg-accent text-primary font-black rounded-xl text-[10px] hover:brightness-110 transition-all flex items-center gap-1 active:scale-95 shadow"
@@ -6320,8 +6320,8 @@ const App: React.FC = () => {
                           <button
                               onClick={() => {
                                   setShowAutoAlertModal(false);
-                                  setOverlapResults(autoAlertInfo.duplicatesCount > 0 ? autoAlertInfo.dups : autoAlertInfo.intersections);
-                                  setOverlapModalType(autoAlertInfo.duplicatesCount > 0 ? 'duplicates' : 'intersections');
+                                  setOverlapResults(autoAlertInfo?.duplicatesCount > 0 ? (autoAlertInfo?.dups || []) : (autoAlertInfo?.intersections || []));
+                                  setOverlapModalType(autoAlertInfo?.duplicatesCount > 0 ? 'duplicates' : 'intersections');
                                   setShowOverlapModal(true);
                               }}
                               className="w-full py-3 px-4 bg-accent text-primary hover:brightness-110 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
@@ -6431,7 +6431,7 @@ const App: React.FC = () => {
                          </div>
                      </div>
                      <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
-                         {overlapResults.length > 0 ? (
+                         {overlapResults && overlapResults.length > 0 ? (
                              <>
                                  {overlapModalType === 'duplicates' ? (
                                      <div className="p-5 bg-gradient-to-r from-red-500/20 via-red-500/10 to-transparent border border-red-500/40 rounded-2xl flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
@@ -6525,7 +6525,7 @@ const App: React.FC = () => {
                                              </div>
                                          </div>
                                      ))}
-                                     {overlapResults.length > 50 && (
+                                     {overlapResults && overlapResults.length > 50 && (
                                          <div className="text-center p-4 text-white/40 text-xs font-bold">
                                              {lang === 'ar' ? `و ${overlapResults.length - 50} عنصر آخر...` : `And ${overlapResults.length - 50} more items...`}
                                          </div>
@@ -6974,7 +6974,7 @@ export const CheckResultModalPopup: React.FC<{
 
           {/* Statistics Grid */}
           <div className="grid grid-cols-2 gap-3">
-            {checkResultModal.stats.map((st, i) => (
+            {(checkResultModal.stats || []).map((st, i) => (
               <div key={i} className="p-4 rounded-2xl bg-[#071f2b] border border-white/5 shadow-inner flex flex-col justify-between space-y-1">
                 <span className="text-[10px] text-white/50 font-bold uppercase tracking-wide">
                   {lang === 'ar' ? st.labelAr : st.labelEn}

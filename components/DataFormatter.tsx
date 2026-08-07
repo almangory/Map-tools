@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck } from 'lucide-react';
-import { GeoPoint, OverlapResult } from '../types';
+import { GeoPoint } from '../types';
+import { OverlapResult } from '../services/geometryService';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';

@@ -36,9 +36,11 @@ const escapeXML = (str: string | number | undefined) => {
 };
 
 // --- HELPER: Geographic Distance (Haversine) ---
-export const calculatePathLength = (path: {x: number, y: number}[]): number => {
+export const calculatePathLength = (path?: {x: number, y: number}[]): number => {
+    if (!path || !Array.isArray(path) || path.length < 2) return 0;
     let total = 0;
     for (let i = 0; i < path.length - 1; i++) {
+        if (!path[i] || !path[i+1]) continue;
         total += getDistanceMeters(path[i].y, path[i].x, path[i+1].y, path[i+1].x);
     }
     return total;
