@@ -28,7 +28,7 @@ import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from 
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
-import { formatProjectIdForExcel } from './services/storageService';
+import { formatProjectIdForExcel, cleanSegmentId, getCanonicalSegmentKey } from './services/storageService';
 import { downloadDXF } from './services/dxfExportService';
 import { downloadDataPDF } from './services/pdfExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
@@ -866,7 +866,8 @@ const App: React.FC = () => {
 
           if (foundVal) {
             matchedCount++;
-            uniqueSegmentIdsSet.add(foundVal.trim());
+            const canon = getCanonicalSegmentKey(foundVal);
+            if (canon) uniqueSegmentIdsSet.add(canon);
             return {
               ...pt,
               originalColor: origColor,
@@ -2211,20 +2212,24 @@ const App: React.FC = () => {
       }
 
       if (foundVal) {
-        validCount++;
-        let len = pt.originalLength || 0;
-        if (len === 0 && pt.type === 'LineString' && pt.path) {
-          len = calculatePathLength(pt.path);
-        }
-        totalLengthWithSegmentId += len;
+        const cleanVal = cleanSegmentId(foundVal);
+        const canonKey = getCanonicalSegmentKey(foundVal);
 
-        const normKey = foundVal.trim();
-        if (!uniqueMap[normKey]) {
-          uniqueMap[normKey] = { idValue: normKey, count: 0, totalLength: 0, points: [] };
+        if (cleanVal && canonKey) {
+          validCount++;
+          let len = pt.originalLength || 0;
+          if (len === 0 && pt.type === 'LineString' && pt.path) {
+            len = calculatePathLength(pt.path);
+          }
+          totalLengthWithSegmentId += len;
+
+          if (!uniqueMap[canonKey]) {
+            uniqueMap[canonKey] = { idValue: cleanVal, count: 0, totalLength: 0, points: [] };
+          }
+          uniqueMap[canonKey].count += 1;
+          uniqueMap[canonKey].totalLength += len;
+          uniqueMap[canonKey].points.push(pt);
         }
-        uniqueMap[normKey].count += 1;
-        uniqueMap[normKey].totalLength += len;
-        uniqueMap[normKey].points.push(pt);
       }
     });
 
@@ -2374,18 +2379,27 @@ const App: React.FC = () => {
     };
 
     // Sheet 1: Detailed / Statistical Report (Unique Segment IDs Summary)
-    const rowsSheet1 = segmentIdAnalysis.uniqueDetails.map((item, index) => ({
-      'PROJECTNAME': item.projectName || '',
-      'PROJECTID': formatProjectIdForExcel(item.projectId),
-      'CONTRACTOR': item.contractor || '',
-      'م': index + 1,
-      'Segment ID': item.idValue,
-      'عدد العناصر (Items Count)': item.count,
-      'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
-      'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
-      'نسبة الأطوال (%)': ((item.totalLength / (segmentIdAnalysis.totalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%',
-      'رابط موقع الخريطة (Google Maps Link)': getMapLink(item.points)
-    }));
+    const rowsSheet1: any[] = [];
+    const seenKeysSheet1 = new Set<string>();
+
+    segmentIdAnalysis.uniqueDetails.forEach((item) => {
+      const canon = getCanonicalSegmentKey(item.idValue);
+      if (!canon || seenKeysSheet1.has(canon)) return;
+      seenKeysSheet1.add(canon);
+
+      rowsSheet1.push({
+        'PROJECTNAME': item.projectName || '',
+        'PROJECTID': formatProjectIdForExcel(item.projectId),
+        'CONTRACTOR': item.contractor || '',
+        'م': rowsSheet1.length + 1,
+        'Segment ID': item.idValue,
+        'عدد العناصر (Items Count)': item.count,
+        'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
+        'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
+        'نسبة الأطوال (%)': ((item.totalLength / (segmentIdAnalysis.totalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%',
+        'رابط موقع الخريطة (Google Maps Link)': getMapLink(item.points)
+      });
+    });
 
     // Sheet 2: ALL Segment ID elements list (item by item, including all duplicates)
     let itemCounter = 0;

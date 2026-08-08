@@ -96,6 +96,55 @@ export async function clearAllProjectsFromDB(): Promise<void> {
 }
 
 // Attribute and geometry helpers
+export function cleanSegmentId(val: any): string {
+  if (val === undefined || val === null) return '';
+  let str = String(val);
+
+  // 1. Remove HTML tags and HTML entities
+  str = str
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#160;/gi, ' ')
+    .replace(/<[^>]+>/g, '');
+
+  // 2. Strip Unicode Directional / Bidi Control Chars, Zero-Width Spaces, and BOM
+  str = str.replace(/[\u200E\u200F\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069\u061C\u200B\u200C\u200D\uFEFF]/g, '');
+
+  // 3. Normalize whitespace variants to ASCII space
+  str = str.replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000]/g, ' ');
+
+  // 4. Normalize Eastern Arabic / Persian numerals to ASCII Western digits
+  const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+  const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  for (let i = 0; i < 10; i++) {
+    str = str.replaceAll(arabicDigits[i], String(i)).replaceAll(persianDigits[i], String(i));
+  }
+
+  // 5. Normalize dash / hyphen variants to standard ASCII hyphen '-'
+  str = str.replace(/[\u2011\u2012\u2013\u2014\u2015\u2212\uFE63\uFF0D]/g, '-');
+
+  // 6. Strip surrounding quotes / brackets
+  str = str.replace(/^["'“`«\[\({]+|["'”`»\]\)}]+$/g, '');
+
+  // 7. Collapse spaces and trim
+  str = str.replace(/\s+/g, ' ').trim();
+
+  if (!str || str === 'null' || str === 'undefined' || str === '-' || str === '0') return '';
+
+  // Clean trailing decimal zeros for numeric IDs like "1001.0" or "1001.00"
+  if (/^\d+\.0+$/.test(str)) {
+    str = str.replace(/\.0+$/, '');
+  }
+
+  return str;
+}
+
+export function getCanonicalSegmentKey(val: any): string {
+  const cleaned = cleanSegmentId(val);
+  if (!cleaned) return '';
+  // Normalize key for case-insensitive and spacing-insensitive grouping
+  return cleaned.toUpperCase();
+}
+
 export function formatProjectIdForExcel(val: any): number | string {
   if (val === undefined || val === null) return '';
   if (typeof val === 'number') {
@@ -256,8 +305,10 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
 
   projects.forEach((proj) => {
     (proj.points || []).forEach((pt) => {
-      const segId = extractAttrValue([pt], SEGMENT_KEYS, SEGMENT_REGEXES);
-      if (!segId) return;
+      const rawSegId = extractAttrValue([pt], SEGMENT_KEYS, SEGMENT_REGEXES);
+      const cleanSeg = cleanSegmentId(rawSegId);
+      const canonKey = getCanonicalSegmentKey(rawSegId);
+      if (!cleanSeg || !canonKey) return;
 
       let len = pt.originalLength || 0;
       if (len === 0 && pt.type === 'LineString' && pt.path) {
@@ -270,9 +321,9 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
 
       grandTotalLengthWithSegmentId += len;
 
-      if (!uniqueSegmentMap[segId]) {
-        uniqueSegmentMap[segId] = {
-          idValue: segId,
+      if (!uniqueSegmentMap[canonKey]) {
+        uniqueSegmentMap[canonKey] = {
+          idValue: cleanSeg,
           totalLength: 0,
           count: 0,
           points: [],
@@ -283,14 +334,14 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
         };
       }
 
-      uniqueSegmentMap[segId].totalLength += len;
-      uniqueSegmentMap[segId].count += 1;
-      uniqueSegmentMap[segId].points.push(pt);
+      uniqueSegmentMap[canonKey].totalLength += len;
+      uniqueSegmentMap[canonKey].count += 1;
+      uniqueSegmentMap[canonKey].points.push(pt);
 
-      if (ptProjName) uniqueSegmentMap[segId].projectNames.add(ptProjName);
-      if (ptProjId) uniqueSegmentMap[segId].projectIds.add(ptProjId);
-      if (ptContractor) uniqueSegmentMap[segId].contractors.add(ptContractor);
-      uniqueSegmentMap[segId].savedProjectNames.add(proj.name);
+      if (ptProjName) uniqueSegmentMap[canonKey].projectNames.add(ptProjName);
+      if (ptProjId) uniqueSegmentMap[canonKey].projectIds.add(ptProjId);
+      if (ptContractor) uniqueSegmentMap[canonKey].contractors.add(ptContractor);
+      uniqueSegmentMap[canonKey].savedProjectNames.add(proj.name);
 
       itemCounter++;
       rowsSheet2.push({
@@ -299,7 +350,7 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
         'PROJECTID': formatProjectIdForExcel(ptProjId),
         'CONTRACTOR': ptContractor,
         'م': itemCounter,
-        'Segment ID': segId,
+        'Segment ID': cleanSeg,
         'الطول (متر)': len ? len.toFixed(2) : '0.00',
         'رابط موقع الخريطة (Google Maps Link)': getMapLinkForPoints([pt])
       });
@@ -308,20 +359,29 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
 
   const uniqueSegmentList = Object.values(uniqueSegmentMap).sort((a, b) => b.totalLength - a.totalLength);
 
-  // Sheet 1 rows: Unique Segment IDs Summary
-  const rowsSheet1 = uniqueSegmentList.map((item, index) => ({
-    'PROJECTNAME': Array.from(item.projectNames).join(' / '),
-    'PROJECTID': formatProjectIdForExcel(Array.from(item.projectIds).join(' / ')),
-    'CONTRACTOR': Array.from(item.contractors).join(' / '),
-    'المشاريع المحفوظة المتضمنة (Source Projects)': Array.from(item.savedProjectNames).join(' | '),
-    'م': index + 1,
-    'Segment ID': item.idValue,
-    'عدد العناصر (Items Count)': item.count,
-    'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
-    'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
-    'نسبة الأطوال (%)': ((item.totalLength / (grandTotalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%',
-    'رابط موقع الخريطة (Google Maps Link)': getMapLinkForPoints(item.points)
-  }));
+  // Sheet 1 rows: Unique Segment IDs Summary (GUARANTEED NO DUPLICATES)
+  const rowsSheet1: any[] = [];
+  const seenKeysSheet1 = new Set<string>();
+
+  uniqueSegmentList.forEach((item) => {
+    const canon = getCanonicalSegmentKey(item.idValue);
+    if (!canon || seenKeysSheet1.has(canon)) return;
+    seenKeysSheet1.add(canon);
+
+    rowsSheet1.push({
+      'PROJECTNAME': Array.from(item.projectNames).join(' / '),
+      'PROJECTID': formatProjectIdForExcel(Array.from(item.projectIds).join(' / ')),
+      'CONTRACTOR': Array.from(item.contractors).join(' / '),
+      'المشاريع المحفوظة المتضمنة (Source Projects)': Array.from(item.savedProjectNames).join(' | '),
+      'م': rowsSheet1.length + 1,
+      'Segment ID': item.idValue,
+      'عدد العناصر (Items Count)': item.count,
+      'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
+      'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
+      'نسبة الأطوال (%)': ((item.totalLength / (grandTotalLengthWithSegmentId || 1)) * 100).toFixed(1) + '%',
+      'رابط موقع الخريطة (Google Maps Link)': getMapLinkForPoints(item.points)
+    });
+  });
 
   const workbook = XLSX.utils.book_new();
 

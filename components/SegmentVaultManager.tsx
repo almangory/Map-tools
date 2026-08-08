@@ -36,7 +36,9 @@ import {
   clearAllProjectsFromDB,
   exportAggregatedSegmentIdReport,
   extractAttrValue,
-  getMapLinkForPoints
+  getMapLinkForPoints,
+  cleanSegmentId,
+  getCanonicalSegmentKey
 } from '../services/storageService';
 import { GeoPoint } from '../types';
 
@@ -134,9 +136,10 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
 
       activePoints.forEach((pt) => {
         const segId = extractAttrValue([pt], SEGMENT_KEYS, SEGMENT_REGEXES);
-        if (segId) {
+        const canon = getCanonicalSegmentKey(segId);
+        if (canon) {
           validSegsCount++;
-          uniqueSegs.add(segId);
+          uniqueSegs.add(canon);
           let len = pt.originalLength || 0;
           if (len === 0 && pt.type === 'LineString' && pt.path) {
             let dist = 0;
@@ -251,8 +254,9 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
       totalKm += (proj.totalSegmentedLength || 0) / 1000;
       (proj.points || []).forEach((pt) => {
         const segId = extractAttrValue([pt], SEGMENT_KEYS, SEGMENT_REGEXES);
-        if (segId) {
-          totalUniqueSegs.add(segId);
+        const canon = getCanonicalSegmentKey(segId);
+        if (canon) {
+          totalUniqueSegs.add(canon);
           totalValidItems++;
         }
       });
