@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck } from 'lucide-react';
+import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2 } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { OverlapResult } from '../services/geometryService';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
+import { downloadShapefile } from '../services/shapefileExportService';
 import { extractAllPointAttributes, parseDescriptionToAttributes, stripHtml, extractNumbersOnly, isNumericTargetField, cleanZoneValue, isZoneField } from '../services/parserService';
 import { matchStatusByColor } from '../services/colorUtils';
 import { calculatePathLength } from '../services/geometryService';
@@ -364,6 +365,7 @@ export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
 export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc }: Props) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [isExecuting, setIsExecuting] = useState(false);
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('pipes');
@@ -838,6 +840,14 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     } catch (e: any) { setActionError("Error exporting DXF: " + e.message); console.error(e); }
   };
 
+  const handleApplyExportShapefile = async (pts?: GeoPoint[]) => {
+    try {
+      const { processedPoints } = getProcessedPoints(pts);
+      await downloadShapefile(processedPoints, getBaseFilename());
+      setSuccessMessage(lang === 'ar' ? "تم تصدير ملف الشيب فايل (SHP) بنجاح!" : "Shapefile exported successfully!");
+    } catch (e: any) { setActionError("Error exporting Shapefile: " + e.message); console.error(e); }
+  };
+
   const handleApplyExportPDF = async (pts?: GeoPoint[]) => {
     try {
       const { processedPoints } = getProcessedPoints(pts);
@@ -890,31 +900,22 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   const executeAction = async (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
     setActionError(null);
     setSuccessMessage(null);
+    if (!points || points.length === 0) {
+      setActionError(lang === 'ar' ? 'لا توجد عناصر مجهزة لتنسيقها أو تصديرها. يرجى رفع ملف أو اختيار طبقة بيانات أولاً.' : 'No data points available.');
+      return;
+    }
+    setIsExecuting(true);
     try {
+        let updatedPoints = points;
         if (autoFetchStreets && fetchStreets) {
-          const confirmMsg = lang === 'ar' 
-            ? 'لقد قمت بتفعيل خيار "جلب الشوارع". قد تستغرق هذه العملية بعض الوقت حسب عدد النقاط وسيتم استبدال قيم الشوارع الحالية. هل أنت متأكد من رغبتك في الاستمرار وتصدير البيانات؟'
-            : 'You have enabled "Fetch Streets". This process may take some time depending on the number of points and will overwrite current street values. Are you sure you want to continue and export?';
-          
-          let proceed = true;
-          try {
-             proceed = window.confirm(confirmMsg);
-          } catch(e) {
-             console.warn("window.confirm not supported, proceeding automatically");
-             proceed = true;
-          }
-
-          if (proceed) {
-             const updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
-             await action(updatedPoints);
-          }
-
-        } else {
-          await action();
+           updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
         }
+        await action(updatedPoints);
     } catch (err: any) {
         console.error("Export Action Error:", err);
-        setActionError("حدث خطأ أثناء التصدير: " + (err).message);
+        setActionError((lang === 'ar' ? "حدث خطأ أثناء التصدير: " : "Export error: ") + (err?.message || String(err)));
+    } finally {
+        setIsExecuting(false);
     }
   };
 
@@ -1094,6 +1095,38 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                   ? (lang === 'ar' ? '🎯 حساب هندسي متقدم لأقرب مسار طريق لإعطاء نتائج دقيقة جداً.' : '🎯 Advanced geometry-based calculation for exact nearest road.')
                   : (lang === 'ar' ? '⚡ بحث عام سريع ومباشر لتوفير الوقت مع كميات البيانات الكبيرة.' : '⚡ Fast general search lookup to save time on large datasets.')}
               </p>
+
+              {fetchStreets && (
+                <button
+                  type="button"
+                  disabled={isExecuting}
+                  onClick={async () => {
+                    if (!points || points.length === 0) {
+                      setActionError(lang === 'ar' ? 'لا توجد عناصر مجهزة لجلب الشوارع. يرجى رفع ملف أو اختيار طبقة أولاً.' : 'No elements available.');
+                      return;
+                    }
+                    setActionError(null);
+                    setSuccessMessage(null);
+                    setIsExecuting(true);
+                    try {
+                      await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
+                      setSuccessMessage(lang === 'ar' ? 'تم جلب وتحديث أسماء الشوارع والأحياء بنجاح! 🗺️' : 'Streets and districts fetched successfully! 🗺️');
+                    } catch (e: any) {
+                      setActionError((lang === 'ar' ? 'حدث خطأ أثناء جلب الشوارع: ' : 'Error fetching streets: ') + (e?.message || String(e)));
+                    } finally {
+                      setIsExecuting(false);
+                    }
+                  }}
+                  className="w-full mt-2 py-2.5 px-3 bg-accent/20 hover:bg-accent/30 border border-accent/40 text-accent font-black text-xs rounded-xl transition-all flex items-center justify-center gap-2 active:scale-95 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isExecuting ? (
+                    <Loader2 className="w-4 h-4 text-accent animate-spin" />
+                  ) : (
+                    <CloudDownload className="w-4 h-4 text-accent animate-pulse" />
+                  )}
+                  <span>{lang === 'ar' ? 'تشغيل جلب أسماء الشوارع والأحياء الآن 🗺️' : 'Fetch Streets & Districts Now 🗺️'}</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1365,21 +1398,25 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             </button>
           )}
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
-            <button onClick={() => executeAction(handleApplyExportKMZ)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
-              <CloudDownload className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-4">
+            <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportKMZ)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
+              {isExecuting ? <Loader2 className="w-5 h-5 text-blue-400 animate-spin" /> : <CloudDownload className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />}
               <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'KMZ' : 'KMZ'}</span>
             </button>
-            <button onClick={() => executeAction(handleApplyExportDXF)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
-              <PenTool className="w-5 h-5 text-orange-400 group-hover:scale-110 transition-transform" />
+            <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportShapefile)} className="bg-emerald-950/80 border border-emerald-500/40 hover:bg-emerald-500 hover:text-white rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
+              {isExecuting ? <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" /> : <FolderArchive className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />}
+              <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'شيب فايل (SHP)' : 'Shapefile (SHP)'}</span>
+            </button>
+            <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportDXF)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
+              {isExecuting ? <Loader2 className="w-5 h-5 text-orange-400 animate-spin" /> : <PenTool className="w-5 h-5 text-orange-400 group-hover:scale-110 transition-transform" />}
               <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'DXF' : 'DXF'}</span>
             </button>
-            <button onClick={() => executeAction(handleApplyExportExcel)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
-              <FileSpreadsheet className="w-5 h-5 text-[#2ecc71] group-hover:scale-110 transition-transform" />
+            <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportExcel)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
+              {isExecuting ? <Loader2 className="w-5 h-5 text-[#2ecc71] animate-spin" /> : <FileSpreadsheet className="w-5 h-5 text-[#2ecc71] group-hover:scale-110 transition-transform" />}
               <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'إكسل' : 'Excel'}</span>
             </button>
-            <button onClick={() => executeAction(handleApplyExportPDF)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner">
-              <FileText className="w-5 h-5 text-[#D32F2F] group-hover:scale-110 transition-transform" />
+            <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportPDF)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
+              {isExecuting ? <Loader2 className="w-5 h-5 text-[#D32F2F] animate-spin" /> : <FileText className="w-5 h-5 text-[#D32F2F] group-hover:scale-110 transition-transform" />}
               <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'PDF' : 'PDF'}</span>
             </button>
           </div>

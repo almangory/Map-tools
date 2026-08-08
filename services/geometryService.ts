@@ -260,6 +260,38 @@ const pointToSegmentDistanceMeters = (
 
 const geocodeCache = new Map<string, { street: string; district: string }>();
 
+export const utmToLatLon = (easting: number, northing: number, zone: number = 38, northern: boolean = true) => {
+  const k0 = 0.9996;
+  const a = 6378137;
+  const e = 0.081819191;
+  const e1sq = 0.006739497;
+  
+  const x = easting - 500000;
+  const y = northern ? northing : northing - 10000000;
+
+  const m = y / k0;
+  const mu = m / (a * (1 - Math.pow(e, 2) / 4 - 3 * Math.pow(e, 4) / 64 - 5 * Math.pow(e, 6) / 256));
+
+  const phi1Rad = mu + (3 * e1sq / 2 - 27 * Math.pow(e1sq, 3) / 32) * Math.sin(2 * mu)
+    + (21 * Math.pow(e1sq, 2) / 16 - 55 * Math.pow(e1sq, 4) / 32) * Math.sin(4 * mu)
+    + (151 * Math.pow(e1sq, 3) / 96) * Math.sin(6 * mu);
+
+  const n1 = a / Math.sqrt(1 - Math.pow(e * Math.sin(phi1Rad), 2));
+  const t1 = Math.tan(phi1Rad) * Math.tan(phi1Rad);
+  const c1 = e1sq * Math.cos(phi1Rad) * Math.cos(phi1Rad);
+  const r1 = a * (1 - Math.pow(e, 2)) / Math.pow(1 - Math.pow(e * Math.sin(phi1Rad), 2), 1.5);
+  const d = x / (n1 * k0);
+
+  let lat = phi1Rad - (n1 * Math.tan(phi1Rad) / r1) * (Math.pow(d, 2) / 2 - (5 + 3 * t1 + 10 * c1 - 4 * c1 * c1 - 9 * e1sq) * Math.pow(d, 4) / 24 + (61 + 90 * t1 + 298 * c1 + 45 * t1 * t1 - 252 * e1sq - 3 * c1 * c1) * Math.pow(d, 6) / 720);
+  lat = (lat * 180) / Math.PI;
+
+  const lonOrigin = (zone - 1) * 6 - 180 + 3;
+  let lon = (d - (1 + 2 * t1 + c1) * Math.pow(d, 3) / 6 + (5 - 2 * c1 + 28 * t1 - 3 * c1 * c1 + 8 * e1sq + 24 * t1 * t1) * Math.pow(d, 5) / 120) / Math.cos(phi1Rad);
+  lon = lonOrigin + (lon * 180) / Math.PI;
+
+  return { lat, lon };
+};
+
 export const getReverseGeocode = async (
     lat: number, 
     lon: number, 
@@ -267,10 +299,41 @@ export const getReverseGeocode = async (
 ): Promise<{street: string, district: string}> => {
     if (!lat || !lon) return { street: "غير متوفر", district: "غير متوفر" };
 
+    let queryLat = lat;
+    let queryLon = lon;
+
+    // Handle UTM or projected coordinates automatically
+    if (Math.abs(queryLat) > 90 || Math.abs(queryLon) > 180) {
+      let easting = Math.min(Math.abs(queryLat), Math.abs(queryLon));
+      let northing = Math.max(Math.abs(queryLat), Math.abs(queryLon));
+      
+      if (northing > 100000 && easting > 100000) {
+        let bestConverted: { lat: number; lon: number } | null = null;
+        for (const z of [38, 37, 39, 36]) {
+          const converted = utmToLatLon(easting, northing, z, true);
+          if (converted.lat >= 12 && converted.lat <= 36 && converted.lon >= 33 && converted.lon <= 60) {
+            bestConverted = converted;
+            break;
+          }
+        }
+        if (!bestConverted) {
+          bestConverted = utmToLatLon(easting, northing, 38, true);
+        }
+        if (Math.abs(bestConverted.lat) <= 90 && Math.abs(bestConverted.lon) <= 180) {
+          queryLat = bestConverted.lat;
+          queryLon = bestConverted.lon;
+        } else {
+          return { street: "غير متوفر", district: "غير متوفر" };
+        }
+      } else {
+        return { street: "غير متوفر", district: "غير متوفر" };
+      }
+    }
+
     // Check cache: in accurate mode, use 4 decimal precision (~11m); in fast mode, use 3 decimal precision (~110m)
     const cacheKey = mode === 'accurate' 
-        ? `${lat.toFixed(4)},${lon.toFixed(4)}` 
-        : `${lat.toFixed(3)},${lon.toFixed(3)}`;
+        ? `${queryLat.toFixed(4)},${queryLon.toFixed(4)}` 
+        : `${queryLat.toFixed(3)},${queryLon.toFixed(3)}`;
 
     if (geocodeCache.has(cacheKey)) {
         return geocodeCache.get(cacheKey)!;
@@ -280,11 +343,11 @@ export const getReverseGeocode = async (
     let district = "";
 
     const isAccurate = mode === 'accurate';
-    const primaryTimeout = isAccurate ? 3000 : 1800;
+    const primaryTimeout = isAccurate ? 2200 : 1200;
 
     // 1. Primary: ArcGIS World Geocoding Service (high precision in Middle East & KSA, reliable & fast)
     try {
-        const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${lon},${lat}&langCode=ar`;
+        const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${queryLon},${queryLat}&langCode=ar`;
         const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, primaryTimeout);
         if (arcgisRes && arcgisRes.ok) {
             const arcgisData = await arcgisRes.json();
@@ -1226,6 +1289,131 @@ export const trimLinesAtIntersections = async (
   }
 
   return { cleanedPoints, trimmedCount };
+};
+
+export interface NetworkGap {
+  id: string;
+  lineId: string | number;
+  lineName?: string;
+  layer?: string;
+  color?: string;
+  endpointType: 'start' | 'end';
+  startCoord: { x: number; y: number }; // Start point of missing connection (the dangling line endpoint)
+  endCoord?: { x: number; y: number }; // Nearest line point/endpoint candidate if within threshold
+  gapDistanceMeters?: number;
+  nearestLineId?: string | number;
+  street?: string;
+  district?: string;
+}
+
+/**
+ * دالة لكشف الفجوات الشبكية (Network Gaps / Dangling Ends)
+ * تقوم ببحث أطراف الخطوط (Start / End) التي لا تتصل بأي خط آخر أو عقدة ضمن مسافة حدية (مثلاً 10 إلى 50 متر)
+ */
+export const detectNetworkGaps = async (
+  points: GeoPoint[],
+  maxGapDistanceMeters: number = 35.0,
+  onProgress?: (percent: number) => void
+): Promise<NetworkGap[]> => {
+  const gaps: NetworkGap[] = [];
+  const lines = points.filter(p => p.type === 'LineString' && p.path && p.path.length >= 2);
+  if (lines.length === 0) return gaps;
+
+  // 1. Build spatial grid index for all segments of all lines
+  const { getCandidateIndices, bboxes } = buildSpatialGridIndex(lines, maxGapDistanceMeters);
+  
+  let lastYield = Date.now();
+
+  for (let i = 0; i < lines.length; i++) {
+    if (Date.now() - lastYield > 20) {
+      if (onProgress) onProgress(Math.round((i / lines.length) * 100));
+      await yieldToMain();
+      lastYield = Date.now();
+    }
+
+    const currentLine = lines[i];
+    const path = currentLine.path!;
+    const endpoints: Array<{ type: 'start' | 'end'; point: { x: number; y: number } }> = [
+      { type: 'start', point: path[0] },
+      { type: 'end', point: path[path.length - 1] }
+    ];
+
+    for (const ep of endpoints) {
+      let isConnected = false;
+      let minDistance = Infinity;
+      let nearestCandidate: { x: number; y: number } | undefined = undefined;
+      let nearestLineId: string | number | undefined = undefined;
+
+      // Check against all candidate lines in spatial neighborhood
+      const candidates = getCandidateIndices(i);
+      
+      // Also check against candidates where j <= i (since getCandidateIndices only returns j > i)
+      const allNeighborLineIndices: number[] = [];
+      const marginDeg = Math.max(maxGapDistanceMeters / 111000, 0.00005);
+      const epBBox = { minX: ep.point.x, maxX: ep.point.x, minY: ep.point.y, maxY: ep.point.y };
+      
+      for (let j = 0; j < lines.length; j++) {
+        if (i === j) continue;
+        if (bboxesIntersect(epBBox, bboxes[j], marginDeg)) {
+          allNeighborLineIndices.push(j);
+        }
+      }
+
+      for (const j of allNeighborLineIndices) {
+        const otherLine = lines[j];
+        const otherPath = otherLine.path!;
+
+        for (let k = 0; k < otherPath.length - 1; k++) {
+          const segA = otherPath[k];
+          const segB = otherPath[k + 1];
+          const dist = getPointToSegDistMeters(ep.point, segA, segB);
+
+          // If endpoint is practically touching another segment (< 0.3 meters), it's connected!
+          if (dist <= 0.3) {
+            isConnected = true;
+            break;
+          }
+
+          if (dist < minDistance && dist <= maxGapDistanceMeters) {
+            minDistance = dist;
+            nearestLineId = otherLine.id;
+            
+            // Calculate project point on segment
+            const distAB = getPointDistanceMeters(segA, segB);
+            const distAP = getPointDistanceMeters(segA, ep.point);
+            const distBP = getPointDistanceMeters(segB, ep.point);
+            if (distAP < distBP) {
+              nearestCandidate = segA;
+            } else {
+              nearestCandidate = segB;
+            }
+          }
+        }
+
+        if (isConnected) break;
+      }
+
+      // If not connected to any existing network line within 0.3m, it's a dangling end / network gap
+      if (!isConnected) {
+        gaps.push({
+          id: `GAP_${currentLine.id}_${ep.type}`,
+          lineId: currentLine.id,
+          lineName: String(currentLine.id),
+          layer: currentLine.layer || 'Default',
+          color: currentLine.color || '#dcb13c',
+          endpointType: ep.type,
+          startCoord: ep.point,
+          endCoord: nearestCandidate,
+          gapDistanceMeters: minDistance < Infinity ? minDistance : undefined,
+          nearestLineId: nearestLineId,
+          street: currentLine.street,
+          district: currentLine.district
+        });
+      }
+    }
+  }
+
+  return gaps;
 };
 
 export const resolveSpatialOverlaps = async (

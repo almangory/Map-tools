@@ -13,7 +13,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -26,11 +26,12 @@ import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
-import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, OverlapResult, isBlackLine } from './services/geometryService';
+import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, detectNetworkGaps, NetworkGap, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
 import { formatProjectIdForExcel, cleanSegmentId, getCanonicalSegmentKey } from './services/storageService';
 import { downloadDXF } from './services/dxfExportService';
-import { downloadDataPDF } from './services/pdfExportService';
+import { downloadDataPDF, downloadNetworkGapsPDF } from './services/pdfExportService';
+import { downloadShapefile } from './services/shapefileExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
 import { DataFormatter } from './components/DataFormatter';
@@ -358,13 +359,20 @@ const UniversalExportBar = ({
   onKmzExport: () => void;
 }) => {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 w-full">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 w-full">
       <button 
         disabled={isExecuting}
         onClick={onKmzExport} 
         className="bg-[#0b2d3d] border border-accent/30 text-accent font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-accent hover:text-primary active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
         <DownloadCloud className="w-4 h-4" />
         {lang === 'ar' ? 'KMZ' : 'KMZ'}
+      </button>
+      <button 
+        disabled={isExecuting}
+        onClick={() => downloadShapefile(data, filename || 'Export')} 
+        className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-500 hover:text-white active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
+        <FolderArchive className="w-4 h-4 text-emerald-400" />
+        {lang === 'ar' ? 'شيب فايل (SHP)' : 'Shapefile (SHP)'}
       </button>
       <button 
         disabled={isExecuting}
@@ -1415,6 +1423,270 @@ const App: React.FC = () => {
     }
 
     return basePoints;
+  };
+
+  // ==========================================
+  // فحص وتصدير تقرير الفجوات الشبكية (Network Gaps)
+  // ==========================================
+  const [detectedNetworkGaps, setDetectedNetworkGaps] = useState<NetworkGap[]>([]);
+
+  const verifyNetworkGaps = async () => {
+    setLoading(true);
+    setProgressPercent(10);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري تحليل الشبكة وفحص الفجوات والخطوط المقطوعة (Network Gaps)...'
+        : 'Analyzing network and detecting gaps & disconnected endpoints...'
+    );
+
+    setTimeout(async () => {
+      try {
+        const pointsToCheck = getPointsToCheck();
+        const gaps = await detectNetworkGaps(pointsToCheck, 35.0, (p) => setProgressPercent(10 + Math.round(p * 0.85)));
+        setDetectedNetworkGaps(gaps);
+
+        let totalCheckedLines = pointsToCheck.filter(p => p.type === 'LineString').length;
+        let gapCount = gaps.length;
+
+        // Highlight gap line endpoints on map in vibrant orange/red (#FF3300)
+        if (gapCount > 0) {
+          const gapLineIds = new Set(gaps.map(g => String(g.lineId)));
+          const gapMarkers: GeoPoint[] = gaps.map((g, idx) => ({
+            id: `GAP_MARKER_${g.lineId}_${g.endpointType}_${idx}`,
+            name: lang === 'ar' ? `فجوة شبكية - خط ${g.lineId}` : `Network Gap - Line ${g.lineId}`,
+            x: g.startCoord.x,
+            y: g.startCoord.y,
+            type: 'Point',
+            color: '#FF3300',
+            layer: g.layer || 'Network Gaps',
+            street: g.street,
+            district: g.district,
+            isIssue: true,
+            issueReason: lang === 'ar' 
+              ? `طرف خط مقطوع (فجوة) - المسافة لأقرب خط: ${g.gapDistanceMeters ? g.gapDistanceMeters.toFixed(1) + 'متر' : 'أكثر من 35m'}` 
+              : `Disconnected Endpoint (Gap) - Distance to nearest line: ${g.gapDistanceMeters ? g.gapDistanceMeters.toFixed(1) + 'm' : '>35m'}`
+          }));
+
+          const processGapsOnMap = (pts: GeoPoint[]) => {
+            const updated = pts.map(pt => {
+              if (gapLineIds.has(String(pt.id))) {
+                const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+                const origLayer = (pt as any).originalLayer || pt.layer;
+                return {
+                  ...pt,
+                  originalColor: origColor,
+                  originalLayer: origLayer,
+                  color: '#FF3300', // Vibrant Neon Orange-Red for Gaps
+                  isIssue: true,
+                  issueReason: lang === 'ar' ? 'طرف خط مقطوع (فجوة شبكية)' : 'Disconnected line endpoint (Network Gap)'
+                };
+              }
+              return pt;
+            });
+            return [...updated, ...gapMarkers];
+          };
+
+          if (globalPoints.length > 0) setGlobalPoints(processGapsOnMap(globalPoints));
+          if (plannedStreets.length > 0) setPlannedStreets(processGapsOnMap(plannedStreets));
+          setDataId(`gaps-check-${Date.now()}`);
+
+          // Automatically select and focus the first gap marker on the map
+          if (gapMarkers.length > 0) {
+            setSelectedPoint(gapMarkers[0]);
+          }
+        }
+
+        const issueItems: GeoPoint[] = gaps.map(g => ({
+          id: `${g.lineId} (${g.endpointType === 'start' ? 'البداية' : 'النهاية'})`,
+          name: `${g.lineId} [${g.endpointType}]`,
+          x: g.startCoord.x,
+          y: g.startCoord.y,
+          type: 'Point',
+          color: '#FF3300',
+          street: g.street,
+          district: g.district,
+          layer: g.layer,
+          issueReason: lang === 'ar'
+            ? `طرف مقطوع - أقرب خط يبعد ${g.gapDistanceMeters ? g.gapDistanceMeters.toFixed(1) + 'm' : 'أكثر من 35m'}`
+            : `Disconnected - Nearest line at ${g.gapDistanceMeters ? g.gapDistanceMeters.toFixed(1) + 'm' : '>35m'}`
+        }));
+
+        setCheckResultModal({
+          type: 'essential',
+          titleAr: 'نتائج فحص الفجوات الشبكية (Network Gaps)',
+          titleEn: 'Network Gaps Audit Report',
+          icon: 'essential',
+          totalChecked: totalCheckedLines,
+          issuesCount: gapCount,
+          successCount: totalCheckedLines - gapCount,
+          badgeTextAr: gapCount > 0 ? `وُجدت ${gapCount} فجوة شبكية (أطراف مقطوعة)` : 'الشبكة متصلة بالكامل بدون أي فجوات',
+          badgeTextEn: gapCount > 0 ? `${gapCount} Network Gaps Found` : 'Network is fully connected without gaps',
+          detailsAr: gapCount > 0
+            ? `تم فحص ${totalCheckedLines} خط شبكة، وتبين وجود ${gapCount} طرف مقطوع (فجوة غير متصلة مع بقية الخطوط). يمكنك تصدير تقرير إكسل تفصيلي بإحداثيات بداية ونهاية كل خط مقطوع.`
+            : `تم فحص جميع الخطوط (${totalCheckedLines} خط)، وتبين أنها متصلة بالكامل بدون أي فجوات شبكية.`,
+          detailsEn: gapCount > 0
+            ? `Audited ${totalCheckedLines} network lines. Identified ${gapCount} disconnected endpoints (network gaps). You can export a detailed Excel report with start and end coordinates.`
+            : `Audited ${totalCheckedLines} network lines. 100% connected with no network gaps.`,
+          issueItems: issueItems,
+          stats: [
+            { labelAr: 'إجمالي خطوط الشبكة', labelEn: 'Total Network Lines', value: totalCheckedLines, colorClass: 'text-white' },
+            { labelAr: 'عدد الفجوات/الأطراف المقطوعة', labelEn: 'Network Gaps Count', value: gapCount, colorClass: gapCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400 font-black' },
+            { labelAr: 'نسبة اتصال الشبكة', labelEn: 'Connectivity Ratio', value: totalCheckedLines > 0 ? `${Math.max(0, Math.round(((totalCheckedLines - gapCount) / totalCheckedLines) * 100))}%` : '100%', colorClass: 'text-accent font-black' }
+          ]
+        });
+
+        setProgressPercent(100);
+        setStatusMessage(
+          lang === 'ar'
+            ? `تم الكشف عن ${gapCount} فجوة شبكية وتحديد أطرافها المقطوعة باللون البرتقالي المحمر.`
+            : `Detected ${gapCount} network gaps and highlighted disconnected endpoints in orange-red.`
+        );
+        setTimeout(() => setStatusMessage(''), 5000);
+      } catch (e) {
+        console.error('Error in verifyNetworkGaps:', e);
+      } finally {
+        setLoading(false);
+        setProgressPercent(null);
+      }
+    }, 50);
+  };
+
+  const exportNetworkGapsExcel = async () => {
+    let gaps = detectedNetworkGaps;
+    
+    // If not detected yet, run detection quickly
+    if (gaps.length === 0) {
+      const pointsToCheck = getPointsToCheck();
+      gaps = await detectNetworkGaps(pointsToCheck, 35.0);
+      setDetectedNetworkGaps(gaps);
+    }
+
+    if (gaps.length === 0) {
+      alert(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
+      return;
+    }
+
+    const rows = gaps.map((gap, index) => {
+      const startLat = gap.startCoord.y;
+      const startLon = gap.startCoord.x;
+      const endLat = gap.endCoord ? gap.endCoord.y : '-';
+      const endLon = gap.endCoord ? gap.endCoord.x : '-';
+
+      const startMapLink = `https://www.google.com/maps?q=${startLat},${startLon}`;
+      const endMapLink = gap.endCoord ? `https://www.google.com/maps?q=${gap.endCoord.y},${gap.endCoord.x}` : '-';
+
+      return {
+        '#': index + 1,
+        [lang === 'ar' ? 'معرف الخط المقطوع' : 'Line ID']: gap.lineId,
+        [lang === 'ar' ? 'الطبقة' : 'Layer']: gap.layer || 'Default',
+        [lang === 'ar' ? 'موقع الطرف المقطوع' : 'Endpoint Type']: gap.endpointType === 'start' ? (lang === 'ar' ? 'بداية الخط' : 'Line Start') : (lang === 'ar' ? 'نهاية الخط' : 'Line End'),
+        [lang === 'ar' ? 'إحداثي بداية الفجوة (Y - Latitude)' : 'Gap Start Lat (Y)']: startLat,
+        [lang === 'ar' ? 'إحداثي بداية الفجوة (X - Longitude)' : 'Gap Start Lon (X)']: startLon,
+        [lang === 'ar' ? 'إحداثي نهاية الفجوة/أقرب نقطة (Y - Latitude)' : 'Gap End/Nearest Lat (Y)']: endLat,
+        [lang === 'ar' ? 'إحداثي نهاية الفجوة/أقرب نقطة (X - Longitude)' : 'Gap End/Nearest Lon (X)']: endLon,
+        [lang === 'ar' ? 'مسافة الفجوة التقريبية (متر)' : 'Gap Distance (m)']: gap.gapDistanceMeters ? gap.gapDistanceMeters.toFixed(2) : (lang === 'ar' ? 'أكثر من 35m' : '>35m'),
+        [lang === 'ar' ? 'معرف أقرب خط مجاور' : 'Nearest Line ID']: gap.nearestLineId || '-',
+        [lang === 'ar' ? 'الشارع' : 'Street']: gap.street || '-',
+        [lang === 'ar' ? 'الحي' : 'District']: gap.district || '-',
+        [lang === 'ar' ? 'رابط موقع الفجوة على الخريطة' : 'Gap Location Map Link']: startMapLink,
+        [lang === 'ar' ? 'رابط النقطة المجاورة' : 'Nearest Candidate Map Link']: endMapLink
+      };
+    });
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, lang === 'ar' ? "الفجوات الشبكية" : "Network Gaps");
+
+    XLSX.writeFile(workbook, `Network_Gaps_Report_${activeFile?.filename?.split('.')[0] || 'Network'}_${Date.now()}.xlsx`);
+  };
+
+  const exportNetworkGapsPDFHandler = async () => {
+    let gaps = detectedNetworkGaps;
+    
+    if (gaps.length === 0) {
+      const pointsToCheck = getPointsToCheck();
+      gaps = await detectNetworkGaps(pointsToCheck, 35.0);
+      setDetectedNetworkGaps(gaps);
+    }
+
+    if (gaps.length === 0) {
+      alert(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
+      return;
+    }
+
+    downloadNetworkGapsPDF(gaps, activeFile?.filename || 'Network', lang);
+  };
+
+  const exportNetworkGapsKMLHandler = async () => {
+    let gaps = detectedNetworkGaps;
+    
+    if (gaps.length === 0) {
+      const pointsToCheck = getPointsToCheck();
+      gaps = await detectNetworkGaps(pointsToCheck, 35.0);
+      setDetectedNetworkGaps(gaps);
+    }
+
+    if (gaps.length === 0) {
+      alert(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
+      return;
+    }
+
+    const gapKmlPoints: GeoPoint[] = [];
+
+    gaps.forEach((gap, idx) => {
+      // 1. Point Placemark for the gap endpoint
+      const ptName = lang === 'ar' 
+        ? `فجوة - خط ${gap.lineId} [${gap.endpointType === 'start' ? 'البداية' : 'النهاية'}]` 
+        : `Gap - Line ${gap.lineId} [${gap.endpointType}]`;
+      
+      const ptDesc = lang === 'ar'
+        ? `معرف الخط: ${gap.lineId}\nالطرف: ${gap.endpointType === 'start' ? 'بداية الخط' : 'نهاية الخط'}\nالمسافة لأقرب خط: ${gap.gapDistanceMeters ? gap.gapDistanceMeters.toFixed(2) + ' متر' : 'أكثر من 35m'}\nالطبقة: ${gap.layer || 'Default'}\nالشارع: ${gap.street || '-'}\nالحي: ${gap.district || '-'}`
+        : `Line ID: ${gap.lineId}\nEndpoint: ${gap.endpointType}\nDistance: ${gap.gapDistanceMeters ? gap.gapDistanceMeters.toFixed(2) + 'm' : '>35m'}\nLayer: ${gap.layer || 'Default'}\nStreet: ${gap.street || '-'}\nDistrict: ${gap.district || '-'}`;
+
+      gapKmlPoints.push({
+        id: `GAP_KML_PT_${gap.lineId}_${gap.endpointType}_${idx}`,
+        name: ptName,
+        x: gap.startCoord.x,
+        y: gap.startCoord.y,
+        type: 'Point',
+        color: '#FF3300',
+        layer: 'Network_Gaps',
+        street: gap.street,
+        district: gap.district,
+        description: ptDesc,
+        attributes: {
+          Line_ID: String(gap.lineId),
+          Endpoint: gap.endpointType,
+          Gap_Distance: gap.gapDistanceMeters ? `${gap.gapDistanceMeters.toFixed(2)}m` : '>35m',
+          Nearest_Line: String(gap.nearestLineId || '-')
+        }
+      });
+
+      // 2. Vector line connecting startCoord to endCoord if candidate exists
+      if (gap.endCoord) {
+        gapKmlPoints.push({
+          id: `GAP_KML_VECTOR_${gap.lineId}_${gap.endpointType}_${idx}`,
+          name: lang === 'ar' ? `متجه الفجوة (${gap.gapDistanceMeters ? gap.gapDistanceMeters.toFixed(1) + 'م' : ''})` : `Gap Vector (${gap.gapDistanceMeters ? gap.gapDistanceMeters.toFixed(1) + 'm' : ''})`,
+          x: gap.startCoord.x,
+          y: gap.startCoord.y,
+          type: 'LineString',
+          path: [gap.startCoord, gap.endCoord],
+          color: '#FF3300',
+          length: gap.gapDistanceMeters,
+          layer: 'Network_Gaps_Vectors',
+          description: ptDesc,
+          attributes: {
+            Line_ID: String(gap.lineId),
+            Gap_Distance: gap.gapDistanceMeters ? `${gap.gapDistanceMeters.toFixed(2)}m` : ''
+          }
+        });
+      }
+    });
+
+    await downloadKMZ(gapKmlPoints, `Network_Gaps_${activeFile?.filename?.split('.')[0] || 'KML'}`, {
+      mode: 'none',
+      lineStyle: { width: 4 }
+    });
   };
 
   // ==========================================
@@ -3010,6 +3282,23 @@ const App: React.FC = () => {
                 [lang === 'ar' ? 'النسبة المئوية (%)' : 'Percentage (%)']: d.percentage.toFixed(2)
             }));
             XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(summaryData), lang === 'ar' ? "ملخص التحليل" : "Summary Analysis");
+
+            if (detectedNetworkGaps && detectedNetworkGaps.length > 0) {
+              const gapRows = detectedNetworkGaps.map((gap, index) => ({
+                '#': index + 1,
+                [lang === 'ar' ? 'معرف الخط المقطوع' : 'Line ID']: gap.lineId,
+                [lang === 'ar' ? 'الطبقة' : 'Layer']: gap.layer || 'Default',
+                [lang === 'ar' ? 'موقع الطرف المقطوع' : 'Endpoint Type']: gap.endpointType === 'start' ? (lang === 'ar' ? 'بداية الخط' : 'Line Start') : (lang === 'ar' ? 'نهاية الخط' : 'Line End'),
+                [lang === 'ar' ? 'إحداثي بداية الفجوة (Y)' : 'Gap Start Lat (Y)']: gap.startCoord.y,
+                [lang === 'ar' ? 'إحداثي بداية الفجوة (X)' : 'Gap Start Lon (X)']: gap.startCoord.x,
+                [lang === 'ar' ? 'إحداثي نهاية الفجوة (Y)' : 'Gap End Lat (Y)']: gap.endCoord ? gap.endCoord.y : '-',
+                [lang === 'ar' ? 'إحداثي نهاية الفجوة (X)' : 'Gap End Lon (X)']: gap.endCoord ? gap.endCoord.x : '-',
+                [lang === 'ar' ? 'مسافة الفجوة (متر)' : 'Gap Distance (m)']: gap.gapDistanceMeters ? gap.gapDistanceMeters.toFixed(2) : '>35m',
+                [lang === 'ar' ? 'معرف أقرب خط' : 'Nearest Line ID']: gap.nearestLineId || '-',
+                [lang === 'ar' ? 'رابط خريطة بداية الفجوة' : 'Gap Start Map Link']: `https://www.google.com/maps?q=${gap.startCoord.y},${gap.startCoord.x}`
+              }));
+              XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(gapRows), lang === 'ar' ? "الفجوات الشبكية" : "Network Gaps");
+            }
         }
     }
 
@@ -3020,9 +3309,10 @@ const App: React.FC = () => {
     if (globalPoints.length === 0) return;
     setLoading(true);
     setError(null);
+    setProgressPercent(0);
 
     try {
-        setStatusMessage(lang === 'ar' ? 'جاري جلب الشوارع وتحليل البيانات...' : 'Fetching streets and analyzing data...');
+        setStatusMessage(lang === 'ar' ? 'جاري بدء جلب الشوارع وتحليل العناوين الجغرافية...' : 'Starting street fetching & reverse geocoding...');
 
         const sitePolygon = globalPoints.find(p => p.type === 'Polygon' && p.path && p.path.length > 2);
         let queryArea: {x: number, y: number}[] = [];
@@ -3039,51 +3329,80 @@ const App: React.FC = () => {
         }
 
         if (queryArea.length > 0) {
+            setProgressPercent(10);
+            setStatusMessage(lang === 'ar' ? 'جاري جلب شبكة الشوارع للمنطقة المحيطة من الخرائط...' : 'Fetching surrounding street network...');
             const buffered = bufferPolygon(queryArea, plannerBuffer);
             try {
                 const streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
                 setPlannedStreets(streets);
             } catch (err: any) {
                 console.error("Failed to fetch overpass streets:", err);
-                // We won't throw here to allow standard point-by-point geocoding to proceed
             }
         }
 
         const total = globalPoints.length;
         const updated = [...globalPoints];
         let successCount = 0;
-        const batchSize = geocodingMode === 'accurate' ? 4 : 10;
+        let lastResolvedDetail = "";
+        const batchSize = geocodingMode === 'accurate' ? 2 : 5;
 
         for (let i = 0; i < total; i += batchSize) {
-            setStatusMessage(lang === 'ar'
-              ? `جاري عنونة البيانات (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})`
-              : `Geocoding data (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
-            );
+            const processed = Math.min(i + batchSize, total);
+            const pct = Math.round((processed / total) * 100);
+            setProgressPercent(pct);
+
             const chunk = updated.slice(i, i + batchSize);
             await Promise.all(chunk.map(async (pt, chunkIdx) => {
                 const idx = i + chunkIdx;
+
                 if (!pt.street || pt.street === "شارع غير معروف" || pt.street === "غير متوفر") {
                     try {
-                        const geoData = await getReverseGeocode(pt.y, pt.x, geocodingMode);
-                        updated[idx] = { ...pt, street: geoData.street, district: geoData.district };
-                        if (geoData.street && geoData.street !== "غير متوفر") successCount++;
+                        let targetY = pt.y;
+                        let targetX = pt.x;
+                        if ((!targetY || !targetX) && pt.path && pt.path.length > 0) {
+                          targetY = pt.path[0].y;
+                          targetX = pt.path[0].x;
+                        }
+                        if (targetY && targetX) {
+                          const geoData = await getReverseGeocode(targetY, targetX, geocodingMode);
+                          updated[idx] = { ...pt, street: geoData.street, district: geoData.district };
+                          if (geoData.street && geoData.street !== "غير متوفر") {
+                            successCount++;
+                            lastResolvedDetail = `${geoData.street}${geoData.district && geoData.district !== 'غير متوفر' ? ` (${geoData.district})` : ''}`;
+                          }
+                        }
                     } catch (err) {}
+                } else {
+                    lastResolvedDetail = `${pt.street}${pt.district ? ` (${pt.district})` : ''}`;
                 }
             }));
+
+            const detailMsg = lastResolvedDetail 
+              ? (lang === 'ar' ? `\n📍 الشارع الحالي: ${lastResolvedDetail}` : `\n📍 Current street: ${lastResolvedDetail}`) 
+              : '';
+
+            setStatusMessage(lang === 'ar'
+              ? `جاري عنونة البيانات ومطابقة الشوارع (${processed} من ${total}) [${pct}%]${detailMsg}`
+              : `Geocoding data & matching streets (${processed} of ${total}) [${pct}%]${detailMsg}`
+            );
+
             setGlobalPoints([...updated]);
-            if (geocodingMode === 'accurate' && i + batchSize < total) {
-                await new Promise(r => setTimeout(r, 60));
+            if (i + batchSize < total) {
+                await new Promise(r => setTimeout(r, 45));
             }
         }
 
+        setProgressPercent(100);
         setStatusMessage(lang === 'ar'
-          ? `تم جلب ${plannedStreets.length} شارع وتحديث ${successCount} عنوان!`
-          : `Fetched ${plannedStreets.length} streets and updated ${successCount} addresses!`
+          ? `تم جلب وتحديث الشوارع بنجاح! (${successCount} عنوان تم العثور عليه)`
+          : `Fetched & updated streets successfully! (${successCount} addresses resolved)`
         );
+        await new Promise(r => setTimeout(r, 600));
     } catch (e: any) {
         setError(e.message);
     } finally {
         setLoading(false);
+        setProgressPercent(null);
         setTimeout(() => setStatusMessage(''), 4000);
     }
   };
@@ -3093,14 +3412,18 @@ const App: React.FC = () => {
     if (pointsToExport.length === 0) return;
 
     setLoading(true);
+    setProgressPercent(0);
     const results: any[] = [];
     const total = pointsToExport.length;
     const batchSize = geocodingMode === 'accurate' ? 4 : 10;
 
     for (let i = 0; i < total; i += batchSize) {
+        const processed = Math.min(i + batchSize, total);
+        const pct = Math.round((processed / total) * 100);
+        setProgressPercent(pct);
         setStatusMessage(lang === 'ar'
-            ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${Math.min(i + batchSize, total)} من ${total})`
-            : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${Math.min(i + batchSize, total)} of ${total})`
+            ? `جاري جلب أسماء الشوارع والتنسيق (${geocodingMode === 'accurate' ? 'نمط دقيق 🎯' : 'نمط سريع ⚡'}): (${processed} من ${total})`
+            : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${processed} of ${total})`
         );
         const chunk = pointsToExport.slice(i, i + batchSize);
         const chunkResults = await Promise.all(chunk.map(async (pt) => {
@@ -3515,71 +3838,117 @@ const App: React.FC = () => {
     headers: string[] | undefined,
     callback?: (pts: GeoPoint[]) => void | Promise<void>
   ): Promise<GeoPoint[]> => {
+    if (!points || points.length === 0) {
+      setError(lang === 'ar' ? 'لا توجد عناصر مجهزة لجلب الشوارع. يرجى رفع ملف أو اختيار طبقة بيانات أولاً.' : 'No elements available to fetch streets.');
+      return [];
+    }
+
     let newGlobalPoints = points.map(p => ({ ...p, attributes: { ...(p.attributes || {}) } }));
-    const hasStreetHeader = headers && headers.some(h => ['street', 'الشارع', 'اسم الشارع', 'streetname', 'district', 'الحي'].includes(String(h || '').toLowerCase()));
-    if (hasStreetHeader) {
-      setLoading(true);
-      await new Promise(r => setTimeout(r, 100)); // Force UI to paint loading state
-      try {
-        const total = newGlobalPoints.length;
-        const batchSize = geocodingMode === 'accurate' ? 3 : 8;
+
+    setLoading(true);
+    setProgressPercent(0);
+    setStatusMessage(lang === 'ar'
+        ? `جاري بدء جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'})...`
+        : `Starting Street Name Fetching (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'})...`
+    );
+    await new Promise(r => setTimeout(r, 150)); // Force UI to paint modal overlay
+
+    try {
+      const total = newGlobalPoints.length;
+      if (total > 0) {
+        const batchSize = geocodingMode === 'accurate' ? 2 : 5;
+        let lastResolvedDetail = "";
 
         for (let i = 0; i < total; i += batchSize) {
             const processed = Math.min(i + batchSize, total);
             const pct = Math.round((processed / total) * 100);
             setProgressPercent(pct);
-            setStatusMessage(lang === 'ar'
-                ? `جاري جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'}): (${processed} من ${total})`
-                : `Fetching Street Names (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'}): (${processed} of ${total})`
-            );
+
             const chunk = newGlobalPoints.slice(i, i + batchSize);
             await Promise.all(chunk.map(async (pt) => {
                 let street = pt.street;
-                if (!street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف") {
+                let district = pt.district;
+
+                if (!street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف" || street === "شارع غير معروف") {
                     try {
-                        const timeoutPromise = new Promise<{street: string, district: string}>((resolve) => {
-                          setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 4500);
-                        });
-                        const geoData = await Promise.race([
-                          getReverseGeocode(pt.y, pt.x, geocodingMode),
-                          timeoutPromise
-                        ]);
-                        street = geoData.street;
-                        pt.street = street;
-                        pt.district = geoData.district;
+                        let targetY = pt.y;
+                        let targetX = pt.x;
+                        if ((!targetY || !targetX) && pt.path && pt.path.length > 0) {
+                          targetY = pt.path[0].y;
+                          targetX = pt.path[0].x;
+                        }
+
+                        if (targetY && targetX) {
+                          const timeoutPromise = new Promise<{street: string, district: string}>((resolve) => {
+                            setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 2500);
+                          });
+                          const geoData = await Promise.race([
+                            getReverseGeocode(targetY, targetX, geocodingMode),
+                            timeoutPromise
+                          ]);
+                          if (geoData.street && geoData.street !== "غير متوفر") {
+                            street = geoData.street;
+                            pt.street = street;
+                            lastResolvedDetail = `${street}${geoData.district && geoData.district !== 'غير متوفر' ? ` (${geoData.district})` : ''}`;
+                          }
+                          if (geoData.district && geoData.district !== "غير متوفر") {
+                            district = geoData.district;
+                            pt.district = district;
+                          }
+                        }
                     } catch (err) {
-                        street = "";
+                        street = street || "";
                     }
+                } else {
+                    lastResolvedDetail = `${street}${district ? ` (${district})` : ''}`;
                 }
+
                 pt.attributes = { ...(pt.attributes || {}) };
-                const matchStreet = headers.find(h => String(h || '').toLowerCase() === 'street');
-                const matchArabic = headers.find(h => h === 'الشارع' || h === 'اسم الشارع');
-                const matchStreetName = headers.find(h => String(h || '').toLowerCase() === 'streetname');
+                const safeHeaders = Array.isArray(headers) ? headers : [];
 
-                if (matchStreet) pt.attributes[matchStreet] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-                if (matchArabic) pt.attributes[matchArabic] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-                if (matchStreetName) pt.attributes[matchStreetName] = street || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                const finalStreet = street && street !== "غير متوفر" ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                const finalDistrict = district && district !== "غير متوفر" ? district : (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
-                const matchDistrict = headers.find(h => String(h || '').toLowerCase() === 'district');
-                const matchArabicDistrict = headers.find(h => h === 'الحي');
-                if (matchDistrict) pt.attributes[matchDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
-                if (matchArabicDistrict) pt.attributes[matchArabicDistrict] = pt.district || (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                pt.attributes['STREETNAME'] = finalStreet;
+                pt.attributes['الشارع'] = finalStreet;
+                pt.attributes['اسم الشارع'] = finalStreet;
+
+                pt.attributes['DISTRICT'] = finalDistrict;
+                pt.attributes['الحي'] = finalDistrict;
+
+                safeHeaders.forEach(h => {
+                  const lowerH = String(h || '').toLowerCase();
+                  if (['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
+                    pt.attributes[h] = finalStreet;
+                  }
+                  if (['district', 'الحي'].includes(lowerH) || h === 'الحي') {
+                    pt.attributes[h] = finalDistrict;
+                  }
+                });
             }));
 
-            // Small delay between batches to respect network rate limits
-            if (i + batchSize < total) {
-              await new Promise(res => setTimeout(res, 80));
-            }
+            const detailMsg = lastResolvedDetail 
+              ? (lang === 'ar' ? `\n📍 الشارع الحالي: ${lastResolvedDetail}` : `\n📍 Current street: ${lastResolvedDetail}`) 
+              : '';
+
+            setStatusMessage(lang === 'ar'
+                ? `جاري جلب وتحديث الشوارع (${processed} من ${total}) [${pct}%]${detailMsg}`
+                : `Fetching Street & District Names (${processed} of ${total}) [${pct}%]${detailMsg}`
+            );
+
+            // Small delay between batches to respect network rate limits & yield to UI thread
+            await new Promise(res => setTimeout(res, 25));
         }
         setGlobalPoints(newGlobalPoints);
-      } catch (err) {
-        console.error("Error in executeWithStreetFetching:", err);
-      } finally {
-        setLoading(false);
-        setProgressPercent(null);
-        setStatusMessage('');
       }
+    } catch (err) {
+      console.error("Error in executeWithStreetFetching:", err);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+      setStatusMessage('');
     }
+
     if (callback) {
        await callback(newGlobalPoints);
     }
@@ -3604,11 +3973,17 @@ const App: React.FC = () => {
     }
 
     setLoading(true);
-    setStatusMessage(lang === 'ar' ? "جاري جلب بيانات الشوارع..." : "Fetching streets...");
+    setProgressPercent(15);
+    setStatusMessage(lang === 'ar' ? "جاري الاتصال بخدمات الخرائط وتحديد النطاق..." : "Connecting to map services & setting bounds...");
 
     try {
       const buffered = bufferPolygon(areaToQuery, plannerBuffer);
+      setProgressPercent(45);
+      setStatusMessage(lang === 'ar' ? "جاري جلب شبكة الشوارع للمنطقة..." : "Fetching street network for area...");
       let streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
+
+      setProgressPercent(75);
+      setStatusMessage(lang === 'ar' ? "جاري معالجة وتقسيم الشوارع المجلوبة..." : "Processing & splitting fetched street geometries...");
 
       if (plannerSplitIntersections) {
         streets = splitLinesAtIntersections(streets);
@@ -3636,12 +4011,15 @@ const App: React.FC = () => {
 
       setPlannedStreets(streets);
       setDataId(`streets-${Date.now()}`);
-      setStatusMessage(`تم جلب ${streets.length} شارع بنجاح.`);
-      setTimeout(() => setStatusMessage(''), 3000);
+      setProgressPercent(100);
+      setStatusMessage(lang === 'ar' ? `تم جلب ${streets.length} شارع بنجاح! 🗺️` : `Successfully fetched ${streets.length} streets! 🗺️`);
+      await new Promise(r => setTimeout(r, 600));
     } catch (e: any) {
       setError(e.message);
     } finally {
       setLoading(false);
+      setProgressPercent(null);
+      setTimeout(() => setStatusMessage(''), 3000);
     }
   };
 
@@ -3948,7 +4326,7 @@ const App: React.FC = () => {
           </div>
       </nav>
 
-      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-30 transition-colors duration-500 overflow-visible shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]" : "hidden lg:flex lg:w-1/4 lg:min-w-[320px] lg:max-w-[420px]")}>
+      <aside className={cn("bg-primary border-e border-slate-800 flex-col shadow-2xl relative z-30 transition-colors duration-500 overflow-visible shrink-0", mobileView === 'panel' ? "flex w-full flex-1 lg:w-[550px] lg:min-w-[500px] lg:max-w-[580px]" : "hidden lg:flex lg:w-[550px] lg:min-w-[500px] lg:max-w-[580px]")}>
            <div className="p-4 sm:p-6 md:p-10 pb-4 shrink-0">
                 <div className="flex items-center justify-between">
                    <div>
@@ -4720,13 +5098,13 @@ const App: React.FC = () => {
                                 <div className="space-y-6">
                                     {/* 1. By Execution Status Section */}
                                     <div className="p-5 bg-black/20 rounded-2xl border border-white/5 space-y-4">
-                                        <div className="flex items-center justify-between">
-                                            <h4 className="text-accent text-[11px] font-black uppercase flex items-center gap-1.5">
-                                                <PieChart className="w-3.5 h-3.5 text-accent" />
+                                        <div className="flex items-center justify-between flex-wrap gap-2">
+                                            <h4 className="text-accent text-xs font-black uppercase flex items-center gap-1.5">
+                                                <PieChart className="w-4 h-4 text-accent" />
                                                 {lang === 'ar' ? '1. حسب حالة التنفيذ' : '1. By Execution Status'}
                                             </h4>
                                             {executionStatusDistribution.length > 0 && (
-                                                <span className="text-[10px] text-white/50 font-bold bg-white/5 px-2 py-0.5 rounded-lg border border-white/10">
+                                                <span className="text-[10.5px] text-white/70 font-black bg-white/5 px-2.5 py-1 rounded-lg border border-white/10 shadow-sm">
                                                     {lang === 'ar' 
                                                         ? `الإجمالي: ${executionStatusDistribution.reduce((a, b) => a + b.value, 0).toFixed(2)} كم`
                                                         : `Total: ${executionStatusDistribution.reduce((a, b) => a + b.value, 0).toFixed(2)} km`}
@@ -4737,7 +5115,7 @@ const App: React.FC = () => {
                                         {executionStatusDistribution.length > 0 ? (
                                             <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
                                                 {/* Donut Chart */}
-                                                <div className="sm:col-span-5 h-[180px] w-full relative flex items-center justify-center">
+                                                <div className="sm:col-span-5 h-[200px] w-full relative flex items-center justify-center bg-white/[0.02] rounded-2xl border border-white/5 p-1">
                                                     <ResponsiveContainer width="100%" height="100%">
                                                         <RechartsPieChart>
                                                             <Pie 
@@ -4770,14 +5148,14 @@ const App: React.FC = () => {
                                                         const totalVal = executionStatusDistribution.reduce((a, b) => a + b.value, 0);
                                                         const pct = item.percent !== undefined ? item.percent : (totalVal > 0 ? (item.value / totalVal) * 100 : 0);
                                                         return (
-                                                            <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-xs">
+                                                            <div key={idx} className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors text-xs">
                                                                 <div className="flex items-center gap-2 min-w-0">
-                                                                    <span className="w-2.5 h-2.5 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: item.color }} />
-                                                                    <span className="font-bold text-white/90 truncate text-[11px]">{item.name}</span>
+                                                                    <span className="w-2.5 h-2.5 rounded-full shrink-0 shadow-md border border-white/20" style={{ backgroundColor: item.color }} />
+                                                                    <span className="font-extrabold text-white text-[11px] leading-snug truncate" title={item.name}>{item.name}</span>
                                                                 </div>
-                                                                <div className="flex items-center gap-2 shrink-0">
+                                                                <div className="flex items-center gap-1.5 shrink-0">
                                                                     <span className="font-black text-white text-[11px]">{item.value} {lang === 'ar' ? 'كم' : 'km'}</span>
-                                                                    <span className="px-1.5 py-0.5 rounded-md bg-accent/10 border border-accent/20 text-[9.5px] font-black text-accent">{pct.toFixed(0)}%</span>
+                                                                    <span className="px-1.5 py-0.5 rounded-md bg-accent/15 border border-accent/30 text-[9.5px] font-black text-accent">{pct.toFixed(0)}%</span>
                                                                 </div>
                                                             </div>
                                                         );
@@ -5201,6 +5579,22 @@ const App: React.FC = () => {
                                 {lang === 'ar' ? 'تصدير إكسل مع أسماء الشوارع' : 'Export Excel with Streets'}
                             </button>
                             
+                            <button onClick={verifyNetworkGaps} className="w-full bg-[#3d180b] border border-[#FF3300]/60 text-[#ff8c66] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
+                                <GitBranch className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
+                                {lang === 'ar' ? 'فحص وإبراز الفجوات الشبكية (Network Gaps)' : 'Highlight Network Gaps & Disconnected Lines'}
+                            </button>
+                            <button onClick={exportNetworkGapsExcel} className="w-full bg-[#2a120b] border border-[#FF3300]/40 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300]/80 hover:text-white transition-all text-sm group">
+                                <FileSpreadsheet className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
+                                {lang === 'ar' ? 'تصدير تقرير الفجوات الشبكية Excel' : 'Export Network Gaps Report (Excel)'}
+                            </button>
+                            <button onClick={exportNetworkGapsPDFHandler} className="w-full bg-[#2a120b] border border-[#FF3300]/50 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
+                                <FileText className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
+                                {lang === 'ar' ? 'تصدير تقرير الفجوات الشبكية PDF (مع صور الخريطة)' : 'Export Network Gaps PDF Report (with Map Thumbnails)'}
+                            </button>
+                            <button onClick={exportNetworkGapsKMLHandler} className="w-full bg-[#2a120b] border border-[#FF3300]/60 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
+                                <DownloadCloud className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
+                                {lang === 'ar' ? 'تصدير الفجوات الشبكية كملف KML / KMZ' : 'Export Network Gaps as KML / KMZ File'}
+                            </button>
                             <button onClick={verifyEssentialAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
@@ -5985,28 +6379,6 @@ const App: React.FC = () => {
               setIsDrawingMode(false);
             }}
          />
-         {loading && (
-           <div className="absolute inset-0 z-[1000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-             <div className="text-center p-8 sm:p-12 bg-primary rounded-[3rem] border border-white/10 shadow-3xl max-w-md w-full animate-in zoom-in-95 duration-200">
-               <Loader2 className="w-16 h-16 text-accent animate-spin mx-auto mb-6" />
-               <p className="text-white font-black text-lg mb-2">{statusMessage}</p>
-               {progressPercent !== null && (
-                 <div className="w-full mt-4 space-y-2">
-                   <div className="w-full bg-white/10 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
-                     <div
-                       className="bg-gradient-to-r from-amber-400 via-accent to-amber-300 h-full rounded-full transition-all duration-300 shadow-[0_0_12px_rgba(220,177,60,0.6)]"
-                       style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                     />
-                   </div>
-                   <div className="flex items-center justify-between text-xs font-black">
-                     <span className="text-accent">{Math.round(progressPercent)}%</span>
-                     <span className="text-white/50">{lang === 'ar' ? 'جاري المعالجة...' : 'Processing...'}</span>
-                   </div>
-                 </div>
-               )}
-             </div>
-           </div>
-         )}
 
          {/* Mobile Floating Button to Return to Tools Panel */}
          <div className="lg:hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] pointer-events-auto">
@@ -7227,6 +7599,58 @@ export const CheckResultModalPopup: React.FC<{
           </div>
         </div>
       </div>
+
+      {/* Global High-Priority Progress & Loading Modal Overlay */}
+      {loading && (
+        <div className="fixed inset-0 z-[999999] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto">
+          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-accent/50 rounded-[3rem] shadow-[0_0_80px_rgba(220,177,60,0.35)] max-w-md w-full animate-in zoom-in-95 duration-200 dir-rtl" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+            <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-accent/20 border-t-accent animate-spin" />
+              <MapPin className="w-8 h-8 text-accent animate-pulse stroke-[2.5]" />
+            </div>
+
+            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-accent/10 border border-accent/30 text-accent text-[11px] font-black mb-3">
+              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+              <span>{lang === 'ar' ? 'معالجة جلب الشوارع والعناوين' : 'Street Fetching & Geocoding'}</span>
+            </div>
+
+            <div className="space-y-2 mb-4 px-2">
+              {(statusMessage || (lang === 'ar' ? 'جاري المعالجة...' : 'Processing...')).split('\n').map((line, idx) => (
+                idx === 0 ? (
+                  <p key={idx} className="text-white font-black text-base sm:text-lg leading-relaxed">{line}</p>
+                ) : (
+                  <div key={idx} className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-accent/20 border border-accent/40 text-amber-300 font-bold text-xs sm:text-sm shadow-md animate-in fade-in max-w-full">
+                    <span>{line}</span>
+                  </div>
+                )
+              ))}
+            </div>
+
+            {progressPercent !== null ? (
+              <div className="w-full mt-4 space-y-2.5">
+                <div className="w-full bg-black/60 rounded-full h-4 overflow-hidden p-0.5 border border-white/10 shadow-inner">
+                  <div
+                    className="bg-gradient-to-r from-amber-400 via-accent to-amber-300 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(220,177,60,0.8)]"
+                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs font-black pt-1 px-1">
+                  <span className="text-accent text-sm font-black">{Math.round(progressPercent)}%</span>
+                  <span className="text-white/60 font-bold">{lang === 'ar' ? 'نسبة الإنجاز الفعلي' : 'Progress'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="w-full mt-4 bg-black/60 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
+                <div className="bg-accent/80 h-full rounded-full animate-pulse w-full shadow-[0_0_10px_rgba(220,177,60,0.5)]" />
+              </div>
+            )}
+
+            <p className="text-[10px] text-white/40 font-bold mt-5 pt-3 border-t border-white/5">
+              {lang === 'ar' ? '⚡ يرجى الانتظار، جاري التواصل مع الخادم وتحديد أسماء الشوارع...' : '⚡ Please wait while connecting to server & resolving streets...'}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
