@@ -3625,6 +3625,10 @@ const App: React.FC = () => {
     setStatusMessage(t.parsing);
     setAutoDetected(null);
     setError(null);
+    
+    // Allow UI to render the loading overlay before parsing blocks thread
+    await new Promise(r => { requestAnimationFrame(() => { setTimeout(r, 150); }); });
+
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
       let result: ParsedFile;
@@ -3686,7 +3690,7 @@ const App: React.FC = () => {
       } catch (e) {
          console.warn("Failed to auto-display points on map", e);
       }
-    } catch (err: any) { setError(err.message); } finally { setLoading(false); setProgressPercent(null); }
+    } catch (err: any) { setError(err.message); } finally { e.target.value = ''; setLoading(false); setProgressPercent(null); }
   };
 
   const handleLoadMyMapsLink = async () => {
@@ -3851,7 +3855,7 @@ const App: React.FC = () => {
         ? `جاري بدء جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'})...`
         : `Starting Street Name Fetching (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'})...`
     );
-    await new Promise(r => setTimeout(r, 150)); // Force UI to paint modal overlay
+    await new Promise(r => { requestAnimationFrame(() => { setTimeout(r, 150); }); }); // Force UI to paint modal overlay
 
     try {
       const total = newGlobalPoints.length;

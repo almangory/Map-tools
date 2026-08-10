@@ -258,8 +258,6 @@ const pointToSegmentDistanceMeters = (
     return getDistanceMeters(plat, plon, projLat, projLon);
 };
 
-const geocodeCache = new Map<string, { street: string; district: string }>();
-
 export const utmToLatLon = (easting: number, northing: number, zone: number = 38, northern: boolean = true) => {
   const k0 = 0.9996;
   const a = 6378137;
@@ -328,15 +326,6 @@ export const getReverseGeocode = async (
       } else {
         return { street: "غير متوفر", district: "غير متوفر" };
       }
-    }
-
-    // Check cache: in accurate mode, use 4 decimal precision (~11m); in fast mode, use 3 decimal precision (~110m)
-    const cacheKey = mode === 'accurate' 
-        ? `${queryLat.toFixed(4)},${queryLon.toFixed(4)}` 
-        : `${queryLat.toFixed(3)},${queryLon.toFixed(3)}`;
-
-    if (geocodeCache.has(cacheKey)) {
-        return geocodeCache.get(cacheKey)!;
     }
 
     let street = "";
@@ -453,7 +442,6 @@ export const getReverseGeocode = async (
         district: district || "غير متوفر"
     };
 
-    geocodeCache.set(cacheKey, result);
     return result;
 };
 

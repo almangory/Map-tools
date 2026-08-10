@@ -111,51 +111,65 @@ export const isSewerPoint = (pt: any): boolean => {
 };
 
 export const parseExcel = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
+  if (onProgress) onProgress(10);
+  await yieldToMain();
+  
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    if (onProgress) reader.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 50));
-    reader.onload = (e) => {
+    if (onProgress) reader.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 40) + 10);
+    reader.onload = async (e) => {
       try {
         if (onProgress) onProgress(60); 
-        setTimeout(() => {
-            try {
-                const data = new Uint8Array(e.target?.result as ArrayBuffer);
-                const workbook = XLSX.read(data, { type: 'array' });
-                const sheetName = workbook.SheetNames[0];
-                const sheet = workbook.Sheets[sheetName];
-                const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-                if (jsonData.length === 0) throw new Error("الملف المرفوع فارغ أو غير صالح.");
-                const headers = (jsonData[0] as any[]).map(String);
-                const rows = jsonData.slice(1);
-                const suggestedMapping = detectColumns(headers);
-                if (onProgress) onProgress(100);
-                resolve({ filename: file.name, type: file.name.endsWith('.csv') ? 'csv' : 'excel', headers, data: rows, preview: rows.slice(0, 5) as any[][], suggestedMapping });
-            } catch (err) { reject(err); }
-        }, 10);
+        await yieldToMain();
+        
+        try {
+            const data = new Uint8Array(e.target?.result as ArrayBuffer);
+            const workbook = XLSX.read(data, { type: 'array' });
+            
+            if (onProgress) onProgress(80);
+            await yieldToMain();
+
+            const sheetName = workbook.SheetNames[0];
+            const sheet = workbook.Sheets[sheetName];
+            const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+            if (jsonData.length === 0) throw new Error("الملف المرفوع فارغ أو غير صالح.");
+            const headers = (jsonData[0] as any[]).map(String);
+            const rows = jsonData.slice(1);
+            const suggestedMapping = detectColumns(headers);
+            
+            if (onProgress) onProgress(100);
+            resolve({ filename: file.name, type: file.name.endsWith('.csv') ? 'csv' : 'excel', headers, data: rows, preview: rows.slice(0, 5) as any[][], suggestedMapping });
+        } catch (err) { reject(err); }
       } catch (err) { reject(err); }
     };
+    reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsArrayBuffer(file);
   });
 };
 
 export const parseDXF = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
+  if (onProgress) onProgress(10);
+  await yieldToMain();
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    if (onProgress) reader.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 50));
-    reader.onload = (e) => {
+    if (onProgress) reader.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 40) + 10);
+    reader.onload = async (e) => {
       try {
         if (onProgress) onProgress(60);
-        setTimeout(() => {
-            try {
-                const text = e.target?.result as string;
-                const parser = new DxfParser();
-                const dxf = parser.parseSync(text);
-                if (onProgress) onProgress(100);
-                resolve({ filename: file.name, type: 'dxf', data: dxf.entities, preview: [] });
-            } catch (err) { reject(err); }
-        }, 10);
+        await yieldToMain();
+        
+        try {
+            const text = e.target?.result as string;
+            const parser = new DxfParser();
+            const dxf = parser.parseSync(text);
+            
+            if (onProgress) onProgress(100);
+            resolve({ filename: file.name, type: 'dxf', data: dxf.entities, preview: [] });
+        } catch (err) { reject(err); }
       } catch (err) { reject(err); }
     };
+    reader.onerror = () => reject(new Error("Failed to read file"));
     reader.readAsText(file);
   });
 };
@@ -612,7 +626,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
 };
 
 const yieldToMain = async () => {
-  await new Promise(resolve => setTimeout(resolve, 0));
+  return new Promise(resolve => { requestAnimationFrame(() => { setTimeout(resolve, 20); }); });
 };
 
 export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
@@ -1007,15 +1021,19 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                     if (parsedLink && parsedLink.data) {
                         points.push(...(parsedLink.data as GeoPoint[]));
                     }
-                } catch(e) {
+                } catch(e: any) {
                     console.error("Failed to fetch NetworkLink:", href, e);
+                    throw new Error("NETWORK_LINK_ERROR:" + (e.message || ''));
                 }
             }
         }
 
         if (onProgress) onProgress(100);
         return points;
-    } catch(e) {
+    } catch(e: any) {
+        if (e.message && e.message.startsWith("NETWORK_LINK_ERROR:")) {
+            throw new Error("فشل تحميل بيانات الخريطة المتصلة (NetworkLink). يرجى التأكد من أن رابط الخريطة المصدرية عام (Public) وليس خاصاً. " + e.message.replace("NETWORK_LINK_ERROR:", ""));
+        }
         console.warn("XML parser threw exception, trying transparent regex recovery:", e);
         const recoveredPoints = fallbackRegexParseKML(kmlContent);
         if (recoveredPoints.length > 0) {
@@ -1150,6 +1168,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
     // --- 1. SHAPEFILE (.shp or .zip containing .shp) ---
     if (fileName.endsWith('.shp')) {
         const arrayBuffer = await file.arrayBuffer();
+        await yieldToMain();
         const geojson = await shp(arrayBuffer);
         let points: GeoPoint[] = [];
         if (Array.isArray(geojson)) {
@@ -1195,6 +1214,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
             if (onProgress) onProgress(30);
             try {
                 // fgdb requires an arraybuffer
+                await yieldToMain();
                 const gdbResult = await fgdb(arrayBuffer);
                 let points: GeoPoint[] = [];
                 for (const [layerName, geojson] of Object.entries(gdbResult)) {
@@ -1211,7 +1231,8 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
         if (hasSHP) {
             if (onProgress) onProgress(30);
             try {
-                const geojson = await shp(arrayBuffer);
+                await yieldToMain();
+        const geojson = await shp(arrayBuffer);
                 let points: GeoPoint[] = [];
                 if (Array.isArray(geojson)) {
                     geojson.forEach((gc) => {
