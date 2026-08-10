@@ -5574,7 +5574,16 @@ const App: React.FC = () => {
                                 onExcelExport={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, downloadExcelAnalysis)}
                                 onKmzExport={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZ(!activeFile ? plannedStreets : globalPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
                             />
-                            <button onClick={downloadExcelWithStreets} className="w-full bg-[#0b2d3d] border border-accent/40 text-accent font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-sm group">
+                            
+                            <button 
+                                onClick={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZGroupedZip(!activeFile ? plannedStreets : globalPoints, activeFile?.filename || 'Analyzed', { mode: 'none', groupByAttribute: 'color', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile?.headers, selectedHeaders) })}
+                                className="w-full bg-[#0b2d3d] border border-blue-400/40 text-blue-400 font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-blue-500 hover:text-white transition-all text-sm group mt-3"
+                            >
+                                <FolderArchive className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                                {lang === 'ar' ? 'تصدير KMZ مقسم حسب الألوان (ملف ZIP منفصل)' : 'Export KMZ Grouped by Colors (ZIP)'}
+                            </button>
+
+                            <button onClick={downloadExcelWithStreets} className="w-full bg-[#0b2d3d] border border-accent/40 text-accent font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-sm group mt-3">
                                 <MapPinIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'تصدير إكسل مع أسماء الشوارع' : 'Export Excel with Streets'}
                             </button>
@@ -7611,7 +7620,18 @@ export const CheckResultModalPopup: React.FC<{
 
             <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-accent/10 border border-accent/30 text-accent text-[11px] font-black mb-3">
               <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              <span>{lang === 'ar' ? 'معالجة جلب الشوارع والعناوين' : 'Street Fetching & Geocoding'}</span>
+              <span>
+                {(() => {
+                  const msg = (statusMessage || '').toLowerCase();
+                  if (msg.includes('شوارع') || msg.includes('عنونة') || msg.includes('street') || msg.includes('geocode') || msg.includes('خرائط') || msg.includes('map') || msg.includes('نطاق') || msg.includes('bounds')) 
+                    return lang === 'ar' ? 'معالجة جلب الشوارع والعناوين' : 'Street Fetching & Geocoding';
+                  if (msg.includes('ملف') || msg.includes('تحميل') || msg.includes('pars') || msg.includes('file')) 
+                    return lang === 'ar' ? 'تحميل ومعالجة الملفات' : 'File Upload & Parsing';
+                  if (msg.includes('تطابق') || msg.includes('فجوات') || msg.includes('تقاطع') || msg.includes('overlap') || msg.includes('gap') || msg.includes('intersect') || msg.includes('duplicates')) 
+                    return lang === 'ar' ? 'تحليل التطابق والفجوات' : 'Matching & Gaps Analysis';
+                  return lang === 'ar' ? 'معالجة العمليات' : 'Processing Operations';
+                })()}
+              </span>
             </div>
 
             <div className="space-y-2 mb-4 px-2">
@@ -7646,7 +7666,16 @@ export const CheckResultModalPopup: React.FC<{
             )}
 
             <p className="text-[10px] text-white/40 font-bold mt-5 pt-3 border-t border-white/5">
-              {lang === 'ar' ? '⚡ يرجى الانتظار، جاري التواصل مع الخادم وتحديد أسماء الشوارع...' : '⚡ Please wait while connecting to server & resolving streets...'}
+              {(() => {
+                  const msg = (statusMessage || '').toLowerCase();
+                  if (msg.includes('شوارع') || msg.includes('عنونة') || msg.includes('street') || msg.includes('geocode') || msg.includes('خرائط') || msg.includes('map') || msg.includes('نطاق') || msg.includes('bounds')) 
+                    return lang === 'ar' ? '⚡ يرجى الانتظار، جاري التواصل مع الخادم وتحديد أسماء الشوارع...' : '⚡ Please wait while connecting to server & resolving streets...';
+                  if (msg.includes('ملف') || msg.includes('تحميل') || msg.includes('pars') || msg.includes('file') || msg.includes('read')) 
+                    return lang === 'ar' ? '⚡ يرجى الانتظار، جاري قراءة وتصنيف البيانات من الملف...' : '⚡ Please wait while reading and parsing file data...';
+                  if (msg.includes('تطابق') || msg.includes('فجوات') || msg.includes('تقاطع') || msg.includes('overlap') || msg.includes('gap') || msg.includes('intersect') || msg.includes('duplicates')) 
+                    return lang === 'ar' ? '⚡ يرجى الانتظار، يتم الآن إجراء تحليلات مكانية معقدة...' : '⚡ Please wait, performing complex spatial analysis...';
+                  return lang === 'ar' ? '⚡ يرجى الانتظار، جاري إتمام العملية المطلوبة...' : '⚡ Please wait while the operation completes...';
+              })()}
             </p>
           </div>
         </div>
