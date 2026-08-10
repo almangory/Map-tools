@@ -38,6 +38,7 @@ import { DataFormatter } from './components/DataFormatter';
 import { SegmentLengthChart } from './components/SegmentLengthChart';
 import { PermitLengthChart } from './components/PermitLengthChart';
 import { FileComparator } from './components/FileComparator';
+import { LineDrawerTab } from './components/LineDrawerTab';
 import { MapClassifier } from './components/MapClassifier';
 import { SegmentVaultManager } from './components/SegmentVaultManager';
 import { SbcValidator, performSbcAuditEngine } from './components/SbcValidator';
@@ -431,7 +432,7 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
-  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault' | 'sbc-checker'>('converter');
+  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault' | 'sbc-checker' | 'line-drawer'>('converter');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
@@ -518,6 +519,27 @@ const App: React.FC = () => {
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
+
+  // Auto-simulate progress percentage during loading operations if progressPercent is null or small
+  useEffect(() => {
+    let timer: any;
+    if (loading) {
+      if (progressPercent === null || progressPercent === undefined || progressPercent === 0) {
+        setProgressPercent(12);
+      }
+      timer = setInterval(() => {
+        setProgressPercent(prev => {
+          if (prev === null || prev === undefined) return 15;
+          if (prev >= 95) return prev;
+          const delta = Math.max(1, Math.floor((96 - prev) / 6));
+          return Math.min(95, prev + delta);
+        });
+      }, 250);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [loading]);
 
   const verifyEssentialAttributes = () => {
     setActiveIssueItems([]);
@@ -2712,7 +2734,7 @@ const App: React.FC = () => {
           len = calculatePathLength(pt.path);
         }
 
-        rowsSheet2.push({
+        const rowData: Record<string, any> = {
           'PROJECTNAME': ptProjectName,
           'PROJECTID': formatProjectIdForExcel(ptProjectId),
           'CONTRACTOR': ptContractor,
@@ -2720,7 +2742,14 @@ const App: React.FC = () => {
           'Segment ID': item.idValue,
           'الطول (متر)': len ? len.toFixed(2) : '0.00',
           'رابط موقع الخريطة (Google Maps Link)': getMapLink([pt])
-        });
+        };
+        if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
+            rowData[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
+            rowData[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
+            rowData[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
+            rowData[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
+        }
+        rowsSheet2.push(rowData);
       });
     });
 
@@ -3030,7 +3059,7 @@ const App: React.FC = () => {
       }
       const len = calculatePathLength(pt.path, pt.attributes) || 0;
 
-      return {
+      const rowData: Record<string, any> = {
         '#': index + 1,
         [lang === 'ar' ? 'اسم العنصر' : 'Name']: pt.name || `Point ${index + 1}`,
         'Permit No': permitVal,
@@ -3040,6 +3069,13 @@ const App: React.FC = () => {
         [lang === 'ar' ? 'الحي' : 'District']: pt.district || pt.attributes?.DISTRICT || pt.attributes?.district || '-',
         [lang === 'ar' ? 'الرابط' : 'Link']: `https://www.google.com/maps?q=${pt.y},${pt.x}`
       };
+      if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
+          rowData[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
+          rowData[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
+          rowData[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
+          rowData[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
+      }
+      return rowData;
     });
 
     const workbook = XLSX.utils.book_new();
@@ -3251,6 +3287,12 @@ const App: React.FC = () => {
                 [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
                 [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
             };
+            if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
+                rowObj[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
+                rowObj[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
+                rowObj[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
+                rowObj[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
+            };
 
             // Unpack pt.attributes and pt.description key-value pairs as individual columns
             const extracted = extractAllPointAttributes(pt);
@@ -3457,6 +3499,12 @@ const App: React.FC = () => {
                 [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
                 [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
             };
+            if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
+                rowObj[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
+                rowObj[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
+                rowObj[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
+                rowObj[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
+            };
 
             const extracted = extractAllPointAttributes(pt);
             Object.entries(extracted).forEach(([k, v]) => {
@@ -3622,12 +3670,12 @@ const App: React.FC = () => {
     if (!selectedFile) return;
     setLoading(true);
     setProgressPercent(5);
-    setStatusMessage(t.parsing);
+    setStatusMessage(lang === 'ar' ? `جاري قراءة ومعالجة الملف (${selectedFile.name})...` : `Reading and parsing file (${selectedFile.name})...`);
     setAutoDetected(null);
     setError(null);
     
-    // Allow UI to render the loading overlay before parsing blocks thread
-    await new Promise(r => { requestAnimationFrame(() => { setTimeout(r, 150); }); });
+    // Allow UI to render the loading overlay popup before parsing blocks thread
+    await new Promise(r => { setTimeout(r, 120); });
 
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
@@ -3638,7 +3686,10 @@ const App: React.FC = () => {
       else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile, onProg);
       else throw new Error(t.errors.unsupported);
 
-      setProgressPercent(100);
+      setProgressPercent(90);
+      setStatusMessage(lang === 'ar' ? 'جاري تصنيف النقاط وتحويل الإحداثيات...' : 'Categorizing points and transforming coordinates...');
+      await new Promise(r => { setTimeout(r, 50); });
+
       setActiveFile(result);
       setDataId(`${result.filename}-${Date.now()}`);
 
@@ -3690,6 +3741,7 @@ const App: React.FC = () => {
       } catch (e) {
          console.warn("Failed to auto-display points on map", e);
       }
+      setProgressPercent(100);
     } catch (err: any) { setError(err.message); } finally { e.target.value = ''; setLoading(false); setProgressPercent(null); }
   };
 
@@ -4030,12 +4082,16 @@ const App: React.FC = () => {
   const handleBoundaryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
-    setLoading(true); setStatusMessage("جاري تحليل مضلع الحدود...");
+    setLoading(true);
+    setProgressPercent(10);
+    setStatusMessage(lang === 'ar' ? `جاري تحليل مضلع الحدود من الملف (${selectedFile.name})...` : `Analyzing boundary polygon from file (${selectedFile.name})...`);
+    await new Promise(r => setTimeout(r, 120));
     try {
         const fName = String(selectedFile.name || '').toLowerCase();
         let result: ParsedFile;
-        if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile);
-        else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
+        const onProg = (p: number) => setProgressPercent(p);
+        if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile, onProg);
+        else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
         else throw new Error(t.errors.unsupported);
         let pts: GeoPoint[] = [];
         if (result.type === 'kmz') pts = result.data;
@@ -4055,9 +4111,9 @@ const App: React.FC = () => {
             setBoundaryPolygon(poly);
           }
           setDataId(`boundary-${Date.now()}`);
-          setStatusMessage("تم تحميل الحدود بنجاح.");
+          setStatusMessage(lang === 'ar' ? 'تم تحميل الحدود بنجاح.' : 'Boundary loaded successfully.');
         } else throw new Error(t.errors.noBoundaryInKml);
-    } catch (err: any) { setError(err.message); } finally { setLoading(false); setTimeout(() => setStatusMessage(''), 3000); }
+    } catch (err: any) { setError(err.message); } finally { e.target.value = ''; setLoading(false); setProgressPercent(null); setTimeout(() => setStatusMessage(''), 3000); }
   };
 
   const handleLoadSampleGDB = () => {
@@ -4268,7 +4324,8 @@ const App: React.FC = () => {
           { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
           { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
           { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق' : 'Format' },
-          { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
+          { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' },
+          { id: 'line-drawer', icon: <PenTool />, label: lang === 'ar' ? 'رسم الخطوط' : 'Line Drawer' }
         ].map((tab) => (
           <button
             key={tab.id}
@@ -4302,7 +4359,8 @@ const App: React.FC = () => {
                { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
                { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
                { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق البيانات' : 'Format Data' },
-               { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
+               { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' },
+               { id: 'line-drawer', icon: <PenTool />, label: lang === 'ar' ? 'رسم الخطوط' : 'Line Drawer' }
              ].map((tab) => (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} className={cn("flex flex-col items-center gap-1.5 sm:gap-2 p-2 sm:p-3 rounded-2xl transition-all", activeTab === tab.id ? "bg-accent text-primary shadow-lg" : "text-white/30 hover:text-white")}>
                   {React.cloneElement(tab.icon as any, { className: "w-5 h-5 md:w-6 md:h-6" })}
@@ -6315,7 +6373,16 @@ const App: React.FC = () => {
                 )}
 
                 {activeTab === 'classifier' && (
-                  <MapClassifier lang={lang} targetAssets={globalPoints} setTargetAssets={setGlobalPoints} setRefPolygons={setClassifierRefZones} setDataId={setDataId} />
+                  <MapClassifier
+                    lang={lang}
+                    targetAssets={globalPoints}
+                    setTargetAssets={setGlobalPoints}
+                    setRefPolygons={setClassifierRefZones}
+                    setDataId={setDataId}
+                    setGlobalLoading={setLoading}
+                    setGlobalProgress={setProgressPercent}
+                    setGlobalStatus={setStatusMessage}
+                  />
                 )}
 
                 {activeTab === 'attribute-formatter' && (
@@ -6333,7 +6400,25 @@ const App: React.FC = () => {
                   />
                 )}
                 {activeTab === 'comparator' && (
-                  <FileComparator lang={lang} setGlobalPoints={setGlobalPoints} setDataId={setDataId} />
+                  <FileComparator
+                    lang={lang}
+                    setGlobalPoints={setGlobalPoints}
+                    setDataId={setDataId}
+                    setGlobalLoading={setLoading}
+                    setGlobalProgress={setProgressPercent}
+                    setGlobalStatus={setStatusMessage}
+                  />
+                )}
+                {activeTab === 'line-drawer' && (
+                  <LineDrawerTab
+                    lang={lang}
+                    globalPoints={globalPoints}
+                    setGlobalPoints={setGlobalPoints}
+                    setDataId={setDataId}
+                    setGlobalLoading={setLoading}
+                    setGlobalProgress={setProgressPercent}
+                    setGlobalStatus={setStatusMessage}
+                  />
                 )}
                 {activeTab === 'segment-vault' && (
                   <SegmentVaultManager

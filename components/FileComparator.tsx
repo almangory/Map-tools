@@ -12,9 +12,12 @@ interface Props {
   lang: 'ar' | 'en';
   setGlobalPoints: (points: GeoPoint[]) => void;
   setDataId: (id: string) => void;
+  setGlobalLoading?: (loading: boolean) => void;
+  setGlobalProgress?: (percent: number | null) => void;
+  setGlobalStatus?: (status: string) => void;
 }
 
-export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
+export const FileComparator = ({ lang, setGlobalPoints, setDataId, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
   const [file1Name, setFile1Name] = useState<string>('');
   const [file2Name, setFile2Name] = useState<string>('');
   
@@ -49,18 +52,26 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
     if (!file) return;
     
     setLoading(true);
+    if (setGlobalLoading) setGlobalLoading(true);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? `جاري قراءة الملف ${file.name}...` : `Reading file ${file.name}...`);
+    if (setGlobalProgress) setGlobalProgress(10);
+
+    await new Promise(r => setTimeout(r, 120));
+
     try {
       const fileExtension = String(file.name.split('.').pop() || '').toLowerCase();
       let pts: GeoPoint[] = [];
 
+      const onProg = (p: number) => { if (setGlobalProgress) setGlobalProgress(p); };
+
       if (['kmz', 'kml', 'zip', 'gdb', 'shp'].includes(fileExtension)) {
-        const parsed = await parseKMZ(file);
+        const parsed = await parseKMZ(file, onProg);
         pts = parsed.data as GeoPoint[];
       } else if (fileExtension === 'dxf') {
-        const parsed = await parseDXF(file);
+        const parsed = await parseDXF(file, onProg);
         pts = extractPointsFromDXF(parsed.data);
       } else if (['xlsx', 'csv', 'xls'].includes(fileExtension)) {
-        const parsed = await parseExcel(file);
+        const parsed = await parseExcel(file, onProg);
         const rows = parsed.data as any[][];
         const headers = parsed.headers || [];
         
@@ -112,6 +123,8 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
       alert(lang === 'ar' ? 'حدث خطأ أثناء قراءة الملف.' : 'Error reading file.');
     } finally {
       setLoading(false);
+      if (setGlobalLoading) setGlobalLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
       if (e.target) e.target.value = '';
     }
   };
@@ -120,7 +133,10 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
     if (!points1.length || !points2.length) return;
     
     setLoading(true);
-    
+    if (setGlobalLoading) setGlobalLoading(true);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري مقارنة البيانات والمطابقة المكانية...' : 'Comparing files and performing spatial matching...');
+    if (setGlobalProgress) setGlobalProgress(20);
+
     setTimeout(() => {
         const map1 = new Map<string, GeoPoint>();
         const map2 = new Map<string, GeoPoint>();
@@ -235,9 +251,12 @@ export const FileComparator = ({ lang, setGlobalPoints, setDataId }: Props) => {
         });
         
         setStats({ added, deleted, modified, unchanged, diameterDiff });
+        if (setGlobalProgress) setGlobalProgress(100);
         setGlobalPoints(resultPoints);
         setDataId(`compare-${Date.now()}`);
         setLoading(false);
+        if (setGlobalLoading) setGlobalLoading(false);
+        if (setGlobalProgress) setGlobalProgress(null);
     }, 100);
   };
 

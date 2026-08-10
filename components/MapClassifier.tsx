@@ -17,9 +17,12 @@ interface Props {
   setTargetAssets: (assets: GeoPoint[]) => void;
   setRefPolygons?: (zones: GeoPoint[]) => void;
   setDataId?: (id: string) => void;
+  setGlobalLoading?: (loading: boolean) => void;
+  setGlobalProgress?: (percent: number | null) => void;
+  setGlobalStatus?: (status: string) => void;
 }
 
-export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolygons, setDataId }: Props) => {
+export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolygons, setDataId, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
   const [refZones, setRefZones] = useState<GeoPoint[]>([]);
   const [classifiedResults, setClassifiedResults] = useState<ClassifiedAsset[]>([]);
   const [loading, setLoading] = useState(false);
@@ -87,14 +90,20 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
     setLoading(true);
+    if (setGlobalLoading) setGlobalLoading(true);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? `جاري قراءة ملف المناطق/المضلعات ${selectedFile.name}...` : `Reading polygons file ${selectedFile.name}...`);
+    if (setGlobalProgress) setGlobalProgress(10);
     setZonesStatus(lang === 'ar' ? 'جاري قراءة المضلعات...' : 'Reading Polygons...');
     
+    await new Promise(r => setTimeout(r, 120));
+
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
+      const onProg = (p: number) => { if (setGlobalProgress) setGlobalProgress(p); };
       let result: ParsedFile;
-      if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
-      else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
-      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb')) result = await parseKMZ(selectedFile);
+      if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile, onProg);
+      else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
+      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb')) result = await parseKMZ(selectedFile, onProg);
       else throw new Error('Unsupported file type');
 
       processZonesResult(result, fName);
@@ -103,6 +112,8 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
       setZonesStatus(lang === 'ar' ? 'حدث خطأ أثناء القراءة' : 'Error reading file');
     } finally {
       setLoading(false);
+      if (setGlobalLoading) setGlobalLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
     }
   };
 
@@ -111,14 +122,20 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
     setLoading(true);
+    if (setGlobalLoading) setGlobalLoading(true);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? `جاري قراءة أصول البيانات ${selectedFile.name}...` : `Reading assets data file ${selectedFile.name}...`);
+    if (setGlobalProgress) setGlobalProgress(10);
     setAssetsStatus(lang === 'ar' ? 'جاري قراءة الأصول...' : 'Reading Assets...');
     
+    await new Promise(r => setTimeout(r, 120));
+
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
+      const onProg = (p: number) => { if (setGlobalProgress) setGlobalProgress(p); };
       let result;
-      if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile);
-      else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile);
-      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb')) result = await parseKMZ(selectedFile);
+      if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile, onProg);
+      else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
+      else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb')) result = await parseKMZ(selectedFile, onProg);
       else throw new Error('Unsupported file type');
 
       let pts: GeoPoint[] = [];
@@ -130,6 +147,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
           if (!mapping.xColumn || !mapping.yColumn) {
               setAssetsStatus(lang === 'ar' ? 'تعذر العثور على أعمدة الإحداثيات تلقائياً' : 'Could not automatically find coordinate columns');
               setLoading(false);
+              if (setGlobalLoading) setGlobalLoading(false);
               return;
           }
           
@@ -181,6 +199,8 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
       setAssetsStatus(lang === 'ar' ? 'حدث خطأ أثناء القراءة' : 'Error reading file');
     } finally {
       setLoading(false);
+      if (setGlobalLoading) setGlobalLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
     }
   };
 
@@ -194,15 +214,24 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
       alert(lang === 'ar' ? 'يرجى رفع ملف الأصول (نقاط/خطوط) أولاً' : 'Please upload target assets (points/lines) first');
       return;
     }
-    
-    // استدعاء الدالة السابقة
-    const results = classifyAssetsToZones(assetsToClassify, refZones);
-    
-    // حفظ النتيجة في State لطباعتها للمستخدم
-    setClassifiedResults(results);
-    setTargetAssets(results);
-    if (setDataId) setDataId(`classifier-colored-${Date.now()}`);
-    alert(lang === 'ar' ? 'اكتمل التصنيف بنجاح!' : 'Classification completed successfully!');
+
+    if (setGlobalLoading) setGlobalLoading(true);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري تصنيف الأصول على المضلعات الجغرافية...' : 'Classifying assets within geographic polygons...');
+    if (setGlobalProgress) setGlobalProgress(30);
+
+    setTimeout(() => {
+      // استدعاء الدالة السابقة
+      const results = classifyAssetsToZones(assetsToClassify, refZones);
+      
+      if (setGlobalProgress) setGlobalProgress(100);
+      // حفظ النتيجة في State لطباعتها للمستخدم
+      setClassifiedResults(results);
+      setTargetAssets(results);
+      if (setDataId) setDataId(`classifier-colored-${Date.now()}`);
+      if (setGlobalLoading) setGlobalLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
+      alert(lang === 'ar' ? 'اكتمل التصنيف بنجاح!' : 'Classification completed successfully!');
+    }, 150);
   };
 
   
@@ -242,6 +271,12 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
         }
       }
       
+      if (r.type === 'LineString' && r.path && r.path.length >= 2) {
+          baseRow[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = r.path[0].y;
+          baseRow[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = r.path[0].x;
+          baseRow[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = r.path[r.path.length - 1].y;
+          baseRow[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = r.path[r.path.length - 1].x;
+      }
       return baseRow;
     });
 
@@ -335,6 +370,12 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
         }
       }
 
+      if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
+          baseRow[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
+          baseRow[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
+          baseRow[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
+          baseRow[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
+      }
       return baseRow;
     });
 
