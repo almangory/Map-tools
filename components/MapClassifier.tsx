@@ -271,12 +271,15 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
         }
       }
       
-      if (r.type === 'LineString' && r.path && r.path.length >= 2) {
-          baseRow[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = r.path[0].y;
-          baseRow[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = r.path[0].x;
-          baseRow[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = r.path[r.path.length - 1].y;
-          baseRow[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = r.path[r.path.length - 1].x;
-      }
+      const startX = (r.path && r.path.length > 0) ? r.path[0].x : r.x;
+      const startY = (r.path && r.path.length > 0) ? r.path[0].y : r.y;
+      const endX = (r.path && r.path.length > 0) ? r.path[r.path.length - 1].x : r.x;
+      const endY = (r.path && r.path.length > 0) ? r.path[r.path.length - 1].y : r.y;
+
+      baseRow[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = startX;
+      baseRow[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = startY;
+      baseRow[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = endX;
+      baseRow[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = endY;
       return baseRow;
     });
 

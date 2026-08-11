@@ -344,6 +344,11 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
       uniqueSegmentMap[canonKey].savedProjectNames.add(proj.name);
 
       itemCounter++;
+      const startX = (pt.path && pt.path.length > 0) ? pt.path[0].x : pt.x;
+      const startY = (pt.path && pt.path.length > 0) ? pt.path[0].y : pt.y;
+      const endX = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].x : pt.x;
+      const endY = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].y : pt.y;
+
       rowsSheet2.push({
         'اسم المشروع المصدر (Project File)': proj.name,
         'PROJECTNAME': ptProjName,
@@ -351,6 +356,10 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
         'CONTRACTOR': ptContractor,
         'م': itemCounter,
         'Segment ID': cleanSeg,
+        'Start_X (إحداثي س للبداية)': startX,
+        'Start_Y (إحداثي ص للبداية)': startY,
+        'End_X (إحداثي س للنهاية)': endX,
+        'End_Y (إحداثي ص للنهاية)': endY,
         'الطول (متر)': len ? len.toFixed(2) : '0.00',
         'رابط موقع الخريطة (Google Maps Link)': getMapLinkForPoints([pt])
       });
@@ -368,6 +377,13 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
     if (!canon || seenKeysSheet1.has(canon)) return;
     seenKeysSheet1.add(canon);
 
+    const firstPt = item.points[0];
+    const lastPt = item.points[item.points.length - 1];
+    const startX = (firstPt && firstPt.path && firstPt.path.length > 0) ? firstPt.path[0].x : (firstPt?.x || 0);
+    const startY = (firstPt && firstPt.path && firstPt.path.length > 0) ? firstPt.path[0].y : (firstPt?.y || 0);
+    const endX = (lastPt && lastPt.path && lastPt.path.length > 0) ? lastPt.path[lastPt.path.length - 1].x : (lastPt?.x || 0);
+    const endY = (lastPt && lastPt.path && lastPt.path.length > 0) ? lastPt.path[lastPt.path.length - 1].y : (lastPt?.y || 0);
+
     rowsSheet1.push({
       'PROJECTNAME': Array.from(item.projectNames).join(' / '),
       'PROJECTID': formatProjectIdForExcel(Array.from(item.projectIds).join(' / ')),
@@ -375,6 +391,10 @@ export function exportAggregatedSegmentIdReport(projects: SavedProject[], lang: 
       'المشاريع المحفوظة المتضمنة (Source Projects)': Array.from(item.savedProjectNames).join(' | '),
       'م': rowsSheet1.length + 1,
       'Segment ID': item.idValue,
+      'Start_X (إحداثي س للبداية)': startX,
+      'Start_Y (إحداثي ص للبداية)': startY,
+      'End_X (إحداثي س للنهاية)': endX,
+      'End_Y (إحداثي ص للنهاية)': endY,
       'عدد العناصر (Items Count)': item.count,
       'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
       'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),

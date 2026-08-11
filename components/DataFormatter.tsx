@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2 } from 'lucide-react';
+import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { OverlapResult } from '../services/geometryService';
 import { downloadKMZ } from '../services/kmlService';
@@ -362,10 +362,87 @@ export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
   );
 };
 
+const ProcessingModal = ({ lang }: { lang: 'ar' | 'en' }) => {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    // Simulate non-linear progress for UX
+    const interval = setInterval(() => {
+      setProgress(p => {
+        if (p < 45) return p + 3;
+        if (p < 75) return p + 1.5;
+        if (p < 90) return p + 0.5;
+        if (p < 98) return p + 0.1;
+        return p;
+      });
+    }, 150);
+    return () => clearInterval(interval);
+  }, []);
+
+  return createPortal(
+    <div className="fixed inset-0 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 9999999 }}>
+      <div className="bg-white border border-slate-200 rounded-[2rem] p-8 max-w-md w-full shadow-2xl relative overflow-hidden flex flex-col items-center text-center animate-in zoom-in-95 duration-300">
+        <h3 className="text-2xl font-black text-[#0b2d3d] mb-8">
+          {lang === 'ar' ? 'جاري جلب البيانات المعالجة' : 'Fetching Processed Data'}
+        </h3>
+        
+        {/* Animated Graphic */}
+        <div className="relative w-32 h-32 mb-8">
+          {/* Concentric Circles */}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-32 h-32 rounded-full border-4 border-[#38bdf8]/20" />
+          </div>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="w-24 h-24 rounded-full border-[6px] border-[#38bdf8] border-r-transparent border-t-transparent animate-[spin_3s_linear_infinite]" />
+          </div>
+          <div className="absolute inset-0 flex items-center justify-center">
+             <div className="w-16 h-16 rounded-full border-[6px] border-[#fca311] border-l-transparent border-b-transparent animate-[spin_2s_linear_infinite_reverse]" />
+          </div>
+          
+          <div className="absolute inset-0 flex items-center justify-center">
+             <div className="w-6 h-6 bg-slate-100 rounded-full" />
+          </div>
+
+          {/* Floating elements */}
+          <div className="absolute -top-2 -left-4 bg-white border border-slate-100 p-2 rounded-lg shadow-lg animate-bounce" style={{ animationDelay: '0ms' }}>
+            <Map className="w-5 h-5 text-[#38bdf8]" />
+          </div>
+          <div className="absolute -top-6 right-8 bg-white border border-slate-100 p-2 rounded-lg shadow-lg animate-bounce" style={{ animationDelay: '200ms' }}>
+             <FolderArchive className="w-5 h-5 text-slate-600" />
+          </div>
+          <div className="absolute top-8 -right-6 bg-white border border-slate-100 p-2 rounded-lg shadow-lg animate-bounce" style={{ animationDelay: '400ms' }}>
+            <FileText className="w-5 h-5 text-[#fca311]" />
+          </div>
+        </div>
+
+        <p className="text-slate-600 mb-6 font-bold text-sm leading-relaxed whitespace-pre-line">
+          {lang === 'ar' 
+            ? 'جاري تحميل البيانات المكانية من المصادر...\nيرجى الانتظار، لا تغلق التطبيق.' 
+            : 'Downloading spatial data from sources...\nPlease wait, do not close the application.'}
+        </p>
+        
+        <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden mb-3 shadow-inner relative">
+          <div 
+            className="h-full bg-gradient-to-r from-[#fca311] to-[#fb8500] transition-all duration-300 ease-out rounded-full relative"
+            style={{ width: `${Math.floor(progress)}%` }}
+          >
+             <div className="absolute inset-0 bg-white/20 w-full h-full animate-[pulse_1s_infinite]" />
+          </div>
+        </div>
+        <div className="text-lg font-black text-[#0b2d3d]">
+           {Math.floor(progress)}%
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
 export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc }: Props) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [pendingAction, setPendingAction] = useState<((overridePoints?: GeoPoint[]) => void | Promise<void>) | null>(null);
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('pipes');
@@ -859,7 +936,22 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     try {
       const { processedPoints, templateFields } = getProcessedPoints(pts);
       const data = processedPoints.map(p => {
-        const row: any = { ID: p.id, Type: p.type, Layer: p.layer || '', X: p.x, Y: p.y };
+        const startX = (p.path && p.path.length > 0) ? p.path[0].x : p.x;
+        const startY = (p.path && p.path.length > 0) ? p.path[0].y : p.y;
+        const endX = (p.path && p.path.length > 0) ? p.path[p.path.length - 1].x : p.x;
+        const endY = (p.path && p.path.length > 0) ? p.path[p.path.length - 1].y : p.y;
+
+        const row: any = {
+          ID: p.id,
+          Type: p.type,
+          Layer: p.layer || '',
+          X: p.x,
+          Y: p.y,
+          Start_X: startX,
+          Start_Y: startY,
+          End_X: endX,
+          End_Y: endY
+        };
         
         const extracted = extractAllPointAttributes(p);
         templateFields.forEach(f => {
@@ -897,32 +989,49 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   };
 
 
-  const executeAction = async (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
+  useEffect(() => {
+    if (isExecuting && pendingAction) {
+      const run = async () => {
+        try {
+            let updatedPoints = points;
+            if (autoFetchStreets && fetchStreets) {
+               updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
+            }
+            await pendingAction(updatedPoints);
+        } catch (err: any) {
+            console.error("Export Action Error:", err);
+            setActionError((lang === 'ar' ? "حدث خطأ أثناء التصدير: " : "Export error: ") + (err?.message || String(err)));
+        } finally {
+            setIsExecuting(false);
+            setPendingAction(null);
+        }
+      };
+      // Yield to browser to ensure modal is painted before heavy work
+      requestAnimationFrame(() => {
+        setTimeout(run, 50);
+      });
+    }
+  }, [isExecuting, pendingAction, points, autoFetchStreets, fetchStreets, lang]);
+
+  const executeAction = (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
     setActionError(null);
     setSuccessMessage(null);
     if (!points || points.length === 0) {
       setActionError(lang === 'ar' ? 'لا توجد عناصر مجهزة لتنسيقها أو تصديرها. يرجى رفع ملف أو اختيار طبقة بيانات أولاً.' : 'No data points available.');
       return;
     }
+    
+    // 1. Queue the action
+    setPendingAction(() => action);
+    // 2. Trigger loading UI
     setIsExecuting(true);
-    try {
-        let updatedPoints = points;
-        if (autoFetchStreets && fetchStreets) {
-           updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
-        }
-        await action(updatedPoints);
-    } catch (err: any) {
-        console.error("Export Action Error:", err);
-        setActionError((lang === 'ar' ? "حدث خطأ أثناء التصدير: " : "Export error: ") + (err?.message || String(err)));
-    } finally {
-        setIsExecuting(false);
-    }
   };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {actionError && <div className="p-4 bg-red-500/20 border border-red-500 rounded-2xl text-red-100 font-bold mb-4">{actionError}</div>}
       {successMessage && <div className="p-4 bg-green-500/20 border border-green-500 rounded-2xl text-green-100 font-bold mb-4">{successMessage}</div>}
+      {isExecuting && <ProcessingModal lang={lang} />}
       <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4">
         <Database className="w-16 h-16 text-accent mx-auto" />
         <h2 className="text-white font-black text-xl">{lang === 'ar' ? 'تنسيق البيانات للمشاريع' : 'Project Data Formatter'}</h2>
@@ -1397,6 +1506,43 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                 {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC - تحت التطوير)' : 'Saudi Building Code (SBC) Compliance Audit (In Dev)'}
             </button>
           )}
+
+          <div className="flex flex-col gap-4 mt-8 pt-6 border-t border-white/10">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-4 bg-accent/10 rounded-2xl border border-accent/20">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-accent/20 rounded-full">
+                  <Zap className="w-5 h-5 text-accent" />
+                </div>
+                <div className="text-right sm:text-left">
+                  <h4 className="text-white text-sm font-black">{lang === 'ar' ? 'وضع التصدير السريع' : 'Fast Export Mode'}</h4>
+                  <p className="text-white/50 text-[10px] mt-0.5">
+                    {lang === 'ar' 
+                      ? 'تخطي جلب أسماء الشوارع لتسريع عملية التصدير بشكل كبير' 
+                      : 'Skip fetching street names to speed up the export process significantly'}
+                  </p>
+                </div>
+              </div>
+              
+              <button 
+                onClick={(e) => { e.preventDefault(); setAutoFetchStreets(prev => !prev); }}
+                className={cn(
+                  "relative inline-flex h-8 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-white/75",
+                  !autoFetchStreets ? "bg-accent" : "bg-white/20"
+                )}
+              >
+                <span className="sr-only">Toggle fast export</span>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out",
+                    !autoFetchStreets 
+                      ? (lang === 'ar' ? "-translate-x-1" : "translate-x-6")
+                      : (lang === 'ar' ? "translate-x-6" : "translate-x-0")
+                  )}
+                />
+              </button>
+            </div>
+          </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-4">
             <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportKMZ)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">

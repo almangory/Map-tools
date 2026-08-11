@@ -283,13 +283,31 @@ export const isKnownAttributeKey = (str: string): boolean => {
     );
 };
 
+export const decodeHtmlEntities = (str: string): string => {
+    if (!str) return '';
+    return str
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/&apos;/gi, "'")
+        .replace(/&amp;/gi, '&')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&#160;/gi, ' ');
+};
+
 export const parseDescriptionToAttributes = (desc?: string, attributes: Record<string, string> = {}): Record<string, string> => {
     if (!desc || typeof desc !== 'string') return attributes;
     
-    const cleanDesc = desc.trim();
+    let cleanDesc = desc.trim();
     if (!cleanDesc) return attributes;
 
-    // 1. Parse HTML <tr> blocks dynamically
+    // Decode HTML entities if present in encoded HTML (e.g. &lt;table&gt;)
+    if (cleanDesc.includes('&lt;') || cleanDesc.includes('&gt;')) {
+        cleanDesc = decodeHtmlEntities(cleanDesc);
+    }
+
+    // 1. Parse HTML <tr> blocks dynamically (Tables)
     const trBlockRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     let trMatch;
     while ((trMatch = trBlockRegex.exec(cleanDesc)) !== null) {
@@ -298,8 +316,10 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
         const cells: string[] = [];
         let cellMatch;
         while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
-            cells.push(stripHtml(cellMatch[1]).trim());
+            const rawCellText = decodeHtmlEntities(stripHtml(cellMatch[1])).trim();
+            if (rawCellText) cells.push(rawCellText);
         }
+
         if (cells.length >= 2) {
             let rawKey = cells[0];
             let rawVal = cells[1];
@@ -307,6 +327,8 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
                 rawKey = cells[1];
                 rawVal = cells[2];
             }
+
+            rawKey = rawKey.replace(/[:=]+$/, '').trim();
 
             // Swap if rawVal is a known key or rawKey is value-like
             if (isKnownAttributeKey(rawVal) && !isKnownAttributeKey(rawKey)) {
@@ -320,12 +342,23 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
             const isHeader = (lowerK === 'key' && lowerV === 'value') ||
                              (lowerK === 'field' && lowerV === 'value') ||
                              (lowerK === 'attribute' && lowerV === 'value') ||
+                             (lowerK === 'name' && lowerV === 'value') ||
                              (rawKey === 'الحقل' && rawVal === 'القيمة') ||
                              (rawKey === 'العنصر' && rawVal === 'القيمة') ||
                              (rawKey === 'اسم الحقل' && rawVal === 'القيمة');
-            if (rawKey && !isHeader) {
+            if (rawKey && !isHeader && rawKey.length < 80) {
                 if (!attributes[rawKey]) {
                     attributes[rawKey] = cleanAttributeValue(rawKey, rawVal);
+                }
+            }
+        } else if (cells.length === 1) {
+            const text = cells[0];
+            const sepIdx = text.indexOf(':') !== -1 ? text.indexOf(':') : text.indexOf('=');
+            if (sepIdx > 0 && sepIdx < text.length - 1) {
+                let k = text.substring(0, sepIdx).trim().replace(/[:=]+$/, '');
+                let v = text.substring(sepIdx + 1).trim();
+                if (k && k.length < 80 && !attributes[k]) {
+                    attributes[k] = cleanAttributeValue(k, v);
                 }
             }
         }
@@ -335,36 +368,30 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
     const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
     let liMatch;
     while ((liMatch = liRegex.exec(cleanDesc)) !== null) {
-        const text = stripHtml(liMatch[1]);
+        const text = decodeHtmlEntities(stripHtml(liMatch[1])).trim();
         const sepIdx = text.indexOf(':') !== -1 ? text.indexOf(':') : text.indexOf('=');
         if (sepIdx > 0) {
-            let k = text.substring(0, sepIdx).trim();
+            let k = text.substring(0, sepIdx).trim().replace(/[:=]+$/, '');
             let v = text.substring(sepIdx + 1).trim();
             if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
                 const tmp = k; k = v; v = tmp;
             }
-            if (k && !attributes[k]) {
+            if (k && k.length < 80 && !attributes[k]) {
                 attributes[k] = cleanAttributeValue(k, v);
-            }
-        } else {
-            const spaceIdx = text.indexOf(' ');
-            if (spaceIdx > 0) {
-                let k = text.substring(0, spaceIdx).trim();
-                let v = text.substring(spaceIdx + 1).trim();
-                if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
-                    const tmp = k; k = v; v = tmp;
-                }
-                if (k && k.length < 50 && !attributes[k]) {
-                    attributes[k] = cleanAttributeValue(k, v);
-                }
             }
         }
     }
 
-    // 3. Parse <br> or line break separated Key: Value, Key = Value, or Key Value
-    const lines = cleanDesc
-        .split(/<br\s*\/?>|<\/p>|\r?\n/gi)
-        .map(l => stripHtml(l))
+    // 3. Prepare text by converting HTML block/closing tags to newlines before stripping remaining HTML
+    let textWithNewlines = cleanDesc
+        .replace(/<\/(div|p|li|tr|h[1-6]|span|td|th|font)>/gi, '\n')
+        .replace(/<br\s*\/?>/gi, '\n');
+
+    textWithNewlines = decodeHtmlEntities(stripHtml(textWithNewlines));
+
+    const lines = textWithNewlines
+        .split(/\r?\n/)
+        .map(l => l.trim())
         .filter(Boolean);
 
     for (const line of lines) {
@@ -384,12 +411,12 @@ export const parseDescriptionToAttributes = (desc?: string, attributes: Record<s
         else if (equalIdx !== -1) sepIdx = equalIdx;
 
         if (sepIdx > 0 && sepIdx < line.length - 1) {
-            let k = line.substring(0, sepIdx).trim();
+            let k = line.substring(0, sepIdx).trim().replace(/[:=]+$/, '');
             let v = line.substring(sepIdx + 1).trim();
             if (isKnownAttributeKey(v) && !isKnownAttributeKey(k)) {
                 const tmp = k; k = v; v = tmp;
             }
-            if (k && k.length < 60 && !attributes[k]) {
+            if (k && k.length < 80 && !attributes[k]) {
                 attributes[k] = cleanAttributeValue(k, v);
             }
         } else if (sepIdx === -1) {
@@ -743,6 +770,32 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                    const val = simpleDataElements[i].textContent;
                    if (nameAttr && val) attributes[nameAttr.trim()] = val.trim();
                }
+               const schemaDataElements = extendedData.getElementsByTagName("SchemaData");
+               for (let s = 0; s < schemaDataElements.length; s++) {
+                   const sd = schemaDataElements[s];
+                   for (let c = 0; c < sd.children.length; c++) {
+                       const child = sd.children[c];
+                       const tagName = child.localName || child.tagName;
+                       if (tagName && tagName.toLowerCase() !== 'simpledata') {
+                           const key = child.getAttribute('name') || tagName;
+                           const val = child.textContent?.trim();
+                           if (key && val && !attributes[key]) {
+                               attributes[key.trim()] = val;
+                           }
+                       }
+                   }
+               }
+               for (let c = 0; c < extendedData.children.length; c++) {
+                   const child = extendedData.children[c];
+                   const tagName = child.localName || child.tagName;
+                   if (tagName && !['data', 'schemadata'].includes(tagName.toLowerCase())) {
+                       const key = child.getAttribute('name') || tagName;
+                       const val = child.textContent?.trim();
+                       if (key && val && !attributes[key]) {
+                           attributes[key.trim()] = val;
+                       }
+                   }
+               }
            });
            
            if (desc) {
@@ -941,6 +994,32 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                     const val = simpleDataElements[j].textContent;
                     if (nameAttr && val) attributes[nameAttr.trim()] = val.trim();
                 }
+                const schemaDataElements = extendedData.getElementsByTagName("SchemaData");
+                for (let s = 0; s < schemaDataElements.length; s++) {
+                    const sd = schemaDataElements[s];
+                    for (let c = 0; c < sd.children.length; c++) {
+                        const child = sd.children[c];
+                        const tagName = child.localName || child.tagName;
+                        if (tagName && tagName.toLowerCase() !== 'simpledata') {
+                            const key = child.getAttribute('name') || tagName;
+                            const val = child.textContent?.trim();
+                            if (key && val && !attributes[key]) {
+                                attributes[key.trim()] = val;
+                            }
+                        }
+                    }
+                }
+                for (let c = 0; c < extendedData.children.length; c++) {
+                    const child = extendedData.children[c];
+                    const tagName = child.localName || child.tagName;
+                    if (tagName && !['data', 'schemadata'].includes(tagName.toLowerCase())) {
+                        const key = child.getAttribute('name') || tagName;
+                        const val = child.textContent?.trim();
+                        if (key && val && !attributes[key]) {
+                            attributes[key.trim()] = val;
+                        }
+                    }
+                }
             });
             
             if (desc) {
@@ -1015,15 +1094,22 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                 }
             }
 
+            href = href.replace(/&amp;/g, '&');
             if (href && href.startsWith('http')) {
+                if (onProgress) onProgress(70 + Math.round((i / networkLinks.length) * 25));
+                await yieldToMain();
                 try {
-                    const parsedLink = await fetchNetworkFile(href);
+                    const parsedLink = await fetchNetworkFile(href, (pct) => {
+                        if (onProgress) onProgress(70 + Math.round((pct / 100) * 25));
+                    });
                     if (parsedLink && parsedLink.data) {
                         points.push(...(parsedLink.data as GeoPoint[]));
                     }
                 } catch(e: any) {
-                    console.error("Failed to fetch NetworkLink:", href, e);
-                    throw new Error("NETWORK_LINK_ERROR:" + (e.message || ''));
+                    console.warn("Failed to fetch NetworkLink:", href, e);
+                    if (points.length === 0 && i === networkLinks.length - 1) {
+                        throw new Error("NETWORK_LINK_ERROR:" + (e.message || ''));
+                    }
                 }
             }
         }
@@ -1345,7 +1431,10 @@ export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {
 /**
  * جلب خريطة Google My Maps من الرابط وتحليلها عن طريق بروكسي CORS
  */
-export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
+export const fetchMyMapsKML = async (url: string, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
+  if (onProgress) onProgress(10);
+  await yieldToMain();
+
   const midMatch = url.match(/mid=([a-zA-Z0-9_-]+)/);
   if (!midMatch) {
     throw new Error("رابط غير صالح. يرجى توفير رابط خريطة Google My Maps يحتوي على معرّف الخريطة (mid=...).");
@@ -1356,14 +1445,20 @@ export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
   const proxyEndpoints = [
     `/api/proxy?url=${encodeURIComponent(kmlUrl)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(kmlUrl)}`,
-    `https://corsproxy.io/?${encodeURIComponent(kmlUrl)}`
+    `https://corsproxy.io/?${encodeURIComponent(kmlUrl)}`,
+    `https://thingproxy.freeboard.io/fetch/${encodeURIComponent(kmlUrl)}`
   ];
 
   let kmlContent = "";
   let lastError = null;
 
-  for (const endpoint of proxyEndpoints) {
+  if (onProgress) onProgress(25);
+  await yieldToMain();
+
+  for (let i = 0; i < proxyEndpoints.length; i++) {
+    const endpoint = proxyEndpoints[i];
     try {
+      if (onProgress) onProgress(25 + Math.round((i / proxyEndpoints.length) * 25));
       const response = await fetch(endpoint);
       if (response.ok) {
         const text = await response.text();
@@ -1379,6 +1474,7 @@ export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
 
   if (!kmlContent) {
     try {
+      if (onProgress) onProgress(50);
       const directRes = await fetch(kmlUrl);
       if (directRes.ok) {
         const text = await directRes.text();
@@ -1395,7 +1491,15 @@ export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
     throw new Error("فشل جلب خريطة Google My Maps. يرجى التأكد من أن رابط الخريطة مكتمل ومفتوح للعامة (عام) وليس خاصاً.");
   }
 
-  const points = await parseKMLContentAsync(kmlContent);
+  if (onProgress) onProgress(60);
+  await yieldToMain();
+
+  const points = await parseKMLContentAsync(kmlContent, (p) => {
+    if (onProgress) onProgress(60 + Math.round((p / 100) * 38));
+  });
+
+  if (onProgress) onProgress(100);
+
   return {
     filename: `Google_My_Map_${mid}.kml`,
     type: 'kmz',
@@ -1412,10 +1516,14 @@ export const fetchMyMapsKML = async (url: string): Promise<ParsedFile> => {
 export const fetchNetworkFile = async (url: string, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
   if (onProgress) onProgress(10);
   
-  let targetUrl = url;
-  const midMatch = url.match(/mid=([a-zA-Z0-9_-]+)/);
-  if (midMatch) {
-    targetUrl = `https://www.google.com/maps/d/kml?mid=${midMatch[1]}&forcekml=1`;
+  let targetUrl = url.trim().replace(/&amp;/g, '&');
+  if (!targetUrl.includes('/kml?')) {
+    const midMatch = targetUrl.match(/mid=([a-zA-Z0-9_-]+)/);
+    if (midMatch) {
+      targetUrl = `https://www.google.com/maps/d/kml?mid=${midMatch[1]}&forcekml=1`;
+    }
+  } else if (!targetUrl.includes('forcekml=1')) {
+    targetUrl += (targetUrl.includes('?') ? '&' : '?') + 'forcekml=1';
   }
   
   const proxyEndpoints = [

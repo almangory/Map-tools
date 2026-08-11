@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Upload, Download, Check, Split, Trash2, Activity,
   Presentation, FolderInput, Menu, X, PanelTop,
@@ -350,7 +351,8 @@ const UniversalExportBar = ({
   lang,
   onExcelExport,
   isExecuting,
-  onKmzExport
+  onKmzExport,
+  runWithLoading
 }: {
   data: GeoPoint[];
   filename: string;
@@ -358,7 +360,16 @@ const UniversalExportBar = ({
   onExcelExport: () => void;
   isExecuting: boolean;
   onKmzExport: () => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
 }) => {
+  const handleWrapper = (msg: string, task: () => void | Promise<void>) => {
+    if (runWithLoading) {
+      runWithLoading(msg, task);
+    } else {
+      task();
+    }
+  };
+
   return (
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 w-full">
       <button 
@@ -370,14 +381,20 @@ const UniversalExportBar = ({
       </button>
       <button 
         disabled={isExecuting}
-        onClick={() => downloadShapefile(data, filename || 'Export')} 
+        onClick={() => handleWrapper(
+          lang === 'ar' ? 'جاري تحضير وتصدير ملف Shapefile (SHP)...' : 'Creating Shapefile (SHP)...',
+          () => downloadShapefile(data, filename || 'Export')
+        )} 
         className="bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-emerald-500 hover:text-white active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
         <FolderArchive className="w-4 h-4 text-emerald-400" />
         {lang === 'ar' ? 'شيب فايل (SHP)' : 'Shapefile (SHP)'}
       </button>
       <button 
         disabled={isExecuting}
-        onClick={() => downloadDXF(data, filename || 'Export')} 
+        onClick={() => handleWrapper(
+          lang === 'ar' ? 'جاري تحضير وتصدير ملف DXF...' : 'Creating DXF file...',
+          () => downloadDXF(data, filename || 'Export')
+        )} 
         className="bg-white/5 border border-white/10 text-white/80 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
         <PenTool className="w-4 h-4 text-orange-400" />
         {lang === 'ar' ? 'DXF' : 'DXF'}
@@ -391,7 +408,10 @@ const UniversalExportBar = ({
       </button>
       <button 
         disabled={isExecuting}
-        onClick={() => downloadDataPDF(data, filename || 'Export', lang)} 
+        onClick={() => handleWrapper(
+          lang === 'ar' ? 'جاري توليد وتصدير ملف PDF...' : 'Generating PDF file...',
+          () => downloadDataPDF(data, filename || 'Export', lang)
+        )} 
         className="bg-white/5 border border-white/10 text-white/80 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
         <FileText className="w-4 h-4 text-[#D32F2F]" />
         {lang === 'ar' ? 'PDF' : 'PDF'}
@@ -2118,12 +2138,16 @@ const App: React.FC = () => {
     xColumn: '', yColumn: '', idColumn: '', linkColumn: '', attr1Column: '', attr2Column: ''
   });
   const [selectedHeaders, setSelectedHeaders] = useState<string[]>([]);
+  const [streetMappingCol, setStreetMappingCol] = useState<string>('');
+  const [districtMappingCol, setDistrictMappingCol] = useState<string>('');
   const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'column'>(() => loadSavedPreference('groupingMode', 'layer'));
   const [groupByColumnSelect, setGroupByColumnSelect] = useState<string>('');
   const [converterExportAsZip, setConverterExportAsZip] = useState<boolean>(() => loadSavedPreference('converterExportAsZip', false));
   const [optimizeForMyMaps, setOptimizeForMyMaps] = useState<boolean>(() => loadSavedPreference('optimizeForMyMaps', false));
   const [keepOriginalDescription, setKeepOriginalDescription] = useState<boolean>(() => loadSavedPreference('keepOriginalDescription', false));
   const [removeImagesOnly, setRemoveImagesOnly] = useState<boolean>(() => loadSavedPreference('removeImagesOnly', false));
+  const [skipStreetFetching, setSkipStreetFetching] = useState<boolean>(() => loadSavedPreference('skipStreetFetching', false));
+  const [converterGeometryFilter, setConverterGeometryFilter] = useState<'all' | 'Point' | 'LineString' | 'Polygon'>(() => loadSavedPreference('converterGeometryFilter', 'all') as any);
 
   // Auto-persist user preferences to localStorage
   useEffect(() => { savePreference('lang', lang); }, [lang]);
@@ -2136,10 +2160,17 @@ const App: React.FC = () => {
   useEffect(() => { savePreference('optimizeForMyMaps', optimizeForMyMaps); }, [optimizeForMyMaps]);
   useEffect(() => { savePreference('keepOriginalDescription', keepOriginalDescription); }, [keepOriginalDescription]);
   useEffect(() => { savePreference('removeImagesOnly', removeImagesOnly); }, [removeImagesOnly]);
+  useEffect(() => { savePreference('skipStreetFetching', skipStreetFetching); }, [skipStreetFetching]);
+  useEffect(() => { savePreference('converterGeometryFilter', converterGeometryFilter); }, [converterGeometryFilter]);
   useEffect(() => { savePreference('maxLen', maxLen); }, [maxLen]);
   useEffect(() => { savePreference('plannerMaxLen', plannerMaxLen); }, [plannerMaxLen]);
   useEffect(() => { savePreference('mergeThreshold', mergeThreshold); }, [mergeThreshold]);
   useEffect(() => { savePreference('groupingMode', groupingMode); }, [groupingMode]);
+
+  useEffect(() => {
+    setStreetMappingCol('');
+    setDistrictMappingCol('');
+  }, [activeFile?.filename]);
 
   const handleResetPreferences = () => {
     try {
@@ -2257,7 +2288,7 @@ const App: React.FC = () => {
   }, [globalPoints, plannedStreets, activeTab, mergeThreshold]);
 
 
-  const { executionStatusDistribution, diameterDistribution } = useMemo(() => {
+  const analyzerExportPoints = useMemo(() => {
     let rawPoints = (activeTab === 'street-planner' || (activeTab === 'analyzer' && !activeFile))
       ? (Array.isArray(plannedStreets) ? plannedStreets : [])
       : (Array.isArray(globalPoints) ? globalPoints : []);
@@ -2271,6 +2302,11 @@ const App: React.FC = () => {
         rawPoints = sewerPts.length > 0 ? sewerPts : rawPoints.filter(p => !isWaterPoint(p));
       }
     }
+    return rawPoints;
+  }, [globalPoints, plannedStreets, activeTab, activeFile, analyzerNetworkType]);
+
+  const { executionStatusDistribution, diameterDistribution } = useMemo(() => {
+    const rawPoints = analyzerExportPoints;
 
     const pointsToAnalyze = rawPoints.filter(pt => pt && pt.type === 'LineString' && !isBlackLine(pt));
     const statusTotals: Record<string, number> = {
@@ -2681,12 +2717,23 @@ const App: React.FC = () => {
       if (!canon || seenKeysSheet1.has(canon)) return;
       seenKeysSheet1.add(canon);
 
+      const firstPt = item.points[0];
+      const lastPt = item.points[item.points.length - 1];
+      const startX = (firstPt && firstPt.path && firstPt.path.length > 0) ? firstPt.path[0].x : (firstPt?.x || 0);
+      const startY = (firstPt && firstPt.path && firstPt.path.length > 0) ? firstPt.path[0].y : (firstPt?.y || 0);
+      const endX = (lastPt && lastPt.path && lastPt.path.length > 0) ? lastPt.path[lastPt.path.length - 1].x : (lastPt?.x || 0);
+      const endY = (lastPt && lastPt.path && lastPt.path.length > 0) ? lastPt.path[lastPt.path.length - 1].y : (lastPt?.y || 0);
+
       rowsSheet1.push({
         'PROJECTNAME': item.projectName || '',
         'PROJECTID': formatProjectIdForExcel(item.projectId),
         'CONTRACTOR': item.contractor || '',
         'م': rowsSheet1.length + 1,
         'Segment ID': item.idValue,
+        [lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X']: startX,
+        [lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y']: startY,
+        [lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X']: endX,
+        [lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y']: endY,
         'عدد العناصر (Items Count)': item.count,
         'إجمالي الطول (متر)': (item.totalLength).toFixed(2),
         'إجمالي الطول (كيلومتر)': (item.totalLength / 1000).toFixed(3),
@@ -2734,21 +2781,24 @@ const App: React.FC = () => {
           len = calculatePathLength(pt.path);
         }
 
+        const startX = (pt.path && pt.path.length > 0) ? pt.path[0].x : pt.x;
+        const startY = (pt.path && pt.path.length > 0) ? pt.path[0].y : pt.y;
+        const endX = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].x : pt.x;
+        const endY = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].y : pt.y;
+
         const rowData: Record<string, any> = {
           'PROJECTNAME': ptProjectName,
           'PROJECTID': formatProjectIdForExcel(ptProjectId),
           'CONTRACTOR': ptContractor,
           'م': itemCounter,
           'Segment ID': item.idValue,
+          [lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X']: startX,
+          [lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y']: startY,
+          [lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X']: endX,
+          [lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y']: endY,
           'الطول (متر)': len ? len.toFixed(2) : '0.00',
           'رابط موقع الخريطة (Google Maps Link)': getMapLink([pt])
         };
-        if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
-            rowData[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
-            rowData[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
-            rowData[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
-            rowData[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
-        }
         rowsSheet2.push(rowData);
       });
     });
@@ -3023,9 +3073,20 @@ const App: React.FC = () => {
       const street = extractAttrValueLocal(item.points, ['street', 'الشارع', 'اسم الشارع', 'streetname'], [/الشارع\s*[:=]\s*([^<\r\n]+)/i]);
       const mapUrl = getMapLink(item.points);
 
+      const firstPt = item.points[0];
+      const lastPt = item.points[item.points.length - 1];
+      const startX = (firstPt && firstPt.path && firstPt.path.length > 0) ? firstPt.path[0].x : (firstPt?.x || 0);
+      const startY = (firstPt && firstPt.path && firstPt.path.length > 0) ? firstPt.path[0].y : (firstPt?.y || 0);
+      const endX = (lastPt && lastPt.path && lastPt.path.length > 0) ? lastPt.path[lastPt.path.length - 1].x : (lastPt?.x || 0);
+      const endY = (lastPt && lastPt.path && lastPt.path.length > 0) ? lastPt.path[lastPt.path.length - 1].y : (lastPt?.y || 0);
+
       return {
         '#': index + 1,
         'Permit No': item.idValue,
+        [lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X']: startX,
+        [lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y']: startY,
+        [lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X']: endX,
+        [lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y']: endY,
         [lang === 'ar' ? 'عدد العناصر' : 'Items Count']: item.count,
         [lang === 'ar' ? 'إجمالي الطول (متر)' : 'Total Length (m)']: Math.round(item.totalLength),
         [lang === 'ar' ? 'إجمالي الطول (كم)' : 'Total Length (km)']: Number((item.totalLength / 1000).toFixed(3)),
@@ -3059,22 +3120,25 @@ const App: React.FC = () => {
       }
       const len = calculatePathLength(pt.path, pt.attributes) || 0;
 
+      const startX = (pt.path && pt.path.length > 0) ? pt.path[0].x : pt.x;
+      const startY = (pt.path && pt.path.length > 0) ? pt.path[0].y : pt.y;
+      const endX = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].x : pt.x;
+      const endY = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].y : pt.y;
+
       const rowData: Record<string, any> = {
         '#': index + 1,
         [lang === 'ar' ? 'اسم العنصر' : 'Name']: pt.name || `Point ${index + 1}`,
         'Permit No': permitVal,
         [lang === 'ar' ? 'النوع' : 'Type']: pt.type || 'LineString',
+        [lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X']: startX,
+        [lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y']: startY,
+        [lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X']: endX,
+        [lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y']: endY,
         [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: Math.round(len),
         [lang === 'ar' ? 'الشارع' : 'Street']: pt.street || pt.attributes?.STREETNAME || pt.attributes?.street || '-',
         [lang === 'ar' ? 'الحي' : 'District']: pt.district || pt.attributes?.DISTRICT || pt.attributes?.district || '-',
         [lang === 'ar' ? 'الرابط' : 'Link']: `https://www.google.com/maps?q=${pt.y},${pt.x}`
       };
-      if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
-          rowData[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
-          rowData[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
-          rowData[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
-          rowData[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
-      }
       return rowData;
     });
 
@@ -3214,25 +3278,16 @@ const App: React.FC = () => {
     };
   }, [activeFile, plannedStreets, globalPoints]);
 
-  const downloadExcelAnalysis = () => {
-    if (globalPoints.length === 0 && plannedStreets.length === 0) return;
+  const downloadExcelAnalysis = (ptsToExportParam?: GeoPoint[]) => {
+    if (globalPoints.length === 0 && plannedStreets.length === 0 && (!ptsToExportParam || ptsToExportParam.length === 0)) return;
 
     const workbook = XLSX.utils.book_new();
 
     if (activeTab === 'converter' && activeFile && (activeFile.type === 'excel' || activeFile.type === 'csv')) {
         const originalHeaders = activeFile.headers || [];
-        const filteredHeaders = originalHeaders.filter(h => selectedHeaders.includes(h));
-        const newHeaders = [
-            ...filteredHeaders,
-            lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)',
-            lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)',
-            lang === 'ar' ? 'الشارع' : 'Street',
-            lang === 'ar' ? 'الحي' : 'District',
-            lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'
-        ];
+        const pts = ptsToExportParam || globalPoints;
 
-        const combinedData = activeFile.data.map((row, idx) => {
-            const pt = globalPoints[idx];
+        const combinedData = pts.map((pt, idx) => {
             const lat = pt ? pt.y : 0;
             const lon = pt ? pt.x : 0;
             const street = pt ? (pt.street || '') : '';
@@ -3240,11 +3295,19 @@ const App: React.FC = () => {
             const link = pt ? `https://www.google.com/maps?q=${lat},${lon}` : '';
 
             const rowObj: any = {};
+            const row = (pt as any).originalRow || activeFile.data[idx] || [];
+
             originalHeaders.forEach((h, i) => {
                 if (selectedHeaders.includes(h)) {
                     const hLower = String(h || '').toLowerCase();
-                    if (['streetname', 'street', 'الشارع', 'اسم الشارع'].includes(hLower) && pt && pt.street) {
+                    if (streetMappingCol === h && pt && pt.street) {
                         rowObj[h] = pt.street;
+                    } else if (districtMappingCol === h && pt && pt.district) {
+                        rowObj[h] = pt.district;
+                    } else if (!streetMappingCol && ['streetname', 'street', 'الشارع', 'اسم الشارع'].includes(hLower) && pt && pt.street) {
+                        rowObj[h] = pt.street;
+                    } else if (!districtMappingCol && ['district', 'الحي'].includes(hLower) && pt && pt.district) {
+                        rowObj[h] = pt.district;
                     } else {
                         rowObj[h] = row[i];
                     }
@@ -3253,8 +3316,14 @@ const App: React.FC = () => {
 
             rowObj[lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)'] = lat;
             rowObj[lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)'] = lon;
-            rowObj[lang === 'ar' ? 'الشارع' : 'Street'] = street;
-            rowObj[lang === 'ar' ? 'الحي' : 'District'] = district;
+            
+            if (!streetMappingCol) {
+                rowObj[lang === 'ar' ? 'الشارع' : 'Street'] = street;
+            }
+            if (!districtMappingCol) {
+                rowObj[lang === 'ar' ? 'الحي' : 'District'] = district;
+            }
+            
             rowObj[lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'] = link;
 
             return rowObj;
@@ -3262,9 +3331,9 @@ const App: React.FC = () => {
 
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(combinedData), lang === 'ar' ? "البيانات المحولة كاملة" : "Full Converted Data");
     } else {
-        const rawExport = (activeTab === 'street-planner')
+        const rawExport = ptsToExportParam || ((activeTab === 'street-planner')
             ? [...globalPoints, ...plannedStreets]
-            : (activeTab === 'analyzer' && !activeFile ? plannedStreets : globalPoints);
+            : (activeTab === 'analyzer' && !activeFile ? plannedStreets : globalPoints));
         const pointsToExport = rawExport.filter(pt => !isBlackLine(pt));
 
         const detailedData = pointsToExport.map(pt => {
@@ -3273,6 +3342,11 @@ const App: React.FC = () => {
             const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
             let elementLength = pt.originalLength || 0;
             if (elementLength === 0 && pt.path) elementLength = calculatePathLength(pt.path);
+
+            const startX = (pt.path && pt.path.length > 0) ? pt.path[0].x : lon;
+            const startY = (pt.path && pt.path.length > 0) ? pt.path[0].y : lat;
+            const endX = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].x : lon;
+            const endY = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].y : lat;
 
             const rowObj: Record<string, any> = {
                 [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
@@ -3284,14 +3358,12 @@ const App: React.FC = () => {
                 [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
                 [lang === 'ar' ? 'خط العرض (Y)' : 'Latitude (Y)']: lat,
                 [lang === 'ar' ? 'خط الطول (X)' : 'Longitude (X)']: lon,
+                [lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X']: startX,
+                [lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y']: startY,
+                [lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X']: endX,
+                [lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y']: endY,
                 [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
                 [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
-            };
-            if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
-                rowObj[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
-                rowObj[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
-                rowObj[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
-                rowObj[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
             };
 
             // Unpack pt.attributes and pt.description key-value pairs as individual columns
@@ -3486,6 +3558,11 @@ const App: React.FC = () => {
             let elementLength = pt.originalLength || 0;
             if (elementLength === 0 && pt.path) elementLength = calculatePathLength(pt.path);
 
+            const startX = (pt.path && pt.path.length > 0) ? pt.path[0].x : lon;
+            const startY = (pt.path && pt.path.length > 0) ? pt.path[0].y : lat;
+            const endX = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].x : lon;
+            const endY = (pt.path && pt.path.length > 0) ? pt.path[pt.path.length - 1].y : lat;
+
             const rowObj: Record<string, any> = {
                 [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
                 [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
@@ -3496,14 +3573,12 @@ const App: React.FC = () => {
                 [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
                 [lang === 'ar' ? 'خط العرض (Y)' : 'Latitude (Y)']: lat,
                 [lang === 'ar' ? 'خط الطول (X)' : 'Longitude (X)']: lon,
+                [lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X']: startX,
+                [lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y']: startY,
+                [lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X']: endX,
+                [lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y']: endY,
                 [lang === 'ar' ? 'الطول (متر)' : 'Length (m)']: elementLength > 0 ? elementLength.toFixed(2) : '-',
                 [lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link']: googleMapsLink
-            };
-            if (pt.type === 'LineString' && pt.path && pt.path.length >= 2) {
-                rowObj[lang === 'ar' ? 'إحداثي البداية (Y)' : 'Start Y'] = pt.path[0].y;
-                rowObj[lang === 'ar' ? 'إحداثي البداية (X)' : 'Start X'] = pt.path[0].x;
-                rowObj[lang === 'ar' ? 'إحداثي النهاية (Y)' : 'End Y'] = pt.path[pt.path.length - 1].y;
-                rowObj[lang === 'ar' ? 'إحداثي النهاية (X)' : 'End X'] = pt.path[pt.path.length - 1].x;
             };
 
             const extracted = extractAllPointAttributes(pt);
@@ -3665,9 +3740,18 @@ const App: React.FC = () => {
     }, 400);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
+  const handleFileUpload = async (input: React.ChangeEvent<HTMLInputElement> | File | React.DragEvent) => {
+    let selectedFile: File | undefined;
+    if (input instanceof File) {
+      selectedFile = input;
+    } else if ('dataTransfer' in input && (input as React.DragEvent).dataTransfer?.files?.[0]) {
+      (input as React.DragEvent).preventDefault();
+      selectedFile = (input as React.DragEvent).dataTransfer.files[0];
+    } else if ('target' in input && (input as React.ChangeEvent<HTMLInputElement>).target?.files?.[0]) {
+      selectedFile = (input as React.ChangeEvent<HTMLInputElement>).target.files![0];
+    }
     if (!selectedFile) return;
+
     setLoading(true);
     setProgressPercent(5);
     setStatusMessage(lang === 'ar' ? `جاري قراءة ومعالجة الملف (${selectedFile.name})...` : `Reading and parsing file (${selectedFile.name})...`);
@@ -3675,7 +3759,7 @@ const App: React.FC = () => {
     setError(null);
     
     // Allow UI to render the loading overlay popup before parsing blocks thread
-    await new Promise(r => { setTimeout(r, 120); });
+    await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
 
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
@@ -3688,7 +3772,7 @@ const App: React.FC = () => {
 
       setProgressPercent(90);
       setStatusMessage(lang === 'ar' ? 'جاري تصنيف النقاط وتحويل الإحداثيات...' : 'Categorizing points and transforming coordinates...');
-      await new Promise(r => { setTimeout(r, 50); });
+      await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
 
       setActiveFile(result);
       setDataId(`${result.filename}-${Date.now()}`);
@@ -3742,31 +3826,59 @@ const App: React.FC = () => {
          console.warn("Failed to auto-display points on map", e);
       }
       setProgressPercent(100);
-    } catch (err: any) { setError(err.message); } finally { e.target.value = ''; setLoading(false); setProgressPercent(null); }
+      setStatusMessage(lang === 'ar' ? 'تمت معالجة وتحميل الملف بنجاح!' : 'File processed and loaded successfully!');
+      await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400))); });
+    } catch (err: any) {
+      setError(err.message || String(err));
+    } finally {
+      if ('target' in input && (input as React.ChangeEvent<HTMLInputElement>).target) {
+        try { (input as React.ChangeEvent<HTMLInputElement>).target.value = ''; } catch(e){}
+      }
+      setLoading(false);
+      setProgressPercent(null);
+    }
   };
 
   const handleLoadMyMapsLink = async () => {
     const trimmed = mapsLink.trim();
     if (!trimmed) return;
     setLoading(true);
-    setStatusMessage(lang === 'ar' ? "جاري جلب خريطة Google My Maps..." : "Fetching Google My Maps...");
+    setProgressPercent(10);
+    setStatusMessage(lang === 'ar' ? "جاري الاتصال بجوجل مابس وجلب البيانات..." : "Connecting to Google Maps & fetching data...");
     setAutoDetected(null);
     setError(null);
-    try {
-      const result = await fetchMyMapsKML(trimmed);
-      setActiveFile(result);
+    
+    // Yield to allow browser to render the global progress modal overlay
+    await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
 
+    try {
+      const result = await fetchMyMapsKML(trimmed, (pct) => {
+        setProgressPercent(pct);
+        if (pct < 50) {
+          setStatusMessage(lang === 'ar' ? `جاري تنزيل ملف الخريطة من جوجل [${pct}%]...` : `Downloading map file from Google [${pct}%]...`);
+        } else if (pct < 90) {
+          setStatusMessage(lang === 'ar' ? `جاري تحليل الطبقات والروابط الشبكية [${pct}%]...` : `Parsing layers & network links [${pct}%]...`);
+        } else {
+          setStatusMessage(lang === 'ar' ? `جاري إنشاء العناصر على الخريطة [${pct}%]...` : `Building map geometries [${pct}%]...`);
+        }
+      });
+
+      setActiveFile(result);
       let parsedPoints: GeoPoint[] = result.data;
       setGlobalPoints(parsedPoints);
       setDataId(`mymaps-${Date.now()}`);
 
-      setLoading(false);
+      setProgressPercent(100);
       setStatusMessage(lang === 'ar' ? 'تم جلب وتحميل الخريطة بنجاح!' : 'Map fetched and loaded successfully!');
+      await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400))); });
+      setLoading(false);
+      setProgressPercent(null);
       setTimeout(() => setStatusMessage(''), 2500);
     } catch (err: any) {
       setLoading(false);
+      setProgressPercent(null);
       setStatusMessage('');
-      setError(err?.message || "حدث خطأ أثناء تحميل الخريطة.");
+      setError(err?.message || (lang === 'ar' ? "حدث خطأ أثناء تحميل الخريطة." : "Error loading map."));
     }
   };
 
@@ -3875,6 +3987,27 @@ const App: React.FC = () => {
     }
   };
 
+  const runWithLoading = async (
+    statusMsg: string,
+    task: () => void | Promise<void>
+  ) => {
+    setLoading(true);
+    setProgressPercent(null);
+    setStatusMessage(statusMsg);
+    // Yield to browser event loop so React renders the high-priority modal overlay
+    await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+    try {
+      await task();
+    } catch (err: any) {
+      console.error("Task execution error:", err);
+      setError(err?.message || String(err));
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+      setStatusMessage('');
+    }
+  };
+
   const handleExportPolygonsOnly = async () => {
     if (splitPolygons.length === 0) return;
     const polyGeoPoints: GeoPoint[] = splitPolygons.map(p => ({
@@ -3886,7 +4019,10 @@ const App: React.FC = () => {
       color: p.color,
       layer: 'Split Boundaries'
     }));
-    await downloadKMZ(polyGeoPoints, "Split_Boundaries", { mode: 'none' });
+    await runWithLoading(
+      lang === 'ar' ? 'جاري تصدير المضلعات...' : 'Exporting polygons...',
+      () => downloadKMZ(polyGeoPoints, "Split_Boundaries", { mode: 'none' })
+    );
   };
 
   const executeWithStreetFetching = async (
@@ -3901,13 +4037,30 @@ const App: React.FC = () => {
 
     let newGlobalPoints = points.map(p => ({ ...p, attributes: { ...(p.attributes || {}) } }));
 
+    if (skipStreetFetching) {
+      if (callback) {
+        setLoading(true);
+        setStatusMessage(lang === 'ar' ? 'جاري تجهيز البيانات للتصدير...' : 'Preparing data for export...');
+        await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+        try {
+          await callback(newGlobalPoints);
+        } catch (e: any) {
+          setError(e.message || String(e));
+        } finally {
+          setLoading(false);
+          setStatusMessage('');
+        }
+      }
+      return newGlobalPoints;
+    }
+
     setLoading(true);
     setProgressPercent(0);
     setStatusMessage(lang === 'ar'
         ? `جاري بدء جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'})...`
         : `Starting Street Name Fetching (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'})...`
     );
-    await new Promise(r => { requestAnimationFrame(() => { setTimeout(r, 150); }); }); // Force UI to paint modal overlay
+    await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); }); // Force UI to paint modal overlay
 
     try {
       const total = newGlobalPoints.length;
@@ -3965,22 +4118,32 @@ const App: React.FC = () => {
                 const finalStreet = street && street !== "غير متوفر" ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
                 const finalDistrict = district && district !== "غير متوفر" ? district : (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
-                pt.attributes['STREETNAME'] = finalStreet;
-                pt.attributes['الشارع'] = finalStreet;
-                pt.attributes['اسم الشارع'] = finalStreet;
+                if (streetMappingCol) {
+                    pt.attributes[streetMappingCol] = finalStreet;
+                } else {
+                    pt.attributes['STREETNAME'] = finalStreet;
+                    pt.attributes['الشارع'] = finalStreet;
+                    pt.attributes['اسم الشارع'] = finalStreet;
+                    safeHeaders.forEach(h => {
+                      const lowerH = String(h || '').toLowerCase();
+                      if (['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
+                        pt.attributes[h] = finalStreet;
+                      }
+                    });
+                }
 
-                pt.attributes['DISTRICT'] = finalDistrict;
-                pt.attributes['الحي'] = finalDistrict;
-
-                safeHeaders.forEach(h => {
-                  const lowerH = String(h || '').toLowerCase();
-                  if (['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
-                    pt.attributes[h] = finalStreet;
-                  }
-                  if (['district', 'الحي'].includes(lowerH) || h === 'الحي') {
-                    pt.attributes[h] = finalDistrict;
-                  }
-                });
+                if (districtMappingCol) {
+                    pt.attributes[districtMappingCol] = finalDistrict;
+                } else {
+                    pt.attributes['DISTRICT'] = finalDistrict;
+                    pt.attributes['الحي'] = finalDistrict;
+                    safeHeaders.forEach(h => {
+                      const lowerH = String(h || '').toLowerCase();
+                      if (['district', 'الحي'].includes(lowerH) || h === 'الحي') {
+                        pt.attributes[h] = finalDistrict;
+                      }
+                    });
+                }
             }));
 
             const detailMsg = lastResolvedDetail 
@@ -3995,19 +4158,45 @@ const App: React.FC = () => {
             // Small delay between batches to respect network rate limits & yield to UI thread
             await new Promise(res => setTimeout(res, 25));
         }
-        setGlobalPoints(newGlobalPoints);
+        setGlobalPoints(prev => {
+           const next = [...prev];
+           newGlobalPoints.forEach(np => {
+               const idx = next.findIndex(p => p.id === np.id);
+               if (idx !== -1) {
+                   next[idx] = np;
+               }
+           });
+           return next;
+        });
+        setPlannedStreets(prev => {
+           const next = [...prev];
+           let changed = false;
+           newGlobalPoints.forEach(np => {
+               const idx = next.findIndex(p => p.id === np.id);
+               if (idx !== -1) {
+                   next[idx] = np;
+                   changed = true;
+               }
+           });
+           return changed ? next : prev;
+        });
       }
-    } catch (err) {
+
+      if (callback) {
+        setProgressPercent(100);
+        setStatusMessage(lang === 'ar' ? 'جاري تحضير وتنسيق الملف للتنزيل...' : 'Preparing and formatting file for download...');
+        await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+        await callback(newGlobalPoints);
+      }
+    } catch (err: any) {
       console.error("Error in executeWithStreetFetching:", err);
+      setError(err?.message || String(err));
     } finally {
       setLoading(false);
       setProgressPercent(null);
       setStatusMessage('');
     }
 
-    if (callback) {
-       await callback(newGlobalPoints);
-    }
     return newGlobalPoints;
   };
 
@@ -4085,7 +4274,7 @@ const App: React.FC = () => {
     setLoading(true);
     setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? `جاري تحليل مضلع الحدود من الملف (${selectedFile.name})...` : `Analyzing boundary polygon from file (${selectedFile.name})...`);
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
     try {
         const fName = String(selectedFile.name || '').toLowerCase();
         let result: ParsedFile;
@@ -4113,7 +4302,7 @@ const App: React.FC = () => {
           setDataId(`boundary-${Date.now()}`);
           setStatusMessage(lang === 'ar' ? 'تم تحميل الحدود بنجاح.' : 'Boundary loaded successfully.');
         } else throw new Error(t.errors.noBoundaryInKml);
-    } catch (err: any) { setError(err.message); } finally { e.target.value = ''; setLoading(false); setProgressPercent(null); setTimeout(() => setStatusMessage(''), 3000); }
+    } catch (err: any) { setError(err.message); } finally { if (e && e.target) { try { e.target.value = ''; } catch(err){} } setLoading(false); setProgressPercent(null); setTimeout(() => setStatusMessage(''), 3000); }
   };
 
   const handleLoadSampleGDB = () => {
@@ -4170,11 +4359,15 @@ const App: React.FC = () => {
         </div>
 
         {uploadSourceMode === 'file' ? (
-          <label className="block border-2 border-dashed border-accent/40 rounded-[2.5rem] p-10 text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group relative overflow-hidden">
+          <label 
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleFileUpload}
+            className="block border-2 border-dashed border-accent/40 rounded-[2.5rem] p-10 text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group relative overflow-hidden"
+          >
             <input type="file" className="hidden" onChange={handleFileUpload} />
             <Upload className="w-10 h-10 mx-auto mb-4 text-accent group-hover:scale-110 transition-all" />
-            <span className="text-[11px] font-black text-white block leading-tight px-4">{activeFile ? activeFile.filename : (lang === 'ar' ? 'ارفق الملف هنا (Excel, DXF, KMZ, KML)' : 'Upload Data Source (Excel, DXF, KMZ, KML)')}</span>
-            <span className="text-[9px] text-accent mt-3 block font-bold uppercase tracking-widest">{activeFile ? (lang === 'ar' ? 'انقر لتغيير الملف' : 'Change File') : (lang === 'ar' ? 'انقر لاختيار الملف' : 'Select File')}</span>
+            <span className="text-[11px] font-black text-white block leading-tight px-4">{activeFile ? activeFile.filename : (lang === 'ar' ? 'ارفق أو اسحب الملف هنا (Excel, DXF, KMZ, KML)' : 'Upload or Drop Data Source (Excel, DXF, KMZ, KML)')}</span>
+            <span className="text-[9px] text-accent mt-3 block font-bold uppercase tracking-widest">{activeFile ? (lang === 'ar' ? 'انقر أو اسحب لتغيير الملف' : 'Click or drop to change file') : (lang === 'ar' ? 'انقر أو اسحب لاختيار الملف' : 'Select or drop file')}</span>
           </label>
         ) : (
           <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 shadow-xl space-y-4 text-right" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
@@ -4585,6 +4778,52 @@ const App: React.FC = () => {
                                     </div>
                                 )}
 
+                                {/* Street/District Mapping Options */}
+                                {activeFile.headers && activeFile.headers.length > 0 && (
+                                    <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4 animate-in slide-in-from-bottom">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <MapPin className="w-4 h-4 text-accent" />
+                                            <h3 className="text-white font-black text-sm">{lang === 'ar' ? 'ربط بيانات العنوان (اختياري)' : 'Address Data Mapping (Optional)'}</h3>
+                                        </div>
+                                        <p className="text-[9px] text-white/40 leading-relaxed font-bold">
+                                            {lang === 'ar' ? 'يمكنك ربط الشارع والحي المستخرجين من الإحداثيات بأعمدة موجودة مسبقاً لاستبدال محتواها، أو اتركها فارغة لإنشاء أعمدة جديدة.' : 'You can map the extracted Street and District to existing columns to replace their content, or leave empty to create new columns.'}
+                                        </p>
+                                        
+                                        <div className="flex gap-4">
+                                            <div className="flex-1 space-y-2">
+                                                <label className="text-[10px] font-bold text-white/60">
+                                                    {lang === 'ar' ? 'الشارع' : 'Street'}
+                                                </label>
+                                                <select
+                                                    value={streetMappingCol}
+                                                    onChange={(e) => setStreetMappingCol(e.target.value)}
+                                                    className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2.5 text-[11px] font-bold text-white outline-none"
+                                                >
+                                                    <option value="">{lang === 'ar' ? '-- بدون ربط (عمود جديد) --' : '-- No mapping (New Column) --'}</option>
+                                                    {activeFile.headers.map(h => (
+                                                        <option key={h} value={h}>{h}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div className="flex-1 space-y-2">
+                                                <label className="text-[10px] font-bold text-white/60">
+                                                    {lang === 'ar' ? 'الحي' : 'District'}
+                                                </label>
+                                                <select
+                                                    value={districtMappingCol}
+                                                    onChange={(e) => setDistrictMappingCol(e.target.value)}
+                                                    className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2.5 text-[11px] font-bold text-white outline-none"
+                                                >
+                                                    <option value="">{lang === 'ar' ? '-- بدون ربط (عمود جديد) --' : '-- No mapping (New Column) --'}</option>
+                                                    {activeFile.headers.map(h => (
+                                                        <option key={h} value={h}>{h}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
                                  {/* Custom Folder Grouping Options */}
                                 {activeFile.headers && activeFile.headers.length > 0 && (
                                     <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4 animate-in slide-in-from-bottom">
@@ -4751,25 +4990,84 @@ const App: React.FC = () => {
                                                 )} />
                                             </button>
                                         </div>
+
                                     </div>
                                 )}
 
-                                <UniversalExportBar 
-                                  data={globalPoints} 
-                                  filename={activeFile.filename} 
-                                  lang={lang} 
-                                  isExecuting={loading}
-                                  onExcelExport={() => executeWithStreetFetching(globalPoints, selectedHeaders, downloadExcelAnalysis)}
-                                  onKmzExport={() => {
-                                      executeWithStreetFetching(globalPoints, selectedHeaders, () => {
-                                          if (converterExportAsZip && groupingMode !== 'none') {
-                                              downloadKMZGroupedZip(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
-                                          } else {
-                                              downloadKMZ(globalPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
-                                          }
-                                      });
-                                  }}
-                                />
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+                                  <div className="bg-[#08202b] p-4 rounded-2xl border border-accent/20 flex flex-col sm:flex-row items-center justify-between gap-3">
+                                    <div className="flex items-center gap-3 w-full sm:w-auto">
+                                      <div className="p-2 bg-accent/20 rounded-full shrink-0">
+                                        <Zap className="w-5 h-5 text-accent" />
+                                      </div>
+                                      <div className="text-right sm:text-left flex-1">
+                                        <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'وضع التصدير السريع' : 'Fast Export Mode'}</h4>
+                                        <p className="text-white/50 text-[9px] mt-0.5">
+                                          {lang === 'ar' 
+                                            ? 'تصدير الملفات أسرع بكثير (تخطي عملية جلب وتحديث أسماء الشوارع والأحياء)' 
+                                            : 'Significantly faster exports (Skips fetching and updating street & district names)'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <button 
+                                      type="button"
+                                      onClick={(e) => { e.preventDefault(); setSkipStreetFetching(!skipStreetFetching); }}
+                                      className={cn(
+                                        "relative inline-flex h-8 w-14 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-white/75",
+                                        skipStreetFetching ? "bg-accent" : "bg-white/20"
+                                      )}
+                                    >
+                                      <span className="sr-only">Toggle fast export</span>
+                                      <span
+                                        aria-hidden="true"
+                                        className={cn(
+                                          "pointer-events-none inline-block h-7 w-7 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out",
+                                          skipStreetFetching 
+                                            ? (lang === 'ar' ? "-translate-x-1" : "translate-x-6")
+                                            : (lang === 'ar' ? "translate-x-6" : "translate-x-0")
+                                        )}
+                                      />
+                                    </button>
+                                  </div>
+
+                                  <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col justify-center gap-2">
+                                    <label className="text-white font-black text-sm">
+                                      {lang === 'ar' ? 'تصدير طبقة محددة (فلتر):' : 'Export Specific Geometry Layer:'}
+                                    </label>
+                                    <select
+                                      value={converterGeometryFilter}
+                                      onChange={(e: any) => setConverterGeometryFilter(e.target.value)}
+                                      className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2 text-[11px] font-bold text-white outline-none"
+                                    >
+                                      <option value="all">{lang === 'ar' ? 'الكل (جميع الأنواع)' : 'All (No Filter)'}</option>
+                                      <option value="LineString">{lang === 'ar' ? 'مسارات وخطوط (Lines)' : 'Lines'}</option>
+                                      <option value="Polygon">{lang === 'ar' ? 'مضلعات (Polygons)' : 'Polygons'}</option>
+                                      <option value="Point">{lang === 'ar' ? 'نقاط وعلامات (Points)' : 'Points'}</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {(() => {
+                                  const filteredPoints = converterGeometryFilter === 'all' ? globalPoints : globalPoints.filter(p => p.type === converterGeometryFilter || (!p.type && converterGeometryFilter === 'Point'));
+                                  return (
+                                    <UniversalExportBar 
+                                      data={filteredPoints} 
+                                      filename={activeFile.filename} 
+                                      lang={lang} 
+                                      isExecuting={loading}
+                                      onExcelExport={() => executeWithStreetFetching(filteredPoints, selectedHeaders, downloadExcelAnalysis)}
+                                      onKmzExport={() => {
+                                          executeWithStreetFetching(filteredPoints, selectedHeaders, () => {
+                                              if (converterExportAsZip && groupingMode !== 'none') {
+                                                  downloadKMZGroupedZip(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
+                                              } else {
+                                                  downloadKMZ(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
+                                              }
+                                          });
+                                      }}
+                                    />
+                                  );
+                                })()}
                             </div>
                         )}
                     </div>
@@ -5510,7 +5808,7 @@ const App: React.FC = () => {
                                           <span>{lang === 'ar' ? 'تصدير طبقة W_MAINLINE كـ KMZ منفصل' : 'Export W_MAINLINE Only to KMZ'}</span>
                                       </button>
                                       <button
-                                          onClick={() => generateWMainlinePPTX(wMainlineStats, activeFile?.filename || "Water_Mainline_Project", lang)}
+                                          onClick={() => runWithLoading(lang === 'ar' ? 'جاري تجهيز وتصدير العرض التقديمي (PPTX)...' : 'Preparing PPTX presentation...', () => generateWMainlinePPTX(wMainlineStats, activeFile?.filename || "Water_Mainline_Project", lang))}
                                           className="w-full bg-[#0b2d3d] hover:bg-[#113f54] border-2 border-[#00c8b3]/30 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg hover:border-[#00c8b3] transition-all text-xs group"
                                       >
                                           <Presentation className="w-5 h-5 text-accent group-hover:rotate-6 transition-transform" />
@@ -5617,7 +5915,7 @@ const App: React.FC = () => {
                                          <span>{lang === 'ar' ? 'تصدير طبقة WW_MAINLINE كـ KMZ منفصل' : 'Export WW_MAINLINE Only to KMZ'}</span>
                                      </button>
                                      <button
-                                         onClick={() => generateWWMainlinePPTX(wwMainlineStats, activeFile?.filename || "Sewer_Mainline_Project", lang)}
+                                         onClick={() => runWithLoading(lang === 'ar' ? 'جاري تجهيز وتصدير العرض التقديمي (PPTX)...' : 'Preparing PPTX presentation...', () => generateWWMainlinePPTX(wwMainlineStats, activeFile?.filename || "Sewer_Mainline_Project", lang))}
                                          className="w-full bg-[#1e053f] hover:bg-[#2e0b5f] border-2 border-[#d946ef]/30 text-[#d946ef] font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-lg hover:border-[#d946ef] transition-all text-xs group"
                                      >
                                          <Presentation className="w-5 h-5 text-[#d946ef] group-hover:rotate-6 transition-transform" />
@@ -5629,23 +5927,24 @@ const App: React.FC = () => {
 
                             <div className="h-6" />
                             <UniversalExportBar
-                                data={!activeFile ? plannedStreets : globalPoints}
+                                data={analyzerExportPoints}
                                 filename={activeFile?.filename || 'Analyzed'}
                                 lang={lang}
                                 isExecuting={loading}
-                                onExcelExport={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, downloadExcelAnalysis)}
-                                onKmzExport={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZ(!activeFile ? plannedStreets : globalPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
+                                runWithLoading={runWithLoading}
+                                onExcelExport={() => executeWithStreetFetching(analyzerExportPoints, selectedHeaders, downloadExcelAnalysis)}
+                                onKmzExport={() => executeWithStreetFetching(analyzerExportPoints, selectedHeaders, () => { downloadKMZ(analyzerExportPoints, `Analyzed_${activeFile?.filename || 'File'}`, { mode: 'none', groupByAttribute: 'color', canonicalColorMap: canonicalColorMap, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
                             />
                             
                             <button 
-                                onClick={() => executeWithStreetFetching(!activeFile ? plannedStreets : globalPoints, selectedHeaders, () => { downloadKMZGroupedZip(!activeFile ? plannedStreets : globalPoints, activeFile?.filename || 'Analyzed', { mode: 'none', groupByAttribute: 'color', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile?.headers, selectedHeaders) })}
+                                onClick={() => executeWithStreetFetching(analyzerExportPoints, selectedHeaders, () => { downloadKMZGroupedZip(analyzerExportPoints, activeFile?.filename || 'Analyzed', { mode: 'none', groupByAttribute: 'color', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile?.headers, selectedHeaders) })}
                                 className="w-full bg-[#0b2d3d] border border-blue-400/40 text-blue-400 font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-blue-500 hover:text-white transition-all text-sm group mt-3"
                             >
                                 <FolderArchive className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'تصدير KMZ مقسم حسب الألوان (ملف ZIP منفصل)' : 'Export KMZ Grouped by Colors (ZIP)'}
                             </button>
 
-                            <button onClick={downloadExcelWithStreets} className="w-full bg-[#0b2d3d] border border-accent/40 text-accent font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-sm group mt-3">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري تجهيز وتصدير ملف الإكسل...' : 'Preparing Excel export...', downloadExcelWithStreets)} className="w-full bg-[#0b2d3d] border border-accent/40 text-accent font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-sm group mt-3">
                                 <MapPinIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'تصدير إكسل مع أسماء الشوارع' : 'Export Excel with Streets'}
                             </button>
@@ -5841,7 +6140,7 @@ const App: React.FC = () => {
 
                                     {/* Export Excel for Segment ID report */}
                                     <button
-                                      onClick={exportSegmentIdReportExcel}
+                                      onClick={() => runWithLoading(lang === 'ar' ? 'جاري تصدير تقرير Segment ID (Excel)...' : 'Exporting Segment ID report (Excel)...', exportSegmentIdReportExcel)}
                                       className="w-full bg-[#9000FF]/20 border border-[#9000FF]/40 hover:bg-[#9000FF]/40 text-[#d8b4fe] font-black py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all mt-2"
                                     >
                                       <FileSpreadsheet className="w-4 h-4 text-[#d8b4fe]" />
@@ -6011,7 +6310,7 @@ const App: React.FC = () => {
 
                                     {/* Export Excel for Permit No report */}
                                     <button
-                                      onClick={exportPermitNoReportExcel}
+                                      onClick={() => runWithLoading(lang === 'ar' ? 'جاري تصدير تقرير أرقام التراخيص (Excel)...' : 'Exporting Permit No report (Excel)...', exportPermitNoReportExcel)}
                                       className="w-full bg-[#FF6D00]/20 border border-[#FF6D00]/40 hover:bg-[#FF6D00]/40 text-[#ffc499] font-black py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all mt-2"
                                     >
                                       <FileSpreadsheet className="w-4 h-4 text-[#ffc499]" />
@@ -6099,14 +6398,18 @@ const App: React.FC = () => {
                     </div>
 
                     {uploadSourceMode === 'file' ? (
-                      <label className="block p-8 border-2 border-dashed border-accent/40 rounded-[3rem] text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group shadow-2xl">
+                      <label 
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={handleFileUpload}
+                        className="block p-8 border-2 border-dashed border-accent/40 rounded-[3rem] text-center cursor-pointer hover:border-accent bg-[#0b2d3d]/40 transition-all group shadow-2xl"
+                      >
                         <input type="file" className="hidden" onChange={handleFileUpload} />
                         <Upload className="w-10 h-10 mx-auto mb-3 text-accent group-hover:scale-110 transition-all" />
                         <span className="text-[12px] font-black text-white block leading-tight px-6 uppercase tracking-wider">
-                          {lang === 'ar' ? 'ارفع ملف (.GDB, .ZIP, .KMZ, .KML, .DXF) لتحليله' : 'Drop file to analyze'}
+                          {lang === 'ar' ? 'ارفع أو اسحب ملف (.GDB, .ZIP, .KMZ, .KML, .DXF) لتحليله' : 'Drop or select file to analyze'}
                         </span>
                         <span className="text-[9px] text-accent mt-2 block font-bold uppercase tracking-[0.2em]">
-                          {lang === 'ar' ? 'انقر للاختيار' : 'Click to select'}
+                          {lang === 'ar' ? 'انقر أو اسحب للاختيار' : 'Click or drop to select'}
                         </span>
                       </label>
                     ) : (
@@ -7700,7 +8003,7 @@ export const CheckResultModalPopup: React.FC<{
 
       {/* Global High-Priority Progress & Loading Modal Overlay */}
       {loading && (
-        <div className="fixed inset-0 z-[999999] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto">
+        <div className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto" style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 9999999 }}>
           <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-accent/50 rounded-[3rem] shadow-[0_0_80px_rgba(220,177,60,0.35)] max-w-md w-full animate-in zoom-in-95 duration-200 dir-rtl" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
             <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
               <div className="absolute inset-0 rounded-full border-4 border-accent/20 border-t-accent animate-spin" />
