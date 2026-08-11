@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map } from 'lucide-react';
+import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map as MapIcon } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { OverlapResult } from '../services/geometryService';
 import { downloadKMZ } from '../services/kmlService';
@@ -405,7 +405,7 @@ const ProcessingModal = ({ lang }: { lang: 'ar' | 'en' }) => {
 
           {/* Floating elements */}
           <div className="absolute -top-2 -left-4 bg-white border border-slate-100 p-2 rounded-lg shadow-lg animate-bounce" style={{ animationDelay: '0ms' }}>
-            <Map className="w-5 h-5 text-[#38bdf8]" />
+            <MapIcon className="w-5 h-5 text-[#38bdf8]" />
           </div>
           <div className="absolute -top-6 right-8 bg-white border border-slate-100 p-2 rounded-lg shadow-lg animate-bounce" style={{ animationDelay: '200ms' }}>
              <FolderArchive className="w-5 h-5 text-slate-600" />
