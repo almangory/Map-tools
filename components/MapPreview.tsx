@@ -13,6 +13,9 @@ function cn(...inputs: ClassValue[]) {
 }
 
 export interface MapPreviewProps {
+  onPointClick?: (pt: GeoPoint) => void;
+  layerOpacity?: number;
+  is3DMode?: boolean;
   globalBaseMap?: BaseMapType;
   points: GeoPoint[];
   lang: Language;
@@ -21,6 +24,8 @@ export interface MapPreviewProps {
   onPolygonComplete?: (polygon: {x: number; y: number}[]) => void;
   focusedColor?: string | null;
   focusedPoint?: GeoPoint | null;
+  selectedProfilePoints?: GeoPoint[];
+  hoveredElevationPoint?: {lat: number, lng: number, z?: number, dist?: number, slope?: number} | null;
   issueItems?: GeoPoint[];
   showIssuesOnly?: boolean;
   onToggleShowIssuesOnly?: (val: boolean) => void;
@@ -47,18 +52,94 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   onPolygonComplete, 
   focusedColor, 
   focusedPoint,
+  selectedProfilePoints = [],
+  hoveredElevationPoint,
   issueItems,
   showIssuesOnly = false,
   onToggleShowIssuesOnly,
   overlapResults, 
   globalBaseMap,
-  onClearAudit
+  layerOpacity = 1,
+  is3DMode = false,
+  onClearAudit,
+  onPointClick
 }) => {
+
+  useEffect(() => {
+    if (!mapInstance.current) return;
+
+    if (hoveredElevationPoint && isValidLatLng(hoveredElevationPoint.lat, hoveredElevationPoint.lng)) {
+      const { lat, lng, z, dist, slope } = hoveredElevationPoint;
+      const zText = z !== undefined ? `${z.toFixed(2)} ${lang === 'ar' ? 'م' : 'm'}` : '';
+      const distText =
+        dist !== undefined
+          ? dist >= 1000
+            ? `${(dist / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}`
+            : `${dist.toFixed(0)} ${lang === 'ar' ? 'م' : 'm'}`
+          : '';
+      const slopeText = slope !== undefined ? `${slope.toFixed(1)}%` : '0.0%';
+
+      // Ensure map pans if point is off-screen
+      const bounds = mapInstance.current.getBounds();
+      if (!bounds.contains([lat, lng])) {
+        mapInstance.current.panTo([lat, lng], { animate: true, duration: 0.15 });
+      }
+
+      const iconHtml = `
+        <div style="width: 200px; height: 110px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; pointer-events: none;">
+          <!-- Google Earth Floating Label Stack -->
+          <div style="background-color: rgba(10, 20, 28, 0.95); border: 2px solid #ef4444; color: #ffffff; padding: 5px 10px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.8); text-align: center; white-space: nowrap; margin-bottom: 2px;">
+            <div style="font-weight: 900; font-size: 13px; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.8);">
+              ${zText}
+            </div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 800; font-size: 11px; color: #e2e8f0; margin-top: 2px;">
+              ${distText ? `<span>${distText}</span>` : ''}
+              <span style="background-color: #991b1b; color: #fef2f2; padding: 1px 6px; border-radius: 6px; font-weight: 900; border: 1px solid #ef4444;">${slopeText}</span>
+            </div>
+          </div>
+
+          <!-- Google Earth Signature Red Pointer Arrow -->
+          <div style="width: 0; height: 0; border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #dc2626; filter: drop-shadow(0px 4px 6px rgba(0,0,0,0.9));"></div>
+
+          <!-- Target Ground Ring -->
+          <div style="position: relative; width: 16px; height: 16px; margin-top: -2px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 22px; height: 22px; background-color: #ef4444; border-radius: 50%; opacity: 0.8; animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="position: relative; width: 12px; height: 12px; background-color: #dc2626; border: 2px solid #ffffff; border-radius: 50%; box-shadow: 0 0 12px #ef4444;"></div>
+          </div>
+        </div>
+      `;
+
+      const customIcon = L.divIcon({
+        className: 'leaflet-hover-pointer-icon',
+        html: iconHtml,
+        iconSize: [200, 110],
+        iconAnchor: [100, 110]
+      });
+
+      if (hoverMarkerRef.current) {
+        mapInstance.current.removeLayer(hoverMarkerRef.current);
+        hoverMarkerRef.current = null;
+      }
+
+      hoverMarkerRef.current = L.marker([lat, lng], {
+        icon: customIcon,
+        interactive: false,
+        zIndexOffset: 20000
+      }).addTo(mapInstance.current);
+    } else {
+      if (hoverMarkerRef.current && mapInstance.current) {
+        mapInstance.current.removeLayer(hoverMarkerRef.current);
+        hoverMarkerRef.current = null;
+      }
+    }
+  }, [hoveredElevationPoint, lang]);
+
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const layerGroup = useRef<L.LayerGroup | null>(null);
   const drawLayerGroup = useRef<L.LayerGroup | null>(null);
   const currentDrawGroup = useRef<L.LayerGroup | null>(null);
+  const hoverMarkerRef = useRef<L.Marker | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const issueMarkersMap = useRef<Map<string | number, L.Marker | L.CircleMarker | L.Polyline>>(new Map());
   
@@ -297,6 +378,28 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     }
   }, [focusedPoint]);
 
+  
+  useEffect(() => {
+    if (!mapInstance.current) return;
+    const panes = ['overlayPane', 'markerPane', 'shadowPane', 'popupPane'];
+    panes.forEach(pane => {
+      const el = mapInstance.current.getPane(pane);
+      if (el) {
+        el.style.opacity = layerOpacity.toString();
+      }
+    });
+  }, [layerOpacity]);
+
+  useEffect(() => {
+    if (!mapContainer.current) return;
+    if (is3DMode) {
+      mapContainer.current.style.transform = 'perspective(1000px) rotateX(60deg) scale(1.1)';
+      mapContainer.current.style.transformOrigin = 'center 70%';
+    } else {
+      mapContainer.current.style.transform = 'none';
+    }
+  }, [is3DMode]);
+
   useEffect(() => {
     if (globalBaseMap) {
       setBaseMap(globalBaseMap);
@@ -489,12 +592,28 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             .map(p => [p.y, p.x] as [number, number]);
           
           if (latLngs.length >= 2) {
+            const isProfileSelected = selectedProfilePoints?.some(sp => sp.id === pt.id);
+            const profileSeqIndex = selectedProfilePoints ? selectedProfilePoints.findIndex(sp => sp.id === pt.id) : -1;
+
             marker = L.polyline(latLngs, { 
-              color: hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor), 
-              weight: hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 4), 
-              opacity: hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8),
+              color: isProfileSelected ? '#dcb13c' : (hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor)), 
+              weight: isProfileSelected ? 10 : (hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 4)), 
+              opacity: isProfileSelected ? 1 : (hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8)),
               dashArray: hasIssue ? '10, 8' : undefined
             });
+
+            // If feature is selected in profile, place a sequence badge at the midpoint
+            if (isProfileSelected && profileSeqIndex !== -1) {
+              const midIdx = Math.floor(latLngs.length / 2);
+              const midPt = latLngs[midIdx];
+              const badgeIcon = L.divIcon({
+                className: 'bg-transparent border-0',
+                html: `<div style="position:relative; display:flex; align-items:center; justify-content:center; width:28px; height:28px; background-color:#dcb13c; color:#0b2d3d; font-weight:900; font-size:12px; border:2px solid #ffffff; border-radius:9999px; box-shadow:0 4px 12px rgba(220,177,60,0.8);">#${profileSeqIndex + 1}</div>`,
+                iconSize: [28, 28],
+                iconAnchor: [14, 14]
+              });
+              L.marker(midPt, { icon: badgeIcon, interactive: false }).addTo(layerGroup.current!);
+            }
 
             // If feature has issue, place a prominent pulsing ⚠️ warning marker at line midpoint
             if (hasIssue) {
@@ -558,6 +677,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         
         if (marker) {
           marker.bindPopup(popupContent);
+          marker.on('click', () => { onPointClick?.(pt); });
           marker.bindTooltip(buildTooltipContent(pt, lang, hasIssue), {
             sticky: true,
             direction: 'top',
@@ -615,7 +735,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showIssuesOnly]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showIssuesOnly, selectedProfilePoints]);
 
   const toggleDrawing = () => {
     if (isDrawing) {

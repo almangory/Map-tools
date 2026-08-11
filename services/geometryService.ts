@@ -159,6 +159,14 @@ export const clipLineToPolygon = (line: {x: number, y: number}[], polygon: {x: n
     return clippedLines;
 };
 
+
+export const splitLineIntoParts = (path: {x: number, y: number, z?: number}[], partsCount: number): {x: number, y: number, z?: number}[][] => {
+    if (!path || !Array.isArray(path) || path.length < 2 || partsCount <= 1) return path ? [path] : [];
+    const totalLen = calculatePathLength(path);
+    if (totalLen <= 0) return [path];
+    return splitLineString(path, totalLen / partsCount);
+};
+
 export const splitLineString = (path: {x: number, y: number, z?: number}[], maxLength: number): {x: number, y: number, z?: number}[][] => {
     if (!path || !Array.isArray(path) || path.length < 2) return path ? [path] : [];
     
@@ -448,7 +456,7 @@ export const getReverseGeocode = async (
 export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], shouldClip: boolean = true, highwayTypes: string[] = []): Promise<GeoPoint[]> => {
     if (polygon.length < 3) throw new Error("يرجى تحديد منطقة صالحة على الخريطة أولاً.");
     
-    const polyStr = polygon.map(p => `${p.y} ${p.x}`).join(' ');
+    const polyStr = polygon.map(p => `${p.y.toFixed(5)} ${p.x.toFixed(5)}`).join(' ');
     
     // بناء الفلتر حسب الأنواع المختارة
     let highwayFilter = highwayTypes.length > 0 
@@ -462,7 +470,7 @@ export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], s
         'https://lz4.overpass-api.de/api/interpreter',
         'https://z.overpass-api.de/api/interpreter',
         'https://overpass.kumi.systems/api/interpreter',
-        'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+        
     ];
 
     let data = null;
@@ -474,7 +482,7 @@ export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], s
                 method: 'POST', 
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: `data=${encodeURIComponent(query)}`
-            }, 12000);
+            }, 25000);
             if (response && response.ok) {
                 data = await response.json();
                 break;

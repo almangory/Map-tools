@@ -27,7 +27,7 @@ import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
-import { getReverseGeocode, calculatePathLength, splitLineString, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, detectNetworkGaps, NetworkGap, OverlapResult, isBlackLine } from './services/geometryService';
+import { getReverseGeocode, calculatePathLength, splitLineString, splitLineIntoParts, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, detectNetworkGaps, NetworkGap, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
 import { formatProjectIdForExcel, cleanSegmentId, getCanonicalSegmentKey } from './services/storageService';
 import { downloadDXF } from './services/dxfExportService';
@@ -35,12 +35,14 @@ import { downloadDataPDF, downloadNetworkGapsPDF } from './services/pdfExportSer
 import { downloadShapefile } from './services/shapefileExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
 import MapPreview from './components/MapPreview';
+import { ElevationProfileModal } from './components/ElevationProfileModal';
 import { DataFormatter } from './components/DataFormatter';
 import { SegmentLengthChart } from './components/SegmentLengthChart';
 import { PermitLengthChart } from './components/PermitLengthChart';
 import { FileComparator } from './components/FileComparator';
 import { LineDrawerTab } from './components/LineDrawerTab';
 import { MapClassifier } from './components/MapClassifier';
+import { MapViewer } from './components/MapViewer';
 import { SegmentVaultManager } from './components/SegmentVaultManager';
 import { SbcValidator, performSbcAuditEngine } from './components/SbcValidator';
 import { InstallPwaModal } from './components/InstallPwaModal';
@@ -452,7 +454,7 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
-  const [activeTab, setActiveTab] = useState<'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault' | 'sbc-checker' | 'line-drawer'>('converter');
+  const [activeTab, setActiveTab] = useState<'map-viewer' | 'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault' | 'sbc-checker' | 'line-drawer'>('map-viewer');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
@@ -495,9 +497,14 @@ const App: React.FC = () => {
   const [showAutoAlertModal, setShowAutoAlertModal] = useState(false);
   const lastAlertedFileRef = useRef<string>('');
   const [globalBaseMap, setGlobalBaseMap] = useState<import('./types').BaseMapType>(() => loadSavedPreference('globalBaseMap', 'satellite'));
+  const [layerOpacity, setLayerOpacity] = useState(1);
+  const [is3DMode, setIs3DMode] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
 
   // Validation Check Popup Modal state & Map Issue Focus state
   const [focusedPoint, setFocusedPoint] = useState<GeoPoint | null>(null);
+  const [selectedProfilePoints, setSelectedProfilePoints] = useState<GeoPoint[]>([]);
+  const [hoveredElevationPoint, setHoveredElevationPoint] = useState<{lat: number, lng: number, z?: number, dist?: number} | null>(null);
   const [activeIssueItems, setActiveIssueItems] = useState<GeoPoint[]>([]);
   const [showIssuesOnly, setShowIssuesOnly] = useState<boolean>(false);
 
@@ -3908,8 +3915,25 @@ const App: React.FC = () => {
 
       let groups: { name: string, points: GeoPoint[] }[] = [];
       if (splitMode === 'count') {
-        const size = Math.ceil(processedPoints.length / splitCount);
-        for (let i = 0; i < splitCount; i++) groups.push({ name: `Part ${i + 1}`, points: processedPoints.slice(i * size, (i + 1) * size) });
+        // User expects lines to be physically cut into N parts
+        let allSegmented: GeoPoint[] = [];
+        processedPoints.forEach(pt => {
+           if (pt.type === 'LineString' && pt.path) {
+              const parts = splitLineIntoParts(pt.path, splitCount);
+              parts.forEach((seg, i) => allSegmented.push({ ...pt, id: parts.length > 1 ? `${pt.id} [${i+1}]` : pt.id, path: seg }));
+           } else {
+              allSegmented.push(pt);
+           }
+        });
+        
+        // After physical splitting, we also distribute them into folders so it satisfies the folder logic
+        const size = Math.ceil(allSegmented.length / splitCount);
+        for (let i = 0; i < splitCount; i++) {
+           const chunk = allSegmented.slice(i * size, (i + 1) * size);
+           if (chunk.length > 0) {
+              groups.push({ name: `Part ${i + 1}`, points: chunk });
+           }
+        }
       } else if (splitMode === 'street') {
         const streetMap = new Map<string, GeoPoint[]>();
         processedPoints.forEach(pt => {
@@ -3925,21 +3949,33 @@ const App: React.FC = () => {
       } else if (splitMode === 'spatial') {
         if (splitPolygons.length === 0) throw new Error(t.errors.noPolygon);
 
-        // Group points by each polygon
         const remaining: GeoPoint[] = [];
         const polygonGroups = splitPolygons.map(poly => ({ name: poly.name, poly: poly.path, points: [] as GeoPoint[] }));
 
         processedPoints.forEach(pt => {
-          let found = false;
-          for (const g of polygonGroups) {
-            const isInside = pt.path ? pt.path.some(v => isPointInPolygon(v, g.poly)) : isPointInPolygon({ x: pt.x, y: pt.y }, g.poly);
-            if (isInside) {
-              g.points.push(pt);
-              found = true;
-              break;
+          if (pt.type === 'LineString' && pt.path) {
+            let placed = false;
+            for (const g of polygonGroups) {
+              const clippedSegments = clipLineToPolygon(pt.path, g.poly);
+              if (clippedSegments.length > 0) {
+                clippedSegments.forEach((seg, i) => {
+                  g.points.push({ ...pt, id: clippedSegments.length > 1 ? `${pt.id} [${i+1}]` : pt.id, path: seg });
+                });
+                placed = true;
+              }
             }
+            if (!placed) remaining.push(pt);
+          } else {
+             let found = false;
+             for (const g of polygonGroups) {
+               if (isPointInPolygon({ x: pt.x, y: pt.y }, g.poly)) {
+                 g.points.push(pt);
+                 found = true;
+                 break;
+               }
+             }
+             if (!found) remaining.push(pt);
           }
-          if (!found) remaining.push(pt);
         });
 
         polygonGroups.forEach(g => { if (g.points.length > 0) groups.push({ name: g.name, points: g.points }); });
@@ -4508,6 +4544,7 @@ const App: React.FC = () => {
       {/* Mobile Tool Tabs Bar (Scrollable Horizontally) */}
       <div className="lg:hidden bg-[#0a2330] border-b border-slate-800 px-2 py-2 flex items-center gap-1.5 overflow-x-auto custom-scrollbar shrink-0 z-40">
         {[
+          { id: 'map-viewer', icon: <Globe />, label: lang === 'ar' ? 'عرض الخريطة' : 'Map View' },
           { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
           { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
           { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
@@ -4543,6 +4580,7 @@ const App: React.FC = () => {
         <nav className="hidden lg:flex bg-primary border-e border-slate-800 flex-col items-center py-8 w-20 lg:w-24 shrink-0 z-20 shadow-2xl transition-colors duration-500 overflow-y-auto custom-scrollbar">
           <div className="flex-1 flex flex-col gap-4 md:gap-6 w-full px-1.5 sm:px-2">
              {[
+               { id: 'map-viewer', icon: <Globe />, label: lang === 'ar' ? 'عرض الخريطة' : 'Map View' },
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
                { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
                { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
@@ -4682,7 +4720,30 @@ const App: React.FC = () => {
                   </div>
                 )}
 
+                
+                {activeTab === 'map-viewer' && (
+                  <div className="space-y-6 animate-in fade-in duration-500">
+                    <FileUploadZone id="map-up" label={lang === 'ar' ? '1. مصدر البيانات الطبوغرافية' : '1. Topographic Data Source'} />
+                    <MapViewer
+                      lang={lang}
+                      points={globalPoints}
+                      globalBaseMap={globalBaseMap}
+                      setGlobalBaseMap={setGlobalBaseMap}
+                      focusedPoint={focusedPoint}
+                      hoveredElevationPoint={hoveredElevationPoint}
+                      setFocusedPoint={setFocusedPoint}
+                      layerOpacity={layerOpacity}
+                      setLayerOpacity={setLayerOpacity}
+                      is3DMode={is3DMode}
+                      setIs3DMode={setIs3DMode}
+                      onGenerateReport={() => handleWrapper(lang === 'ar' ? 'جاري تصدير التقرير...' : 'Generating report...', () => downloadDataPDF(globalPoints, activeFile?.filename || 'Map_Report', lang))}
+                      isGeneratingReport={loading}
+                    />
+                  </div>
+                )}
+
                 {activeTab === 'converter' && (
+
                     <div className="space-y-8 animate-in fade-in duration-500">
                         <FileUploadZone id="conv" label={lang === 'ar' ? '1. مصدر البيانات' : '1. Data Source'} />
                         {activeFile && (
@@ -6689,18 +6750,21 @@ const App: React.FC = () => {
                 )}
 
                 {activeTab === 'attribute-formatter' && (
-                  <DataFormatter
-                    onVerifyMissingAttributes={verifyEssentialAttributes}
-                    onVerifyPermitSegment={verifyPermitAndSegmentId}
-                    onVerifyPermitNo={verifyPermitNo}
-                    onVerifySbc={verifySaudiBuildingCodeSbc}
-                    points={globalPoints}
-                    headers={activeFile?.headers}
-                    lang={lang}
-                    fetchStreets={executeWithStreetFetching}
-                    geocodingMode={geocodingMode}
-                    setGeocodingMode={setGeocodingMode}
-                  />
+                  <div className="space-y-6 animate-in fade-in duration-500">
+                    <FileUploadZone id="attr-fmt-up" label={lang === 'ar' ? '1. رفع الملف لتنسيق البيانات والشفرات' : '1. Upload File for Data Formatting'} />
+                    <DataFormatter
+                      onVerifyMissingAttributes={verifyEssentialAttributes}
+                      onVerifyPermitSegment={verifyPermitAndSegmentId}
+                      onVerifyPermitNo={verifyPermitNo}
+                      onVerifySbc={verifySaudiBuildingCodeSbc}
+                      points={globalPoints}
+                      headers={activeFile?.headers}
+                      lang={lang}
+                      fetchStreets={executeWithStreetFetching}
+                      geocodingMode={geocodingMode}
+                      setGeocodingMode={setGeocodingMode}
+                    />
+                  </div>
                 )}
                 {activeTab === 'comparator' && (
                   <FileComparator
@@ -6732,19 +6796,22 @@ const App: React.FC = () => {
                   />
                 )}
                 {activeTab === 'sbc-checker' && (
-                  <SbcValidator
-                    points={getPointsToCheck()}
-                    lang={lang}
-                    onHighlightPoints={highlightSpecificSegmentId}
-                    onApplySbcColors={(coloredPoints) => {
-                      setGlobalPoints(coloredPoints);
-                      setStatusMessage(
-                        lang === 'ar'
-                          ? 'تم تطبيق تمييز ألوان كود البناء السعودي على الخريطة (أحمر للمخالفات، أصفر للتحذيرات، أخضر للمطابق)'
-                          : 'Applied Saudi Building Code map color coding (Red=Errors, Yellow=Warnings, Green=Compliant)'
-                      );
-                    }}
-                  />
+                  <div className="space-y-6 animate-in fade-in duration-500">
+                    <FileUploadZone id="sbc-up" label={lang === 'ar' ? '1. رفع الملف لفحص كود البناء' : '1. Upload File for SBC Check'} />
+                    <SbcValidator
+                      points={getPointsToCheck()}
+                      lang={lang}
+                      onHighlightPoints={highlightSpecificSegmentId}
+                      onApplySbcColors={(coloredPoints) => {
+                        setGlobalPoints(coloredPoints);
+                        setStatusMessage(
+                          lang === 'ar'
+                            ? 'تم تطبيق تمييز ألوان كود البناء السعودي على الخريطة (أحمر للمخالفات، أصفر للتحذيرات، أخضر للمطابق)'
+                            : 'Applied Saudi Building Code map color coding (Red=Errors, Yellow=Warnings, Green=Compliant)'
+                        );
+                      }}
+                    />
+                  </div>
                 )}
            </div>
 
@@ -6758,7 +6825,33 @@ const App: React.FC = () => {
             lang={lang}
             dataId={dataId}
             overlapResults={overlapResults}
+            onPointClick={(pt) => {
+              if (['LineString', 'Polygon'].includes(pt.type || '')) {
+                if (selectedProfilePoints.length > 0) {
+                  const exists = selectedProfilePoints.some((s) => s.id === pt.id);
+                  let updated: GeoPoint[];
+                  if (exists) {
+                    updated = selectedProfilePoints.filter((s) => s.id !== pt.id);
+                  } else {
+                    updated = [...selectedProfilePoints, pt];
+                  }
+                  setSelectedProfilePoints(updated);
+                  if (updated.length === 0) {
+                    setFocusedPoint(null);
+                  } else {
+                    setFocusedPoint(updated[0]);
+                  }
+                } else {
+                  setFocusedPoint(pt);
+                  setSelectedProfilePoints([pt]);
+                }
+              } else {
+                setFocusedPoint(pt);
+              }
+            }}
             focusedPoint={focusedPoint}
+            selectedProfilePoints={selectedProfilePoints}
+            hoveredElevationPoint={hoveredElevationPoint}
             issueItems={activeIssueItems}
             showIssuesOnly={showIssuesOnly}
             onToggleShowIssuesOnly={setShowIssuesOnly}
@@ -6779,6 +6872,21 @@ const App: React.FC = () => {
               }
               setIsDrawingMode(false);
             }}
+         />
+         <ElevationProfileModal
+           lang={lang}
+           focusedPoint={focusedPoint}
+           selectedProfilePoints={selectedProfilePoints}
+           allDatasetPoints={displayPoints}
+           onClose={() => {
+             setFocusedPoint(null);
+             setSelectedProfilePoints([]);
+           }}
+           onHoverPoint={setHoveredElevationPoint}
+           onSelectPointsChange={(pts) => {
+             setSelectedProfilePoints(pts);
+             if (pts.length === 0) setFocusedPoint(null);
+           }}
          />
 
          {/* Mobile Floating Button to Return to Tools Panel */}
@@ -8002,75 +8110,63 @@ export const CheckResultModalPopup: React.FC<{
       </div>
 
       {/* Global High-Priority Progress & Loading Modal Overlay */}
-      {loading && (
-        <div className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto" style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 9999999 }}>
-          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-accent/50 rounded-[3rem] shadow-[0_0_80px_rgba(220,177,60,0.35)] max-w-md w-full animate-in zoom-in-95 duration-200 dir-rtl" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+      {loading && createPortal(
+        <div 
+          className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto dir-rtl" 
+          style={{ backgroundColor: 'rgba(0,0,0,0.80)', backdropFilter: 'blur(12px)', zIndex: 9999999 }}
+          dir={lang === 'ar' ? 'rtl' : 'ltr'}
+        >
+          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-amber-400/60 rounded-[3rem] shadow-[0_0_80px_rgba(245,158,11,0.35)] max-w-md w-full animate-in zoom-in-95 duration-200">
+            
+            {/* Spinning Indicator */}
             <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full border-4 border-accent/20 border-t-accent animate-spin" />
-              <MapPin className="w-8 h-8 text-accent animate-pulse stroke-[2.5]" />
+              <div className="absolute inset-0 rounded-full border-4 border-amber-400/20 border-t-amber-400 animate-spin" />
+              <MapPin className="w-8 h-8 text-amber-400 animate-pulse stroke-[2.5]" />
             </div>
 
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-accent/10 border border-accent/30 text-accent text-[11px] font-black mb-3">
+            {/* Title Badge */}
+            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[11px] font-black mb-3">
               <Sparkles className="w-3.5 h-3.5 animate-pulse" />
               <span>
-                {(() => {
-                  const msg = (statusMessage || '').toLowerCase();
-                  if (msg.includes('شوارع') || msg.includes('عنونة') || msg.includes('street') || msg.includes('geocode') || msg.includes('خرائط') || msg.includes('map') || msg.includes('نطاق') || msg.includes('bounds')) 
-                    return lang === 'ar' ? 'معالجة جلب الشوارع والعناوين' : 'Street Fetching & Geocoding';
-                  if (msg.includes('ملف') || msg.includes('تحميل') || msg.includes('pars') || msg.includes('file')) 
-                    return lang === 'ar' ? 'تحميل ومعالجة الملفات' : 'File Upload & Parsing';
-                  if (msg.includes('تطابق') || msg.includes('فجوات') || msg.includes('تقاطع') || msg.includes('overlap') || msg.includes('gap') || msg.includes('intersect') || msg.includes('duplicates')) 
-                    return lang === 'ar' ? 'تحليل التطابق والفجوات' : 'Matching & Gaps Analysis';
-                  return lang === 'ar' ? 'معالجة العمليات' : 'Processing Operations';
-                })()}
+                {lang === 'ar' ? 'جاري معالجة البيانات المكانية' : 'Processing Spatial Data'}
               </span>
             </div>
 
+            {/* Message Body */}
             <div className="space-y-2 mb-4 px-2">
-              {(statusMessage || (lang === 'ar' ? 'جاري المعالجة...' : 'Processing...')).split('\n').map((line, idx) => (
-                idx === 0 ? (
-                  <p key={idx} className="text-white font-black text-base sm:text-lg leading-relaxed">{line}</p>
-                ) : (
-                  <div key={idx} className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-accent/20 border border-accent/40 text-amber-300 font-bold text-xs sm:text-sm shadow-md animate-in fade-in max-w-full">
-                    <span>{line}</span>
-                  </div>
-                )
+              {(statusMessage || (lang === 'ar' ? 'جاري معالجة وجلب البيانات...' : 'Processing data...')).split('\n').map((line, idx) => (
+                <p key={idx} className="text-white font-black text-base sm:text-lg leading-relaxed">
+                  {line}
+                </p>
               ))}
             </div>
 
-            {progressPercent !== null ? (
+            {/* Progress Bar & Percentage */}
+            {progressPercent !== null && progressPercent !== undefined ? (
               <div className="w-full mt-4 space-y-2.5">
                 <div className="w-full bg-black/60 rounded-full h-4 overflow-hidden p-0.5 border border-white/10 shadow-inner">
                   <div
-                    className="bg-gradient-to-r from-amber-400 via-accent to-amber-300 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(220,177,60,0.8)]"
+                    className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(245,158,11,0.8)]"
                     style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
                   />
                 </div>
                 <div className="flex items-center justify-between text-xs font-black pt-1 px-1">
-                  <span className="text-accent text-sm font-black">{Math.round(progressPercent)}%</span>
-                  <span className="text-white/60 font-bold">{lang === 'ar' ? 'نسبة الإنجاز الفعلي' : 'Progress'}</span>
+                  <span className="text-amber-400 text-sm font-black">{Math.round(progressPercent)}%</span>
+                  <span className="text-white/60 font-bold">{lang === 'ar' ? 'نسبة الإنجاز' : 'Progress'}</span>
                 </div>
               </div>
             ) : (
               <div className="w-full mt-4 bg-black/60 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
-                <div className="bg-accent/80 h-full rounded-full animate-pulse w-full shadow-[0_0_10px_rgba(220,177,60,0.5)]" />
+                <div className="bg-amber-400/80 h-full rounded-full animate-pulse w-full shadow-[0_0_10px_rgba(245,158,11,0.5)]" />
               </div>
             )}
 
             <p className="text-[10px] text-white/40 font-bold mt-5 pt-3 border-t border-white/5">
-              {(() => {
-                  const msg = (statusMessage || '').toLowerCase();
-                  if (msg.includes('شوارع') || msg.includes('عنونة') || msg.includes('street') || msg.includes('geocode') || msg.includes('خرائط') || msg.includes('map') || msg.includes('نطاق') || msg.includes('bounds')) 
-                    return lang === 'ar' ? '⚡ يرجى الانتظار، جاري التواصل مع الخادم وتحديد أسماء الشوارع...' : '⚡ Please wait while connecting to server & resolving streets...';
-                  if (msg.includes('ملف') || msg.includes('تحميل') || msg.includes('pars') || msg.includes('file') || msg.includes('read')) 
-                    return lang === 'ar' ? '⚡ يرجى الانتظار، جاري قراءة وتصنيف البيانات من الملف...' : '⚡ Please wait while reading and parsing file data...';
-                  if (msg.includes('تطابق') || msg.includes('فجوات') || msg.includes('تقاطع') || msg.includes('overlap') || msg.includes('gap') || msg.includes('intersect') || msg.includes('duplicates')) 
-                    return lang === 'ar' ? '⚡ يرجى الانتظار، يتم الآن إجراء تحليلات مكانية معقدة...' : '⚡ Please wait, performing complex spatial analysis...';
-                  return lang === 'ar' ? '⚡ يرجى الانتظار، جاري إتمام العملية المطلوبة...' : '⚡ Please wait while the operation completes...';
-              })()}
+              {lang === 'ar' ? '⚡ يرجى الانتظار، لا تغلق التطبيق أو المتصفح أثناء المعالجة...' : '⚡ Please wait, do not close the browser during processing...'}
             </p>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
