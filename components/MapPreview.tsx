@@ -1,14 +1,13 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import L from 'leaflet';
-import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2, MapPin, RotateCcw } from 'lucide-react';
+import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Navigation2, MapPin, RotateCcw, Info, X, Sparkles, Compass, Mountain, Activity, ArrowDownRight, Waves } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GeoPoint } from '../types';
 import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
 
-import { Waves } from 'lucide-react';
 import { NetworkFlowAnalysis } from '../services/flowDirectionService';
 
 function cn(...inputs: ClassValue[]) {
@@ -164,6 +163,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   
   // Layer States
   const [showLayerMenu, setShowLayerMenu] = useState(false);
+  const [showFlowInfoOverlay, setShowFlowInfoOverlay] = useState(false);
   const [baseMap, setBaseMap] = useState<BaseMapType>('satellite');
   
   const [showPolygons, setShowPolygons] = useState(true);
@@ -615,18 +615,29 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             const profileSeqIndex = selectedProfilePoints ? selectedProfilePoints.findIndex(sp => sp.id === pt.id) : -1;
 
             if (isFlowActive && segResult) {
-              popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-200 text-[11px] font-medium space-y-1 shadow-md">
-                <div class="flex items-center justify-between border-b border-cyan-500/30 pb-1 mb-1 font-bold text-cyan-300">
+              const priorityBadgeBg = segResult.priority === 1 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' : (segResult.priority === 2 ? 'bg-amber-500/20 text-amber-300 border-amber-400/40' : 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40');
+              const priorityBoxBorder = segResult.priority === 1 ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : (segResult.priority === 2 ? 'bg-amber-950/80 border-amber-500/40 text-amber-200' : 'bg-cyan-950/80 border-cyan-500/40 text-cyan-200');
+
+              popupContent += `<div class="mb-3 p-2.5 rounded-xl ${priorityBoxBorder} text-[11px] font-medium space-y-1 shadow-md border">
+                <div class="flex items-center justify-between border-b border-white/10 pb-1 mb-1 font-bold">
                   <span>🌊 ${lang === 'ar' ? 'اتجاه التدفق الهيدروليكي' : 'Flow Direction'}</span>
-                  <span class="text-[9.5px] bg-cyan-500/20 px-2 py-0.5 rounded-full border border-cyan-400/40">${segResult.priorityLabelAr}</span>
+                  <span class="text-[9.5px] px-2 py-0.5 rounded-full border ${priorityBadgeBg}">${segResult.priorityLabelAr}</span>
                 </div>
                 <div class="text-[10.5px]"><b>${lang === 'ar' ? 'السبب المعياري:' : 'Logic Reason:'}</b> ${segResult.directionReasonAr}</div>
-                <div class="text-[10px] text-cyan-300/80"><b>${lang === 'ar' ? 'توجيه المسار:' : 'Path Order:'}</b> ${segResult.isReversed ? (lang === 'ar' ? 'معكوس ليطابق اتجاه الصب (Reversed)' : 'Reversed to match downstream flow') : (lang === 'ar' ? 'مطابق للرسم الاصلي (Forward)' : 'Matches original digitizing direction')}</div>
+                <div class="text-[10px] opacity-90"><b>${lang === 'ar' ? 'توجيه المسار:' : 'Path Order:'}</b> ${segResult.isReversed ? (lang === 'ar' ? 'معكوس ليطابق اتجاه الصب (Reversed)' : 'Reversed to match downstream flow') : (lang === 'ar' ? 'مطابق للرسم الاصلي (Forward)' : 'Matches original digitizing direction')}</div>
               </div>`;
             }
 
+            // Determine line color by priority method: Priority 1 (Green), Priority 2 (Amber), Priority 3 (Cyan)
+            let flowLineColor = '#06b6d4'; // Priority 3 Default (DEM)
+            if (segResult) {
+              if (segResult.priority === 1) flowLineColor = '#22c55e'; // P1: Green (Pipe Invert Elevations)
+              else if (segResult.priority === 2) flowLineColor = '#f59e0b'; // P2: Amber/Yellow (Connected Manholes)
+              else if (segResult.priority === 3) flowLineColor = '#06b6d4'; // P3: Cyan (DEM Elevation)
+            }
+
             marker = L.polyline(latLngs, { 
-              color: isFlowActive ? '#38bdf8' : (isProfileSelected ? '#dcb13c' : (hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor))), 
+              color: isFlowActive ? flowLineColor : (isProfileSelected ? '#dcb13c' : (hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor))), 
               weight: isFlowActive ? 6 : (isProfileSelected ? 10 : (hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 4))), 
               opacity: isFlowActive ? 0.95 : (isProfileSelected ? 1 : (hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8))),
               dashArray: isFlowActive ? '8, 12' : (hasIssue ? '10, 8' : undefined),
@@ -959,7 +970,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 <LayersIcon className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
 
-            <div className="relative group">
+            <div className="relative group flex items-center gap-1.5">
               <button 
                   type="button"
                   onClick={() => onToggleFlowDirection?.(!showFlowDirection)}
@@ -969,6 +980,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                         ? "bg-cyan-500 text-white border-cyan-300 ring-2 ring-cyan-400/50 shadow-cyan-500/30" 
                         : "bg-white/95 backdrop-blur-md text-slate-700 hover:bg-white border-white/20"
                   )}
+                  title={lang === 'ar' ? 'تشغيل / إيقاف اتجاه التدفق الهيدروليكي' : 'Toggle Hydraulic Flow Direction'}
               >
                   <Waves className={cn("w-5 h-5 sm:w-6 sm:h-6", showFlowDirection && "animate-bounce")} />
                   {showFlowDirection && (
@@ -976,39 +988,132 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                   )}
               </button>
 
-              {/* Clean Hover Info Panel (no native title attribute to prevent overlapping tooltips) */}
+              {/* Info Toggle Button */}
+              <button
+                  type="button"
+                  onClick={() => setShowFlowInfoOverlay(!showFlowInfoOverlay)}
+                  className={cn(
+                    "w-7 h-7 sm:w-8 sm:h-8 rounded-xl backdrop-blur-md flex items-center justify-center transition-all border shadow-lg active:scale-95",
+                    showFlowInfoOverlay
+                      ? "bg-cyan-600 text-white border-cyan-300 ring-2 ring-cyan-400/40"
+                      : "bg-slate-900/85 hover:bg-slate-900 text-cyan-300 border-cyan-500/30"
+                  )}
+                  title={lang === 'ar' ? 'معلومات آلية المنسوب والجاذبية (DEM)' : 'DEM & Gravity Flow Information'}
+              >
+                  <Info className="w-4 h-4" />
+              </button>
+
+              {/* Technical Info Overlay Dashboard (Shown on Hover OR when Info button clicked) */}
               <div className={cn(
-                "absolute top-0 hidden group-hover:block z-50 w-80 p-4 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-cyan-500/40 shadow-2xl text-white text-xs pointer-events-none animate-in fade-in zoom-in-95 duration-150",
-                lang === 'ar' ? "right-14" : "left-14"
+                "absolute top-0 z-50 w-80 sm:w-96 p-4 rounded-3xl bg-slate-950/95 backdrop-blur-2xl border border-cyan-500/40 shadow-2xl text-white text-xs transition-all duration-200 animate-in fade-in zoom-in-95",
+                showFlowInfoOverlay ? "block" : "hidden group-hover:block",
+                lang === 'ar' ? "right-20 sm:right-24" : "left-20 sm:left-24"
               )}>
-                <div className="font-black text-cyan-300 text-xs pb-2 mb-2.5 border-b border-white/10 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <Waves className="w-4 h-4 text-cyan-400 animate-pulse" />
-                    <span>{lang === 'ar' ? 'إظهار اتجاه التدفق (Flow Direction)' : 'Flow Direction Animation'}</span>
+                <div className="font-black text-cyan-300 text-xs pb-2.5 mb-2.5 border-b border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-cyan-400 animate-pulse" />
+                    <span className="text-xs font-extrabold">
+                      {lang === 'ar' ? 'آلية تحليل المنسوب (DEM) والجاذبية' : 'DEM & Gravity Flow Analysis Engine'}
+                    </span>
                   </div>
-                  <span className="text-[9px] bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 px-2 py-0.5 rounded-full font-bold">
-                    {showFlowDirection ? (lang === 'ar' ? 'نشط ⚡' : 'ACTIVE ⚡') : (lang === 'ar' ? 'متوقف' : 'PAUSED')}
-                  </span>
+                  <button 
+                    type="button"
+                    onClick={() => setShowFlowInfoOverlay(false)}
+                    className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition-all"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-                
-                <div className="space-y-2 text-[11px] leading-relaxed text-slate-200">
-                  <p className="text-cyan-200/90 font-medium">
-                    {lang === 'ar' 
-                      ? 'تحليل واتجاه الجريان الهيدروليكي للشبكة باستخدام الخوارزميات المتتابعة:'
-                      : 'Hydraulic flow direction analysis using sequential priority algorithms:'
-                    }
-                  </p>
-                  <div className="space-y-1.5 pt-1 border-t border-white/10">
-                    <p><span className="text-emerald-400 font-bold">🟢 أولوية 1 (مناسيب الأنبوب):</span> {lang === 'ar' ? 'الاعتماد على مناسيب انخفاض القاع للأنبوب (Start/End Elevation).' : 'Start & End pipe invert elevations.'}</p>
-                    <p><span className="text-amber-400 font-bold">🟡 أولوية 2 (المناهل المربوطة):</span> {lang === 'ar' ? 'التتبع من المناهل الصاعدة للنازلة (Upstream -> Downstream).' : 'Upstream to Downstream connected manholes.'}</p>
-                    <p><span className="text-cyan-400 font-bold">🔵 أولوية 3 (منسوب الأرض DEM):</span> {lang === 'ar' ? 'الاعتماد على مناسيب التضاريس الطبيعية عند غياب مناسيب الأنبوب.' : 'Fallback to DEM terrain elevations.'}</p>
+
+                <div className="space-y-2.5 text-[11px] leading-relaxed text-slate-200">
+                  {/* Principle 1: Gravity Slope */}
+                  <div className="p-2 rounded-2xl bg-cyan-950/50 border border-cyan-500/20 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-cyan-300 text-xs">
+                      <Compass className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>{lang === 'ar' ? '1. الانحدار وجاذبية السائل (Gravity Flow Slope)' : '1. Hydraulic Gravity Slope'}</span>
+                    </div>
+                    <p className="text-slate-300 text-[10.5px]">
+                      {lang === 'ar' 
+                        ? 'يتحدد اتجاه الحركة تلقائياً بفعل انحناء وسقوط الجاذبية الأرضية من المنسوب المرتفع إلى المنخفض (Upstream → Downstream).'
+                        : 'Water flows natively from higher to lower invert elevations under earth gravity.'}
+                    </p>
                   </div>
+
+                  {/* Principle 2: DEM Terrain Sampling */}
+                  <div className="p-2 rounded-2xl bg-emerald-950/50 border border-emerald-500/20 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold text-emerald-300 text-xs">
+                      <Mountain className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>{lang === 'ar' ? '2. استكمال المنسوب الطبوغرافي (DEM Elevation)' : '2. DEM Terrain Elevation Sampling'}</span>
+                    </div>
+                    <p className="text-slate-300 text-[10.5px]">
+                      {lang === 'ar'
+                        ? 'عند غياب مناسيب قاع الأنابيب، يتم استعلام نموذج الارتفاعات الرقمي (DEM) لحساب انحدار سطح الأرض واستنتاج الاتجاه تلقائياً.'
+                        : 'If pipe invert levels are missing, the Digital Elevation Model (DEM) extracts terrain topography to determine flow direction.'}
+                    </p>
+                  </div>
+
+                  {/* Priorities Hierarchy */}
+                  <div className="space-y-1 pt-1 border-t border-white/10 text-[10.5px]">
+                    <div className="font-bold text-slate-200 mb-0.5">
+                      {lang === 'ar' ? 'تسلسل أولويات خوارزمية التقييم:' : 'Sequential Priority Hierarchy:'}
+                    </div>
+                    <p><span className="text-emerald-400 font-bold">🟢 P1 (مناسيب الأنبوب):</span> {lang === 'ar' ? 'Start & End Invert Elevation.' : 'Start & End Pipe Invert Levels.'}</p>
+                    <p><span className="text-amber-400 font-bold">🟡 P2 (ربط المناهل):</span> {lang === 'ar' ? 'Upstream → Downstream Manholes.' : 'Upstream to Downstream connected manholes.'}</p>
+                    <p><span className="text-cyan-400 font-bold">🔵 P3 (النموذج الرقمي DEM):</span> {lang === 'ar' ? 'Terrain Digital Elevation Model.' : 'Fallback terrain digital elevation.'}</p>
+                  </div>
+
+                  {/* Live Metrics */}
                   {flowAnalysis && (
-                    <div className="mt-2.5 pt-2 border-t border-cyan-500/30 grid grid-cols-2 gap-1.5 text-[10px] bg-cyan-950/40 p-2 rounded-xl">
-                      <div><span className="text-white/60">{lang === 'ar' ? 'إجمالي الأنابيب:' : 'Total Pipes:'}</span> <strong className="text-white font-mono">{flowAnalysis.totalPipes}</strong></div>
-                      <div><span className="text-white/60">{lang === 'ar' ? 'نقاط المصب:' : 'Outfalls:'}</span> <strong className="text-cyan-300 font-mono">{flowAnalysis.outfallNodes.length}</strong></div>
+                    <div className="mt-2 pt-2 border-t border-cyan-500/30 grid grid-cols-2 gap-1.5 text-[10px] bg-slate-900/90 p-2 rounded-xl border border-white/10">
+                      <div>
+                        <span className="text-slate-400 block">{lang === 'ar' ? 'إجمالي الأنابيب:' : 'Total Pipes:'}</span>
+                        <strong className="text-white font-mono text-xs">{flowAnalysis.totalPipes}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block">{lang === 'ar' ? 'محددة بـ DEM:' : 'DEM Calculated:'}</span>
+                        <strong className="text-cyan-300 font-mono text-xs">{flowAnalysis.statsByPriority.priority3_dem}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block">{lang === 'ar' ? 'أنابيب تم عكسها:' : 'Reversed Pipes:'}</span>
+                        <strong className="text-amber-300 font-mono text-xs">{flowAnalysis.reversedPipesCount}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block">{lang === 'ar' ? 'نقاط المصب (Outfalls):' : 'Outfall Sink Nodes:'}</span>
+                        <strong className="text-rose-400 font-mono text-xs">{flowAnalysis.outfallNodes.length}</strong>
+                      </div>
                     </div>
                   )}
+
+                  {/* Visual Legend */}
+                  <div className="pt-2 border-t border-white/10 space-y-1.5 text-[10px] text-slate-300">
+                    <div className="font-bold text-slate-200 text-[10.5px]">
+                      {lang === 'ar' ? 'دليل ألوان خطوط التدفق حسب الطريقة:' : 'Flow Line Colors by Priority Method:'}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      <div className="flex items-center gap-1 bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-1 rounded-lg">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block shadow-sm shadow-emerald-500/50" />
+                        <span className="text-[9.5px] font-bold text-emerald-300">{lang === 'ar' ? 'P1 مناسيب' : 'P1 Inverts'}</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-amber-950/60 border border-amber-500/30 px-1.5 py-1 rounded-lg">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block shadow-sm shadow-amber-500/50" />
+                        <span className="text-[9.5px] font-bold text-amber-300">{lang === 'ar' ? 'P2 مناهل' : 'P2 Manholes'}</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-cyan-950/60 border border-cyan-500/30 px-1.5 py-1 rounded-lg">
+                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block shadow-sm shadow-cyan-400/50" />
+                        <span className="text-[9.5px] font-bold text-cyan-300">{lang === 'ar' ? 'P3 DEM' : 'P3 DEM'}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-white/10 text-[10px]">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block shadow-sm shadow-rose-500/50" />
+                        <span className="font-semibold text-rose-300">{lang === 'ar' ? 'أسهم حمراء (ثابتة للاتجاه)' : 'Fixed Red Arrows'}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-white inline-block animate-ping" />
+                        <span className="text-slate-300">{lang === 'ar' ? 'حركة نَبْض الأنابيب' : 'Pulsing Flow Line'}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
