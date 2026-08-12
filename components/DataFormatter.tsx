@@ -1031,7 +1031,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
     <div className="space-y-8 animate-in fade-in duration-500">
       {actionError && <div className="p-4 bg-red-500/20 border border-red-500 rounded-2xl text-red-100 font-bold mb-4">{actionError}</div>}
       {successMessage && <div className="p-4 bg-green-500/20 border border-green-500 rounded-2xl text-green-100 font-bold mb-4">{successMessage}</div>}
-      {isExecuting && <ProcessingModal lang={lang} />}
+      {isExecuting && !fetchStreets && <ProcessingModal lang={lang} />}
       <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4">
         <Database className="w-16 h-16 text-accent mx-auto" />
         <h2 className="text-white font-black text-xl">{lang === 'ar' ? 'تنسيق البيانات للمشاريع' : 'Project Data Formatter'}</h2>
