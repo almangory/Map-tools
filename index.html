@@ -147,6 +147,44 @@
         background: rgba(148, 163, 184, 0.3);
         border-radius: 10px;
       }
+
+      /* Hydraulic Flow Direction Animation for Sewer / Gravity Networks */
+      @keyframes flowDirectionDash {
+        0% {
+          stroke-dashoffset: 28;
+        }
+        100% {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      .flow-direction-animated-pipe {
+        stroke-dasharray: 10, 14 !important;
+        animation: flowDirectionDash 0.9s linear infinite !important;
+        stroke-linecap: round !important;
+        stroke-linejoin: round !important;
+        filter: drop-shadow(0px 0px 8px rgba(56, 189, 248, 0.8)) !important;
+      }
+
+      /* Pulsing Outfall Marker Ring Animation */
+      @keyframes outfallPulseRing {
+        0% {
+          transform: scale(0.8);
+          opacity: 0.9;
+        }
+        50% {
+          transform: scale(1.6);
+          opacity: 0.3;
+        }
+        100% {
+          transform: scale(2.2);
+          opacity: 0;
+        }
+      }
+
+      .leaflet-outfall-pulse-bg {
+        animation: outfallPulseRing 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
     </style>
     <script>
       tailwind.config = {

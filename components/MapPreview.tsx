@@ -8,6 +8,9 @@ import { GeoPoint } from '../types';
 import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
 
+import { Waves } from 'lucide-react';
+import { NetworkFlowAnalysis } from '../services/flowDirectionService';
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -31,6 +34,9 @@ export interface MapPreviewProps {
   onToggleShowIssuesOnly?: (val: boolean) => void;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
   onClearAudit?: () => void;
+  showFlowDirection?: boolean;
+  onToggleFlowDirection?: (val: boolean) => void;
+  flowAnalysis?: NetworkFlowAnalysis | null;
 }
 
 /**
@@ -62,7 +68,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   layerOpacity = 1,
   is3DMode = false,
   onClearAudit,
-  onPointClick
+  onPointClick,
+  showFlowDirection = false,
+  onToggleFlowDirection,
+  flowAnalysis
 }) => {
 
   useEffect(() => {
@@ -587,7 +596,17 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           }
         } else if (pt.type === 'LineString' && pt.path && Array.isArray(pt.path)) {
           if (!showLines) return;
-          const latLngs = pt.path
+          
+          const segResult = flowAnalysis?.segments.get(pt.id) || flowAnalysis?.segments.get(String(pt.id)) || (typeof pt.id === 'number' ? flowAnalysis?.segments.get(Number(pt.id)) : undefined);
+          const isFlowActive = showFlowDirection;
+
+          // Determine directed path for flow animation (if reversed, reverse vertices so stroke moves towards outfall)
+          let activePath = pt.path;
+          if (isFlowActive && segResult?.directedPath) {
+            activePath = segResult.directedPath;
+          }
+
+          const latLngs = activePath
             .filter(p => isValidLatLng(p.y, p.x))
             .map(p => [p.y, p.x] as [number, number]);
           
@@ -595,12 +614,44 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             const isProfileSelected = selectedProfilePoints?.some(sp => sp.id === pt.id);
             const profileSeqIndex = selectedProfilePoints ? selectedProfilePoints.findIndex(sp => sp.id === pt.id) : -1;
 
+            if (isFlowActive && segResult) {
+              popupContent += `<div class="mb-3 p-2.5 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-200 text-[11px] font-medium space-y-1 shadow-md">
+                <div class="flex items-center justify-between border-b border-cyan-500/30 pb-1 mb-1 font-bold text-cyan-300">
+                  <span>🌊 ${lang === 'ar' ? 'اتجاه التدفق الهيدروليكي' : 'Flow Direction'}</span>
+                  <span class="text-[9.5px] bg-cyan-500/20 px-2 py-0.5 rounded-full border border-cyan-400/40">${segResult.priorityLabelAr}</span>
+                </div>
+                <div class="text-[10.5px]"><b>${lang === 'ar' ? 'السبب المعياري:' : 'Logic Reason:'}</b> ${segResult.directionReasonAr}</div>
+                <div class="text-[10px] text-cyan-300/80"><b>${lang === 'ar' ? 'توجيه المسار:' : 'Path Order:'}</b> ${segResult.isReversed ? (lang === 'ar' ? 'معكوس ليطابق اتجاه الصب (Reversed)' : 'Reversed to match downstream flow') : (lang === 'ar' ? 'مطابق للرسم الاصلي (Forward)' : 'Matches original digitizing direction')}</div>
+              </div>`;
+            }
+
             marker = L.polyline(latLngs, { 
-              color: isProfileSelected ? '#dcb13c' : (hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor)), 
-              weight: isProfileSelected ? 10 : (hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 4)), 
-              opacity: isProfileSelected ? 1 : (hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8)),
-              dashArray: hasIssue ? '10, 8' : undefined
+              color: isFlowActive ? '#38bdf8' : (isProfileSelected ? '#dcb13c' : (hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor))), 
+              weight: isFlowActive ? 6 : (isProfileSelected ? 10 : (hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 4))), 
+              opacity: isFlowActive ? 0.95 : (isProfileSelected ? 1 : (hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8))),
+              dashArray: isFlowActive ? '8, 12' : (hasIssue ? '10, 8' : undefined),
+              className: isFlowActive ? 'flow-direction-animated-pipe' : undefined
             });
+
+            // If flow direction is active, add downstream directional arrow in RED
+            if (isFlowActive && latLngs.length >= 2) {
+              const p1 = latLngs[latLngs.length - 2];
+              const p2 = latLngs[latLngs.length - 1];
+              const dy = p2[0] - p1[0];
+              const dx = (p2[1] - p1[1]) * Math.cos((p1[0] * Math.PI) / 180);
+              const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+              const arrowIcon = L.divIcon({
+                className: 'bg-transparent border-0',
+                html: `<div style="transform: rotate(${90 - angleDeg}deg); width:22px; height:22px; display:flex; align-items:center; justify-content:center; filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.95));">
+                         <svg viewBox="0 0 24 24" fill="#ef4444" stroke="#ffffff" stroke-width="1.5" width="22" height="22">
+                           <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
+                         </svg>
+                       </div>`,
+                iconSize: [22, 22],
+                iconAnchor: [11, 11]
+              });
+              L.marker(p2, { icon: arrowIcon, interactive: false }).addTo(layerGroup.current!);
+            }
 
             // If feature is selected in profile, place a sequence badge at the midpoint
             if (isProfileSelected && profileSeqIndex !== -1) {
@@ -730,12 +781,51 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       });
     }
 
+    // Render Outfall Destination Nodes when Flow Direction is enabled
+    if (showFlowDirection && flowAnalysis?.outfallNodes) {
+      flowAnalysis.outfallNodes.forEach(outfallNode => {
+        if (!isValidLatLng(outfallNode.y, outfallNode.x)) return;
+
+        const outfallHtml = `
+          <div style="position:relative; width:44px; height:44px; display:flex; align-items:center; justify-content:center;">
+            <div class="leaflet-outfall-pulse-bg" style="position:absolute; width:100%; height:100%; background-color:#06b6d4; border-radius:50%;"></div>
+            <div style="position:relative; width:30px; height:30px; background:linear-gradient(135deg, #0284c7, #06b6d4); border:2.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-weight:900; font-size:14px; box-shadow:0 6px 16px rgba(6,182,212,0.8);">
+              🌊
+            </div>
+          </div>
+        `;
+
+        const outfallIcon = L.divIcon({
+          className: 'bg-transparent border-0',
+          html: outfallHtml,
+          iconSize: [44, 44],
+          iconAnchor: [22, 22]
+        });
+
+        const outfallMarker = L.marker([outfallNode.y, outfallNode.x], { icon: outfallIcon, zIndexOffset: 15000 });
+        outfallMarker.bindPopup(`
+          <div class="p-3 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[200px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+            <div class="flex items-center gap-2 text-cyan-400 font-bold border-b border-cyan-500/30 pb-2 mb-2 text-xs">
+              <span>🌊</span>
+              <span>${lang === 'ar' ? 'نقطة المصب النهاية (Outfall Node)' : 'Outfall Terminal Node'}</span>
+            </div>
+            <div class="text-[11px] space-y-1 text-slate-200">
+              <div><b>${lang === 'ar' ? 'معرف المصب' : 'Outfall ID'}:</b> <span class="font-bold text-amber-300">${outfallNode.id}</span></div>
+              <div><b>${lang === 'ar' ? 'عدد الأنابيب الصابة' : 'Inflow Pipes'}:</b> <span class="font-bold text-cyan-300">${outfallNode.inflowCount}</span></div>
+              <div class="text-[10px] text-cyan-400/80 dir-ltr font-mono mt-1">${outfallNode.y.toFixed(6)}, ${outfallNode.x.toFixed(6)}</div>
+            </div>
+          </div>
+        `);
+        outfallMarker.addTo(layerGroup.current!);
+      });
+    }
+
     // Auto-zoom logic: Triggered when dataId changes or when new points arrive for the first time
     if (dataId && dataId !== lastDataIdRef.current) {
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showIssuesOnly, selectedProfilePoints]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis]);
 
   const toggleDrawing = () => {
     if (isDrawing) {
@@ -864,9 +954,64 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                     "w-10 h-10 sm:w-12 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl flex items-center justify-center text-primary hover:bg-white transition-all border border-white/20 active:scale-95",
                     showLayerMenu && "ring-2 ring-accent border-accent/50"
                 )}
+                title={lang === 'ar' ? 'أنواع الخرائط والطبقات' : 'Map Layers & Options'}
             >
                 <LayersIcon className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
+
+            <div className="relative group">
+              <button 
+                  type="button"
+                  onClick={() => onToggleFlowDirection?.(!showFlowDirection)}
+                  className={cn(
+                      "w-10 h-10 sm:w-12 sm:h-12 rounded-2xl shadow-xl flex items-center justify-center transition-all border active:scale-95 relative",
+                      showFlowDirection 
+                        ? "bg-cyan-500 text-white border-cyan-300 ring-2 ring-cyan-400/50 shadow-cyan-500/30" 
+                        : "bg-white/95 backdrop-blur-md text-slate-700 hover:bg-white border-white/20"
+                  )}
+              >
+                  <Waves className={cn("w-5 h-5 sm:w-6 sm:h-6", showFlowDirection && "animate-bounce")} />
+                  {showFlowDirection && (
+                    <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-300 border-2 border-white animate-ping" />
+                  )}
+              </button>
+
+              {/* Clean Hover Info Panel (no native title attribute to prevent overlapping tooltips) */}
+              <div className={cn(
+                "absolute top-0 hidden group-hover:block z-50 w-80 p-4 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-cyan-500/40 shadow-2xl text-white text-xs pointer-events-none animate-in fade-in zoom-in-95 duration-150",
+                lang === 'ar' ? "right-14" : "left-14"
+              )}>
+                <div className="font-black text-cyan-300 text-xs pb-2 mb-2.5 border-b border-white/10 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <Waves className="w-4 h-4 text-cyan-400 animate-pulse" />
+                    <span>{lang === 'ar' ? 'إظهار اتجاه التدفق (Flow Direction)' : 'Flow Direction Animation'}</span>
+                  </div>
+                  <span className="text-[9px] bg-cyan-500/20 text-cyan-300 border border-cyan-400/30 px-2 py-0.5 rounded-full font-bold">
+                    {showFlowDirection ? (lang === 'ar' ? 'نشط ⚡' : 'ACTIVE ⚡') : (lang === 'ar' ? 'متوقف' : 'PAUSED')}
+                  </span>
+                </div>
+                
+                <div className="space-y-2 text-[11px] leading-relaxed text-slate-200">
+                  <p className="text-cyan-200/90 font-medium">
+                    {lang === 'ar' 
+                      ? 'تحليل واتجاه الجريان الهيدروليكي للشبكة باستخدام الخوارزميات المتتابعة:'
+                      : 'Hydraulic flow direction analysis using sequential priority algorithms:'
+                    }
+                  </p>
+                  <div className="space-y-1.5 pt-1 border-t border-white/10">
+                    <p><span className="text-emerald-400 font-bold">🟢 أولوية 1 (مناسيب الأنبوب):</span> {lang === 'ar' ? 'الاعتماد على مناسيب انخفاض القاع للأنبوب (Start/End Elevation).' : 'Start & End pipe invert elevations.'}</p>
+                    <p><span className="text-amber-400 font-bold">🟡 أولوية 2 (المناهل المربوطة):</span> {lang === 'ar' ? 'التتبع من المناهل الصاعدة للنازلة (Upstream -> Downstream).' : 'Upstream to Downstream connected manholes.'}</p>
+                    <p><span className="text-cyan-400 font-bold">🔵 أولوية 3 (منسوب الأرض DEM):</span> {lang === 'ar' ? 'الاعتماد على مناسيب التضاريس الطبيعية عند غياب مناسيب الأنبوب.' : 'Fallback to DEM terrain elevations.'}</p>
+                  </div>
+                  {flowAnalysis && (
+                    <div className="mt-2.5 pt-2 border-t border-cyan-500/30 grid grid-cols-2 gap-1.5 text-[10px] bg-cyan-950/40 p-2 rounded-xl">
+                      <div><span className="text-white/60">{lang === 'ar' ? 'إجمالي الأنابيب:' : 'Total Pipes:'}</span> <strong className="text-white font-mono">{flowAnalysis.totalPipes}</strong></div>
+                      <div><span className="text-white/60">{lang === 'ar' ? 'نقاط المصب:' : 'Outfalls:'}</span> <strong className="text-cyan-300 font-mono">{flowAnalysis.outfallNodes.length}</strong></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
             <button 
                 onClick={zoomToDataExtent}

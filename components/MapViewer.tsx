@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { Layers, Maximize, FileText, Mountain, Map, Download, BarChart3, Loader2 } from 'lucide-react';
+import { Layers, Maximize, FileText, Mountain, Map, Download, BarChart3, Loader2, Waves, Compass, Activity } from 'lucide-react';
 import { GeoPoint, BaseMapType } from '../types';
 import { cn } from '../utils';
+import { NetworkFlowAnalysis } from '../services/flowDirectionService';
 
 interface MapViewerProps {
   lang: 'ar' | 'en';
@@ -16,6 +17,9 @@ interface MapViewerProps {
   setIs3DMode: (val: boolean) => void;
   onGenerateReport: () => void;
   isGeneratingReport: boolean;
+  showFlowDirection?: boolean;
+  onToggleFlowDirection?: (val: boolean) => void;
+  flowAnalysis?: NetworkFlowAnalysis | null;
 }
 
 export const MapViewer: React.FC<MapViewerProps> = ({
@@ -30,7 +34,10 @@ export const MapViewer: React.FC<MapViewerProps> = ({
   is3DMode,
   setIs3DMode,
   onGenerateReport,
-  isGeneratingReport
+  isGeneratingReport,
+  showFlowDirection = false,
+  onToggleFlowDirection,
+  flowAnalysis
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'dashboard' | 'table' | 'layers'>('dashboard');
 
@@ -173,6 +180,80 @@ export const MapViewer: React.FC<MapViewerProps> = ({
              </button>
           </div>
           
+          <div className="space-y-3 pt-4 border-t border-white/5">
+             <div className="flex items-center justify-between">
+               <label className="text-[11px] font-black text-white/80 flex items-center gap-1.5">
+                 <Waves className="w-4 h-4 text-cyan-400" />
+                 <span>إظهار اتجاه التدفق (Flow Direction)</span>
+               </label>
+               {showFlowDirection && (
+                 <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-[9.5px] font-black animate-pulse">
+                   {lang === 'ar' ? 'متحرك ⚡' : 'Animated ⚡'}
+                 </span>
+               )}
+             </div>
+             <button 
+               onClick={() => onToggleFlowDirection?.(!showFlowDirection)} 
+               className={cn(
+                 "w-full py-3.5 px-4 rounded-2xl text-xs font-black transition-all flex items-center justify-between border shadow-lg active:scale-95", 
+                 showFlowDirection 
+                   ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white border-cyan-400 shadow-cyan-500/20" 
+                   : "bg-white/5 text-white/50 hover:text-white hover:bg-white/10 border-white/10"
+               )}
+             >
+                <div className="flex items-center gap-2">
+                  <Waves className={cn("w-4 h-4", showFlowDirection ? "animate-bounce text-white" : "text-white/40")} />
+                  <span>{showFlowDirection ? (lang === 'ar' ? 'إيقاف اتجاه التدفق' : 'Hide Flow Direction') : (lang === 'ar' ? 'إظهار اتجاه التدفق (Flow Direction)' : 'Show Flow Direction')}</span>
+                </div>
+                <div className={cn("w-9 h-5 rounded-full p-0.5 transition-colors flex items-center", showFlowDirection ? "bg-cyan-300 justify-end" : "bg-white/20 justify-start")}>
+                  <div className={cn("w-4 h-4 rounded-full shadow-md transition-transform", showFlowDirection ? "bg-blue-900" : "bg-white")} />
+                </div>
+             </button>
+
+             {showFlowDirection && flowAnalysis && (
+               <div className="p-3.5 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 text-white space-y-2.5 text-[10.5px]">
+                 <div className="font-bold text-cyan-300 flex items-center justify-between border-b border-cyan-500/20 pb-1.5">
+                   <span>{lang === 'ar' ? 'تحليل أولوية تحديد الاتجاه:' : 'Flow Direction Priority Analysis:'}</span>
+                   <span className="text-white font-mono">{flowAnalysis.totalPipes} {lang === 'ar' ? 'أنبوب' : 'pipes'}</span>
+                 </div>
+                 <div className="grid grid-cols-2 gap-2 text-[10px]">
+                   <div 
+                     className="bg-black/30 p-2 rounded-xl border border-white/5 cursor-help transition-colors hover:border-emerald-500/40"
+                     title={lang === 'ar' ? '🟢 أولوية Z (فرق المناسيب): الأنابيب التي حُدد اتجاهها بالاعتماد على مناسيب البداية والنهاية.' : '🟢 Priority Z: Pipes directed using start & end Z elevations.'}
+                   >
+                     <span className="text-white/60 block">{lang === 'ar' ? '🟢 أولوية Z (المناسيب):' : '🟢 Priority Z (Elevations):'}</span>
+                     <span className="font-black text-emerald-400 text-xs">{flowAnalysis.statsByPriority.priority1_z}</span>
+                   </div>
+                   <div 
+                     className="bg-black/30 p-2 rounded-xl border border-white/5 cursor-help transition-colors hover:border-amber-500/40"
+                     title={lang === 'ar' ? '🟡 أولوية الأقطار والسمات (Attributes): حُددت بناءً على خصائص الأنبوب.' : '🟡 Priority Attributes: Directed using pipe properties & attributes.'}
+                   >
+                     <span className="text-white/60 block">{lang === 'ar' ? '🟡 أولوية السمات (Attrs):' : '🟡 Priority Attributes:'}</span>
+                     <span className="font-black text-amber-400 text-xs">{flowAnalysis.statsByPriority.priority2_attr}</span>
+                   </div>
+                   <div 
+                     className="bg-black/30 p-2 rounded-xl border border-white/5 cursor-help transition-colors hover:border-cyan-500/40"
+                     title={lang === 'ar' ? '🔵 أولوية العقد والمسار (Topology/Graph Demand): حُددت بالاعتماد على طوبولوجيا الشبكة والمصبات.' : '🔵 Priority Topology: Directed using network topology & outfalls.'}
+                   >
+                     <span className="text-white/60 block">{lang === 'ar' ? '🔵 أولوية العقد والمسار:' : '🔵 Priority Topology:'}</span>
+                     <span className="font-black text-cyan-400 text-xs">{flowAnalysis.statsByPriority.priority3_dem}</span>
+                   </div>
+                   <div 
+                     className="bg-black/30 p-2 rounded-xl border border-white/5"
+                   >
+                     <span className="text-white/60 block">{lang === 'ar' ? 'نقاط المصب (Outfalls):' : 'Outfall Nodes:'}</span>
+                     <span className="font-black text-cyan-300 text-xs">{flowAnalysis.outfallNodes.length}</span>
+                   </div>
+                 </div>
+                 <div className="pt-1.5 border-t border-cyan-500/20 text-[9.5px] text-cyan-200/80 leading-snug space-y-1">
+                   <p>🟢 <strong className="text-emerald-300">{lang === 'ar' ? 'فرق المناسيب:' : 'Z Diff:'}</strong> {lang === 'ar' ? 'مناسيب B/E' : 'Start/End Z'}</p>
+                   <p>🟡 <strong className="text-amber-300">{lang === 'ar' ? 'السمات:' : 'Attrs:'}</strong> {lang === 'ar' ? 'خصائص الأنبوب' : 'Pipe properties'}</p>
+                   <p>🔵 <strong className="text-cyan-300">{lang === 'ar' ? 'العقد والمسار:' : 'Topology:'}</strong> {lang === 'ar' ? 'طوبولوجيا والمصبات' : 'Graph & Outfalls'}</p>
+                 </div>
+               </div>
+             )}
+          </div>
+
           <div className="space-y-3 pt-4 border-t border-white/5">
              <label className="text-[11px] font-black text-white/80">{lang === 'ar' ? 'مُولد الكروكيات والتقارير (Snapshots)' : 'Report & Snapshot Generator'}</label>
              <button onClick={onGenerateReport} disabled={isGeneratingReport} className="w-full bg-[#0e3f53] hover:bg-accent hover:text-primary text-accent border border-accent/20 py-3 rounded-2xl text-xs font-black transition-all flex items-center justify-center gap-2">

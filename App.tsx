@@ -14,7 +14,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -509,6 +509,62 @@ const App: React.FC = () => {
   const [hoveredElevationPoint, setHoveredElevationPoint] = useState<{lat: number, lng: number, z?: number, dist?: number} | null>(null);
   const [activeIssueItems, setActiveIssueItems] = useState<GeoPoint[]>([]);
   const [showIssuesOnly, setShowIssuesOnly] = useState<boolean>(false);
+
+  // Flow Direction & Hydraulic Animation state
+  const [showFlowDirection, setShowFlowDirection] = useState<boolean>(false);
+  const [flowAnalysis, setFlowAnalysis] = useState<import('./services/flowDirectionService').NetworkFlowAnalysis | null>(null);
+
+  // Multi-Polygon & Street Planner States needed for displayPoints
+  const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
+  const [splitPolygons, setSplitPolygons] = useState<SplitPolygon[]>([]);
+  const [plannedStreets, setPlannedStreets] = useState<GeoPoint[]>([]);
+  const [boundaryPolygon, setBoundaryPolygon] = useState<GeoPoint | null>(null);
+
+  const displayPoints = useMemo(() => {
+    if (activeTab === 'street-planner') {
+      const pts = [...globalPoints, ...plannedStreets];
+      if (boundaryPolygon) pts.push(boundaryPolygon);
+      return pts;
+    }
+
+    if (activeTab === 'splitter' && splitMode === 'spatial') {
+      const polyPts: GeoPoint[] = splitPolygons.map(p => ({
+        id: p.name,
+        x: p.path[0].x,
+        y: p.path[0].y,
+        type: 'Polygon',
+        path: p.path,
+        color: p.color,
+        layer: 'Split Polygons'
+      }));
+      return [...globalPoints, ...polyPts];
+    }
+
+    if (activeTab === 'classifier') {
+      // Render polygons (zones) first, then points (assets) on top
+      return [...classifierRefZones, ...globalPoints];
+    }
+    if (activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')) {
+      return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
+    }
+
+    return globalPoints;
+  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones]);
+
+  useEffect(() => {
+    if (!showFlowDirection || !displayPoints || displayPoints.length === 0) {
+      return;
+    }
+    let isMounted = true;
+    import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
+      analyzeNetworkFlowDirections(displayPoints).then(result => {
+        if (isMounted) {
+          setFlowAnalysis(result);
+        }
+      });
+    });
+    return () => { isMounted = false; };
+  }, [showFlowDirection, displayPoints, dataId]);
 
   const [checkResultModal, setCheckResultModal] = useState<CheckResultModalState | null>(null);
 
@@ -2116,7 +2172,6 @@ const App: React.FC = () => {
     setTimeout(() => setStatusMessage(''), 4000);
   };
 
-  const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
   const [splitCount, setSplitCount] = useState<number>(2);
   const [exportStyle, setExportStyle] = useState<'single' | 'zip'>(() => loadSavedPreference('exportStyle', 'single'));
   const [splitLines, setSplitLines] = useState(false);
@@ -2125,11 +2180,8 @@ const App: React.FC = () => {
   const [maxLen, setMaxLen] = useState(() => loadSavedPreference('maxLen', 1000));
 
   // Multi-Polygon Split State
-  const [splitPolygons, setSplitPolygons] = useState<SplitPolygon[]>([]);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [selectedArea, setSelectedArea] = useState<{x: number, y: number}[] | null>(null);
-  const [plannedStreets, setPlannedStreets] = useState<GeoPoint[]>([]);
-  const [boundaryPolygon, setBoundaryPolygon] = useState<GeoPoint | null>(null);
 
   const [plannerSeparate, setPlannerSeparate] = useState(false);
   const [plannerSplitLines, setPlannerSplitLines] = useState(false);
@@ -2247,37 +2299,6 @@ const App: React.FC = () => {
       prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type]
     );
   };
-
-  const displayPoints = useMemo(() => {
-    if (activeTab === 'street-planner') {
-      const pts = [...globalPoints, ...plannedStreets];
-      if (boundaryPolygon) pts.push(boundaryPolygon);
-      return pts;
-    }
-
-    if (activeTab === 'splitter' && splitMode === 'spatial') {
-      const polyPts: GeoPoint[] = splitPolygons.map(p => ({
-        id: p.name,
-        x: p.path[0].x,
-        y: p.path[0].y,
-        type: 'Polygon',
-        path: p.path,
-        color: p.color,
-        layer: 'Split Polygons'
-      }));
-      return [...globalPoints, ...polyPts];
-    }
-
-    if (activeTab === 'classifier') {
-      // Render polygons (zones) first, then points (assets) on top
-      return [...classifierRefZones, ...globalPoints];
-    }
-    if (activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')) {
-      return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
-    }
-
-    return globalPoints;
-  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones]);
 
   const layerStats = useMemo(() => {
     const stats: Record<string, number> = {};
@@ -4735,6 +4756,54 @@ const App: React.FC = () => {
                 {activeTab === 'map-viewer' && (
                   <div className="space-y-6 animate-in fade-in duration-500">
                     <FileUploadZone id="map-up" label={lang === 'ar' ? '1. مصدر البيانات الطبوغرافية' : '1. Topographic Data Source'} />
+
+                    {/* Sidebar Flow Direction Toggle Button */}
+                    {globalPoints.length > 0 && (
+                      <div className="p-4 rounded-2xl bg-slate-900/90 border border-cyan-500/40 shadow-xl space-y-3 backdrop-blur-md">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Waves className="w-5 h-5 text-cyan-400 animate-pulse" />
+                            <div>
+                              <h3 className="text-white font-black text-xs">
+                                {lang === 'ar' ? 'إظهار اتجاه التدفق (Flow Direction)' : 'Flow Direction Animation'}
+                              </h3>
+                              <p className="text-[10px] text-cyan-200/70 font-bold">
+                                {lang === 'ar' ? 'تحريك واتجاهات التدفق للشبكة (Pipe Z -> Manholes -> DEM)' : 'Network hydraulic flow (Pipe Z -> Manholes -> DEM)'}
+                              </p>
+                            </div>
+                          </div>
+                          <span className={cn(
+                            "px-2.5 py-1 rounded-full text-[9.5px] font-black border tracking-wider",
+                            showFlowDirection 
+                              ? "bg-cyan-500/20 text-cyan-300 border-cyan-400 animate-pulse shadow-[0_0_10px_rgba(56,189,248,0.3)]" 
+                              : "bg-white/5 text-white/40 border-white/10"
+                          )}>
+                            {showFlowDirection ? (lang === 'ar' ? 'مفعل ⚡' : 'ACTIVE ⚡') : (lang === 'ar' ? 'متقطع' : 'PAUSED')}
+                          </span>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowFlowDirection(!showFlowDirection)}
+                          className={cn(
+                            "w-full py-3 px-4 rounded-xl text-xs font-black transition-all flex items-center justify-between border shadow-lg active:scale-95",
+                            showFlowDirection
+                              ? "bg-gradient-to-r from-cyan-600 to-blue-600 text-white border-cyan-300 shadow-cyan-500/30"
+                              : "bg-white/5 text-white/80 hover:text-white hover:bg-white/10 border-white/10"
+                          )}
+                          title={lang === 'ar' ? 'تشغيل أو إيقاف حركة اتجاه التدفق الهيدروليكي' : 'Play or pause hydraulic flow direction animation'}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Waves className={cn("w-4 h-4", showFlowDirection ? "animate-bounce text-white" : "text-white/40")} />
+                            <span>{showFlowDirection ? (lang === 'ar' ? 'إيقاف حركة التدفق' : 'Pause Flow Animation') : (lang === 'ar' ? 'إظهار اتجاه التدفق (Flow Direction)' : 'Show Flow Direction')}</span>
+                          </div>
+                          <div className={cn("w-9 h-5 rounded-full p-0.5 transition-colors flex items-center", showFlowDirection ? "bg-cyan-300 justify-end" : "bg-white/20 justify-start")}>
+                            <div className={cn("w-4 h-4 rounded-full shadow-md transition-transform", showFlowDirection ? "bg-blue-950" : "bg-white")} />
+                          </div>
+                        </button>
+                      </div>
+                    )}
+
                     <MapViewer
                       lang={lang}
                       points={globalPoints}
@@ -4749,6 +4818,9 @@ const App: React.FC = () => {
                       setIs3DMode={setIs3DMode}
                       onGenerateReport={() => handleWrapper(lang === 'ar' ? 'جاري تصدير التقرير...' : 'Generating report...', () => downloadDataPDF(globalPoints, activeFile?.filename || 'Map_Report', lang))}
                       isGeneratingReport={loading}
+                      showFlowDirection={showFlowDirection}
+                      onToggleFlowDirection={setShowFlowDirection}
+                      flowAnalysis={flowAnalysis}
                     />
                   </div>
                 )}
@@ -6867,6 +6939,9 @@ const App: React.FC = () => {
             showIssuesOnly={showIssuesOnly}
             onToggleShowIssuesOnly={setShowIssuesOnly}
             onClearAudit={clearAuditResults}
+            showFlowDirection={showFlowDirection}
+            onToggleFlowDirection={setShowFlowDirection}
+            flowAnalysis={flowAnalysis}
             isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
             onPolygonComplete={(poly) => {
               if (activeTab === 'splitter' && splitMode === 'spatial') {
