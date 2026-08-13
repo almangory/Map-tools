@@ -410,6 +410,9 @@ ${stylesXML}`;
               key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
           } else if (options.groupByAttribute === 'layer') {
               key = pt.layer || 'Default';
+          } else if (options.groupByAttribute === 'geometry') {
+              const t = pt.type || 'Point';
+              key = t === 'Polygon' ? 'مضلعات (Polygons)' : t === 'LineString' ? 'مسارات وخطوط (Lines)' : 'نقاط وعلامات (Points)';
           } else if (options.groupByAttribute === 'attr1') {
               key = pt.attr1 || 'Default';
           }
@@ -469,6 +472,9 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
                 key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
             } else if (options.groupByAttribute === 'layer') {
                 key = pt.layer || 'Default';
+            } else if (options.groupByAttribute === 'geometry') {
+                const t = pt.type || 'Point';
+                key = t === 'Polygon' ? 'مضلعات (Polygons)' : t === 'LineString' ? 'مسارات وخطوط (Lines)' : 'نقاط وعلامات (Points)';
             } else if (options.groupByAttribute === 'attr1') {
                 key = pt.attr1 || 'Default';
             } else {

@@ -68,6 +68,10 @@ function getClosestStandardColor(hex?: string) {
 }
 
 const TEMPLATES = {
+  all: {
+    name: 'الكل - جميع الطبقات والعناصر (All Layers & Geometries)',
+    fields: ["OBJECTID", "ASSETID", "DISTRICT", "STREETNAME", "ASSETSTATUS", "FEATURETYPE", "INNERDIAMETER", "ACTUALLENGTH", "SHAPE_Length", "segment id", "Permit No", "ZONE", "CONTRACTOR", "PROJECTNAME"]
+  },
   pipes: {
     name: 'أنابيب / خطوط (Pipes/Lines)',
     fields: ["OBJECTID", "ANCILLARYROLE", "ENABLED", "SERIALNUMBER", "DISTRICT", "STREETNAME", "ASSETSTATUS", "ASSETCONDITION", "STARTXCOORDINATE", "STARTYCOORDINATE", "ENDXCOORDINATE", "ENDYCOORDINATE", "STARTPIPEGROUNDELEVATION", "STARTPIPEELEVATION", "ENDPIPEGROUNDELEVATION", "ENDPIPEELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "SURVEYDATE", "FEATURETYPE", "INNERDIAMETER", "OUTERDIAMETER", "MATERIAL", "CONSULTANT", "ACTUALLENGTH", "MANUFACTURE", "REMARKS", "SHAPE_Length", "MaintRoute", "RouteSequence", "LINENO", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID"]
@@ -114,6 +118,10 @@ interface Props {
   onVerifyPermitNo?: () => void;
   onVerifySbc?: () => void;
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
+  setGlobalLoading?: (val: boolean) => void;
+  setGlobalStatus?: (msg: string) => void;
+  setGlobalProgress?: (pct: number | null) => void;
 }
 
 interface MultiSourceFieldSelectProps {
@@ -438,14 +446,14 @@ const ProcessingModal = ({ lang }: { lang: 'ar' | 'en' }) => {
   );
 };
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc }: Props) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc, runWithLoading, setGlobalLoading, setGlobalStatus, setGlobalProgress }: DataFormatterProps) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [pendingAction, setPendingAction] = useState<((overridePoints?: GeoPoint[]) => void | Promise<void>) | null>(null);
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
-  const [targetTemplate, setTargetTemplate] = useState<'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('pipes');
+  const [targetTemplate, setTargetTemplate] = useState<'all' | 'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('all');
   const [networkType, setNetworkType] = useState<'water' | 'wastewater'>('water');
   const [keepFolders, setKeepFolders] = useState(true);
   const [retainUnmapped, setRetainUnmapped] = useState(false);
@@ -632,6 +640,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   }, [targetTemplate, sourceAttributes]);
 
   const [selectedFields, setSelectedFields] = useState<Record<string, string[]>>({
+    all: [...TEMPLATES.all.fields],
     pipes: [...TEMPLATES.pipes.fields],
     points: [...TEMPLATES.points.fields],
     stations: [...TEMPLATES.stations.fields],
@@ -883,109 +892,154 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
   const getBaseFilename = () => {
     const prefix = networkType === 'water' ? 'Water' : 'Wastewater';
-    const suffix = targetTemplate === 'pipes' ? 'Lines' : targetTemplate === 'points' ? 'Points' : targetTemplate === 'stations' ? 'Stations' : targetTemplate === 'boundaries' ? 'Boundaries' : targetTemplate === 'grids' ? 'Grids' : targetTemplate === 'violations' ? 'Violations' : targetTemplate === 'stowage_sites' ? 'StowageSites' : 'Polygons';
+    const suffix = targetTemplate === 'all' ? 'All_Layers' : targetTemplate === 'pipes' ? 'Lines' : targetTemplate === 'points' ? 'Points' : targetTemplate === 'stations' ? 'Stations' : targetTemplate === 'boundaries' ? 'Boundaries' : targetTemplate === 'grids' ? 'Grids' : targetTemplate === 'violations' ? 'Violations' : targetTemplate === 'stowage_sites' ? 'StowageSites' : 'Polygons';
     return `${prefix}_${suffix}_Formatted`;
   };
 
+  const wrapLoading = async (msg: string, task: () => void | Promise<void>) => {
+    if (runWithLoading) {
+      await runWithLoading(msg, task);
+    } else if (setGlobalLoading) {
+      setGlobalLoading(true);
+      if (setGlobalStatus) setGlobalStatus(msg);
+      if (setGlobalProgress) setGlobalProgress(10);
+      try {
+        await new Promise(r => setTimeout(r, 60));
+        await task();
+        if (setGlobalProgress) setGlobalProgress(100);
+      } finally {
+        setGlobalLoading(false);
+        if (setGlobalProgress) setGlobalProgress(null);
+      }
+    } else {
+      await task();
+    }
+  };
+
   const handleApplyExportKMZ = async (pts?: GeoPoint[]) => {
-    try {
-      const { processedPoints, templateFields } = getProcessedPoints(pts);
-      await downloadKMZ(processedPoints, getBaseFilename(), { 
-        mode: keepFolders ? 'layer' : 'none', 
-        groupByAttribute: keepFolders ? 'layer' : undefined,
-        optimizeForMyMaps: optimizeForMyMaps,
-        keepOriginalDescription: keepOriginalDescription,
-        removeImagesOnly: removeImagesOnly,
-        standardizeColors: standardizeColors,
-        lineStyle: { width: 3 },
-        ...((targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? {
-            polygonStyle: {
-                ...(standardizePolygonColors ? { colorHex: '#0288d1', opacityHex: '4d' } : {}),
-                ...(optimizeForMyMaps || standardizePolygonColors ? { outline: 0, width: 0 } : {})
-            }
-        } : {})
-    }, templateFields, templateFields);
-      setSuccessMessage("تم تصدير ملف KMZ بنجاح!");
-    } catch (e: any) { setActionError("Error exporting KMZ: " + e.message); console.error(e); }
+    await wrapLoading(
+      lang === 'ar' ? 'جاري تنسيق وتصدير ملف KMZ...' : 'Formatting and exporting KMZ...',
+      async () => {
+        try {
+          const { processedPoints, templateFields } = getProcessedPoints(pts);
+          await downloadKMZ(processedPoints, getBaseFilename(), { 
+            mode: keepFolders ? 'layer' : 'none', 
+            groupByAttribute: keepFolders ? 'layer' : undefined,
+            optimizeForMyMaps: optimizeForMyMaps,
+            keepOriginalDescription: keepOriginalDescription,
+            removeImagesOnly: removeImagesOnly,
+            standardizeColors: standardizeColors,
+            lineStyle: { width: 3 },
+            ...((targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? {
+                polygonStyle: {
+                    ...(standardizePolygonColors ? { colorHex: '#0288d1', opacityHex: '4d' } : {}),
+                    ...(optimizeForMyMaps || standardizePolygonColors ? { outline: 0, width: 0 } : {})
+                }
+            } : {})
+        }, templateFields, templateFields);
+          setSuccessMessage("تم تصدير ملف KMZ بنجاح!");
+        } catch (e: any) { setActionError("Error exporting KMZ: " + e.message); console.error(e); }
+      }
+    );
   };
 
   const handleApplyExportDXF = async (pts?: GeoPoint[]) => {
-    try {
-      const { processedPoints } = getProcessedPoints(pts);
-      await downloadDXF(processedPoints, getBaseFilename());
-      setSuccessMessage("تم تصدير ملف DXF بنجاح!");
-    } catch (e: any) { setActionError("Error exporting DXF: " + e.message); console.error(e); }
+    await wrapLoading(
+      lang === 'ar' ? 'جاري تحويل وتصدير ملف DXF...' : 'Converting and exporting DXF...',
+      async () => {
+        try {
+          const { processedPoints } = getProcessedPoints(pts);
+          await downloadDXF(processedPoints, getBaseFilename());
+          setSuccessMessage("تم تصدير ملف DXF بنجاح!");
+        } catch (e: any) { setActionError("Error exporting DXF: " + e.message); console.error(e); }
+      }
+    );
   };
 
   const handleApplyExportShapefile = async (pts?: GeoPoint[]) => {
-    try {
-      const { processedPoints } = getProcessedPoints(pts);
-      await downloadShapefile(processedPoints, getBaseFilename());
-      setSuccessMessage(lang === 'ar' ? "تم تصدير ملف الشيب فايل (SHP) بنجاح!" : "Shapefile exported successfully!");
-    } catch (e: any) { setActionError("Error exporting Shapefile: " + e.message); console.error(e); }
+    await wrapLoading(
+      lang === 'ar' ? 'جاري ضغط وتصدير ملف الشيب فايل (SHP)...' : 'Packaging and exporting Shapefile (SHP)...',
+      async () => {
+        try {
+          const { processedPoints } = getProcessedPoints(pts);
+          await downloadShapefile(processedPoints, getBaseFilename());
+          setSuccessMessage(lang === 'ar' ? "تم تصدير ملف الشيب فايل (SHP) بنجاح!" : "Shapefile exported successfully!");
+        } catch (e: any) { setActionError("Error exporting Shapefile: " + e.message); console.error(e); }
+      }
+    );
   };
 
   const handleApplyExportPDF = async (pts?: GeoPoint[]) => {
-    try {
-      const { processedPoints } = getProcessedPoints(pts);
-      await downloadDataPDF(processedPoints, getBaseFilename(), lang);
-    } catch (e: any) { setActionError("Error exporting PDF: " + e.message); console.error(e); }
+    await wrapLoading(
+      lang === 'ar' ? 'جاري توليد تقرير PDF المنسق...' : 'Generating formatted PDF report...',
+      async () => {
+        try {
+          const { processedPoints } = getProcessedPoints(pts);
+          await downloadDataPDF(processedPoints, getBaseFilename(), lang);
+        } catch (e: any) { setActionError("Error exporting PDF: " + e.message); console.error(e); }
+      }
+    );
   };
 
   const handleApplyExportExcel = async (pts?: GeoPoint[]) => {
-    try {
-      const { processedPoints, templateFields } = getProcessedPoints(pts);
-      const data = processedPoints.map(p => {
-        const startX = (p.path && p.path.length > 0) ? p.path[0].x : p.x;
-        const startY = (p.path && p.path.length > 0) ? p.path[0].y : p.y;
-        const endX = (p.path && p.path.length > 0) ? p.path[p.path.length - 1].x : p.x;
-        const endY = (p.path && p.path.length > 0) ? p.path[p.path.length - 1].y : p.y;
+    await wrapLoading(
+      lang === 'ar' ? 'جاري بناء وجدولة ملف Excel المنسق...' : 'Structuring formatted Excel file...',
+      async () => {
+        try {
+          const { processedPoints, templateFields } = getProcessedPoints(pts);
+          const data = processedPoints.map(p => {
+            const startX = (p.path && p.path.length > 0) ? p.path[0].x : p.x;
+            const startY = (p.path && p.path.length > 0) ? p.path[0].y : p.y;
+            const endX = (p.path && p.path.length > 0) ? p.path[p.path.length - 1].x : p.x;
+            const endY = (p.path && p.path.length > 0) ? p.path[p.path.length - 1].y : p.y;
 
-        const row: any = {
-          ID: p.id,
-          Type: p.type,
-          Layer: p.layer || '',
-          X: p.x,
-          Y: p.y,
-          Start_X: startX,
-          Start_Y: startY,
-          End_X: endX,
-          End_Y: endY
-        };
-        
-        const extracted = extractAllPointAttributes(p);
-        templateFields.forEach(f => {
-            let val = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
-            const fUpper = f.toUpperCase();
-            if (fUpper === 'PROJECTID' || fUpper === 'PROJECT_ID' || fUpper === 'PROJECT ID' || f === 'رقم المشروع') {
-                val = formatProjectIdForExcel(val);
+            const row: any = {
+              ID: p.id,
+              Type: p.type,
+              Layer: p.layer || '',
+              X: p.x,
+              Y: p.y,
+              Start_X: startX,
+              Start_Y: startY,
+              End_X: endX,
+              End_Y: endY
+            };
+            
+            const extracted = extractAllPointAttributes(p);
+            templateFields.forEach(f => {
+                let val = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
+                const fUpper = f.toUpperCase();
+                if (fUpper === 'PROJECTID' || fUpper === 'PROJECT_ID' || fUpper === 'PROJECT ID' || f === 'رقم المشروع') {
+                    val = formatProjectIdForExcel(val);
+                }
+                row[f] = val;
+            });
+
+            // Also add any extra extracted attributes not in templateFields
+            Object.entries(extracted).forEach(([k, v]) => {
+                if (row[k] === undefined) {
+                    const kUpper = k.toUpperCase();
+                    row[k] = (kUpper === 'PROJECTID' || kUpper === 'PROJECT_ID' || kUpper === 'PROJECT ID' || k === 'رقم المشروع') ? formatProjectIdForExcel(v) : v;
+                }
+            });
+
+            if (p.description) {
+                const parsed = parseDescriptionToAttributes(p.description);
+                if (Object.keys(parsed).length === 0) {
+                    row['Description'] = stripHtml(p.description);
+                }
             }
-            row[f] = val;
+
+            return row;
         });
-
-        // Also add any extra extracted attributes not in templateFields
-        Object.entries(extracted).forEach(([k, v]) => {
-            if (row[k] === undefined) {
-                const kUpper = k.toUpperCase();
-                row[k] = (kUpper === 'PROJECTID' || kUpper === 'PROJECT_ID' || kUpper === 'PROJECT ID' || k === 'رقم المشروع') ? formatProjectIdForExcel(v) : v;
-            }
-        });
-
-        if (p.description) {
-            const parsed = parseDescriptionToAttributes(p.description);
-            if (Object.keys(parsed).length === 0) {
-                row['Description'] = stripHtml(p.description);
-            }
-        }
-
-        return row;
-    });
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Formatted_Data");
-    XLSX.writeFile(wb, `${getBaseFilename()}.xlsx`);
-      setSuccessMessage("تم تصدير ملف الإكسل بنجاح!");
-    } catch (e: any) { setActionError("Error exporting Excel: " + e.message); console.error(e); }
+        const ws = XLSX.utils.json_to_sheet(data);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Formatted_Data");
+        XLSX.writeFile(wb, `${getBaseFilename()}.xlsx`);
+        setSuccessMessage(lang === 'ar' ? "تم تصدير ملف الإكسل بنجاح!" : "Excel exported successfully!");
+      } catch (e: any) { setActionError("Error exporting Excel: " + e.message); console.error(e); }
+    }
+    );
   };
 
 
@@ -995,23 +1049,29 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
         try {
             let updatedPoints = points;
             if (autoFetchStreets && fetchStreets) {
+               if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري جلب أسماء الشوارع والأحياء...' : 'Fetching street and district names...');
                updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
             }
+            if (setGlobalProgress) setGlobalProgress(85);
+            if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري إنشاء وتصدير الملف النهائي...' : 'Generating final export file...');
             await pendingAction(updatedPoints);
+            if (setGlobalProgress) setGlobalProgress(100);
+            if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'تمت العملية بنجاح! 🗺️' : 'Completed successfully! 🗺️');
+            await new Promise(r => setTimeout(r, 500));
         } catch (err: any) {
             console.error("Export Action Error:", err);
             setActionError((lang === 'ar' ? "حدث خطأ أثناء التصدير: " : "Export error: ") + (err?.message || String(err)));
         } finally {
             setIsExecuting(false);
             setPendingAction(null);
+            if (setGlobalLoading) setGlobalLoading(false);
+            if (setGlobalProgress) setGlobalProgress(null);
         }
       };
       // Yield to browser to ensure modal is painted before heavy work
-      requestAnimationFrame(() => {
-        setTimeout(run, 50);
-      });
+      setTimeout(run, 100);
     }
-  }, [isExecuting, pendingAction, points, autoFetchStreets, fetchStreets, lang]);
+  }, [isExecuting, pendingAction, points, autoFetchStreets, fetchStreets, lang, setGlobalLoading, setGlobalProgress, setGlobalStatus]);
 
   const executeAction = (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
     setActionError(null);
@@ -1021,17 +1081,20 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       return;
     }
     
-    // 1. Queue the action
-    setPendingAction(() => action);
-    // 2. Trigger loading UI
+    // 1. Trigger loading UI
+    if (setGlobalLoading) setGlobalLoading(true);
+    if (setGlobalProgress) setGlobalProgress(15);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري تجهيز وتنسيق البيانات...' : 'Preparing formatted data...');
     setIsExecuting(true);
+    // 2. Queue the action
+    setPendingAction(() => action);
   };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {actionError && <div className="p-4 bg-red-500/20 border border-red-500 rounded-2xl text-red-100 font-bold mb-4">{actionError}</div>}
       {successMessage && <div className="p-4 bg-green-500/20 border border-green-500 rounded-2xl text-green-100 font-bold mb-4">{successMessage}</div>}
-      {isExecuting && !fetchStreets && <ProcessingModal lang={lang} />}
+      {isExecuting && !setGlobalLoading && <ProcessingModal lang={lang} />}
       <div className="p-8 bg-[#0b2d3d]/40 rounded-[3rem] border border-white/10 shadow-2xl text-center space-y-4">
         <Database className="w-16 h-16 text-accent mx-auto" />
         <h2 className="text-white font-black text-xl">{lang === 'ar' ? 'تنسيق البيانات للمشاريع' : 'Project Data Formatter'}</h2>
@@ -1058,6 +1121,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
               <label className="text-[10px] text-white/40 uppercase font-black mb-2 block">{lang === 'ar' ? 'نوع العناصر (القالب)' : 'Element Type (Template)'}</label>
               <div className="grid grid-cols-2 gap-2">
                 {[
+                  { id: 'all', label: TEMPLATES.all.name },
                   { id: 'pipes', label: TEMPLATES.pipes.name },
                   { id: 'points', label: TEMPLATES.points.name },
                   { id: 'stations', label: TEMPLATES.stations.name },
@@ -1074,7 +1138,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                     className={cn(
                       "py-2.5 px-2 rounded-xl font-black text-[11px] leading-tight transition-all text-center flex items-center justify-center min-h-[44px] break-words",
                       targetTemplate === tItem.id ? "bg-accent text-primary shadow-lg" : "bg-white/10 text-white/70 hover:bg-white/20",
-                      tItem.id === 'grids' && "col-span-2"
+                      (tItem.id === 'all' || tItem.id === 'grids') && "col-span-2"
                     )}
                   >
                     {tItem.label}
@@ -1086,8 +1150,8 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
           <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between gap-3">
             <div>
-              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'الاحتفاظ بمجلدات الملف الأصلي' : 'Keep Original Folders'}</h4>
-              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم الحفاظ على بنية المجلدات الأصلية (الطبقات) عند التصدير.' : 'When enabled, the original folder structure (layers) will be preserved on export.'}</p>
+              <h4 className="text-white font-black text-sm">{lang === 'ar' ? 'تصدير المجلدات كما في الملف المصدر (الطبقات الأصلية)' : 'Export Folders As in Source File (Original Layers)'}</h4>
+              <p className="text-white/50 text-[10px] mt-1">{lang === 'ar' ? 'عند تفعيل هذا الخيار، سيتم الحفاظ على بنية المجلدات والطبقات الأصلية كاملة عند التصدير كما في الملف المصدر.' : 'When enabled, the complete original folder structure (layers) will be preserved on export as in the source file.'}</p>
             </div>
             <button 
               type="button"

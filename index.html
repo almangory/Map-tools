@@ -170,29 +170,51 @@
 
       .flow-direction-animated-pipe {
         stroke-dasharray: 10, 14 !important;
-        animation: flowDirectionDash 0.9s linear infinite !important;
+        animation: flowDirectionDash 1.2s linear infinite !important;
         stroke-linecap: round !important;
         stroke-linejoin: round !important;
       }
 
-      /* Pulsing Outfall Marker Ring Animation */
+      /* Dynamic Speed Velocity Classes */
+      .flow-anim-low {
+        stroke-dasharray: 8, 14 !important;
+        animation: flowDirectionDash 2.5s linear infinite !important;
+        stroke-linecap: round !important;
+        stroke-linejoin: round !important;
+      }
+
+      .flow-anim-optimal {
+        stroke-dasharray: 10, 14 !important;
+        animation: flowDirectionDash 1.2s linear infinite !important;
+        stroke-linecap: round !important;
+        stroke-linejoin: round !important;
+      }
+
+      .flow-anim-high {
+        stroke-dasharray: 12, 14 !important;
+        animation: flowDirectionDash 0.5s linear infinite !important;
+        stroke-linecap: round !important;
+        stroke-linejoin: round !important;
+      }
+
+      /* Subtle Outfall Marker Ring Animation */
       @keyframes outfallPulseRing {
         0% {
-          transform: scale(0.8);
-          opacity: 0.9;
+          transform: scale(0.95);
+          opacity: 0.5;
         }
         50% {
-          transform: scale(1.6);
-          opacity: 0.3;
+          transform: scale(1.2);
+          opacity: 0.2;
         }
         100% {
-          transform: scale(2.2);
+          transform: scale(1.35);
           opacity: 0;
         }
       }
 
       .leaflet-outfall-pulse-bg {
-        animation: outfallPulseRing 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+        animation: outfallPulseRing 2.4s ease-out infinite;
       }
     </style>
     <script>

@@ -44,6 +44,81 @@ export interface NetworkFlowAnalysis {
 // In-memory cache for DEM terrain elevation at coordinates to prevent repeated network calls
 const globalDemCache = new Map<string, number>();
 
+interface NetworkNode {
+  id: string;
+  x: number;
+  y: number;
+  z?: number;
+  inflowCount: number;
+  outflowCount: number;
+  inflowPipes: string[];
+  outflowPipes: string[];
+  labelAr?: string;
+  labelEn?: string;
+  isExplicitOutfall: boolean;
+}
+
+class SpatialNodeIndex {
+  private nodes: NetworkNode[] = [];
+  private grid = new Map<string, NetworkNode[]>();
+  private toleranceDeg: number;
+
+  constructor(toleranceMeters: number = 3.5) {
+    // 1 deg lat ~ 111,320m -> 3.5m ~ 0.000031 deg
+    this.toleranceDeg = toleranceMeters / 111320;
+  }
+
+  findOrCreateNode(x: number, y: number, z?: number): NetworkNode {
+    const cellSize = this.toleranceDeg * 2.5;
+    const gx = Math.floor(x / cellSize);
+    const gy = Math.floor(y / cellSize);
+
+    // Search adjacent 9 grid cells
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const key = `${gx + dx},${gy + dy}`;
+        const bucket = this.grid.get(key);
+        if (bucket) {
+          for (const node of bucket) {
+            const dist = Math.hypot(node.x - x, node.y - y);
+            if (dist <= this.toleranceDeg) {
+              if (z !== undefined && node.z === undefined) {
+                node.z = z;
+              }
+              return node;
+            }
+          }
+        }
+      }
+    }
+
+    // Not found, create new node
+    const newNode: NetworkNode = {
+      id: `NODE-${this.nodes.length + 1}`,
+      x,
+      y,
+      z,
+      inflowCount: 0,
+      outflowCount: 0,
+      inflowPipes: [],
+      outflowPipes: [],
+      isExplicitOutfall: false
+    };
+
+    const mainKey = `${gx},${gy}`;
+    if (!this.grid.has(mainKey)) {
+      this.grid.set(mainKey, []);
+    }
+    this.grid.get(mainKey)!.push(newNode);
+    this.nodes.push(newNode);
+    return newNode;
+  }
+
+  getAllNodes(): NetworkNode[] {
+    return this.nodes;
+  }
+}
+
 /**
  * Normalizes coordinate key for caching and node matching
  */
@@ -537,107 +612,95 @@ export async function analyzeNetworkFlowDirections(
     });
   }
 
-  // Step 3: Outfall Node Detection
-  const nodeRegistry = new Map<string, {
-    key: string;
-    x: number;
-    y: number;
-    z?: number;
-    inflowCount: number;
-    outflowCount: number;
-    labelAr?: string;
-    labelEn?: string;
-    isExplicitOutfall: boolean;
-  }>();
+  // Step 3: Outfall Node Detection using Spatial Node Index (Snapping 3.5m tolerance)
+  const spatialIndex = new SpatialNodeIndex(3.5);
 
   segments.forEach(seg => {
-    const startKey = getCoordKey(seg.startNode.x, seg.startNode.y);
-    const endKey = getCoordKey(seg.endNode.x, seg.endNode.y);
+    const startNode = spatialIndex.findOrCreateNode(seg.startNode.x, seg.startNode.y, seg.startNode.z);
+    const endNode = spatialIndex.findOrCreateNode(seg.endNode.x, seg.endNode.y, seg.endNode.z);
 
-    if (!nodeRegistry.has(startKey)) {
-      nodeRegistry.set(startKey, {
-        key: startKey,
-        x: seg.startNode.x,
-        y: seg.startNode.y,
-        z: seg.startNode.z,
-        inflowCount: 0,
-        outflowCount: 0,
-        isExplicitOutfall: false
-      });
-    }
+    startNode.outflowCount += 1;
+    startNode.outflowPipes.push(seg.id);
 
-    if (!nodeRegistry.has(endKey)) {
-      nodeRegistry.set(endKey, {
-        key: endKey,
-        x: seg.endNode.x,
-        y: seg.endNode.y,
-        z: seg.endNode.z,
-        inflowCount: 0,
-        outflowCount: 0,
-        isExplicitOutfall: false
-      });
-    }
-
-    const startEntry = nodeRegistry.get(startKey)!;
-    const endEntry = nodeRegistry.get(endKey)!;
-
-    startEntry.outflowCount += 1;
-    endEntry.inflowCount += 1;
+    endNode.inflowCount += 1;
+    endNode.inflowPipes.push(seg.id);
   });
 
+  // Check for explicit point features (e.g. designated WWTP, Outfall, Culvert discharge)
   points.forEach(pt => {
     if (pt.type === 'Point' || !pt.type) {
       const layerLower = (pt.layer || '').toLowerCase();
       const descLower = (pt.description || '').toLowerCase();
       const idLower = String(pt.id || '').toLowerCase();
 
-      const isOutfall = ['outfall', 'discharge', 'مصب', 'محطة', 'wwtp', 'treatment', 'محطة الصرف'].some(term => 
+      const isOutfall = ['outfall', 'discharge', 'مصب', 'محطة', 'wwtp', 'treatment', 'محطة الصرف', 'حوض التهدئة'].some(term => 
         layerLower.includes(term) || descLower.includes(term) || idLower.includes(term)
       );
 
       if (isOutfall) {
-        const key = getCoordKey(pt.x, pt.y);
-        if (!nodeRegistry.has(key)) {
-          nodeRegistry.set(key, {
-            key,
-            x: pt.x,
-            y: pt.y,
-            z: pt.z,
-            inflowCount: 1,
-            outflowCount: 0,
-            labelAr: String(pt.id),
-            labelEn: String(pt.id),
-            isExplicitOutfall: true
-          });
-        } else {
-          const entry = nodeRegistry.get(key)!;
-          entry.isExplicitOutfall = true;
-          entry.labelAr = String(pt.id);
-          entry.labelEn = String(pt.id);
-        }
+        const node = spatialIndex.findOrCreateNode(pt.x, pt.y, pt.z);
+        node.isExplicitOutfall = true;
+        node.labelAr = String(pt.id);
+        node.labelEn = String(pt.id);
       }
     }
   });
 
-  const outfallNodes: OutfallNode[] = [];
-  let outfallIdx = 1;
+  // Filter raw candidates: terminal sinks with inflows but no outflows, or explicitly marked outfalls
+  const allNodes = spatialIndex.getAllNodes();
+  const rawOutfallCandidates = allNodes.filter(node => 
+    (node.inflowCount > 0 && node.outflowCount === 0) || node.isExplicitOutfall
+  );
 
-  nodeRegistry.forEach(node => {
-    if ((node.inflowCount > 0 && node.outflowCount === 0) || node.isExplicitOutfall) {
-      outfallNodes.push({
-        id: node.labelAr || `OUTFALL-${outfallIdx}`,
-        x: node.x,
-        y: node.y,
-        z: node.z,
-        inflowCount: node.inflowCount,
-        outflowCount: node.outflowCount,
-        labelAr: node.labelAr || `نقطة المصب (${outfallIdx})`,
-        labelEn: node.labelEn || `Outfall Point (${outfallIdx})`,
-        isExplicitOutfall: node.isExplicitOutfall
-      });
-      outfallIdx++;
+  // Cluster nearby outfalls (within ~35 meters / 0.00031 deg) to avoid cluttering adjacent discharge points
+  const clusterToleranceDeg = 35 / 111320;
+  const clusteredOutfalls: NetworkNode[] = [];
+
+  rawOutfallCandidates.forEach(cand => {
+    const existingCluster = clusteredOutfalls.find(cl => 
+      Math.hypot(cl.x - cand.x, cl.y - cand.y) <= clusterToleranceDeg
+    );
+
+    if (existingCluster) {
+      // Merge into cluster
+      existingCluster.inflowCount += cand.inflowCount;
+      if (cand.isExplicitOutfall) {
+        existingCluster.isExplicitOutfall = true;
+        existingCluster.labelAr = cand.labelAr;
+        existingCluster.labelEn = cand.labelEn;
+      }
+      if (cand.z !== undefined && (existingCluster.z === undefined || cand.z < existingCluster.z)) {
+        existingCluster.z = cand.z;
+      }
+    } else {
+      clusteredOutfalls.push({ ...cand });
     }
   });
+
+  // Sort outfalls: explicit outfalls first, then by inflow count descending
+  clusteredOutfalls.sort((a, b) => {
+    if (a.isExplicitOutfall && !b.isExplicitOutfall) return -1;
+    if (!a.isExplicitOutfall && b.isExplicitOutfall) return 1;
+    return b.inflowCount - a.inflowCount;
+  });
+
+  // Cap max outfall markers to top primary discharge locations if network has numerous broken fragments
+  const maxOutfalls = Math.max(8, Math.min(25, Math.ceil(lineFeatures.length * 0.05)));
+  const finalOutfalls = clusteredOutfalls.length > maxOutfalls && !clusteredOutfalls.some(o => o.isExplicitOutfall)
+    ? clusteredOutfalls.slice(0, maxOutfalls)
+    : clusteredOutfalls;
+
+  const outfallNodes: OutfallNode[] = finalOutfalls.map((node, idx) => ({
+    id: node.labelAr || `OUTFALL-${idx + 1}`,
+    x: node.x,
+    y: node.y,
+    z: node.z,
+    inflowCount: node.inflowCount,
+    outflowCount: node.outflowCount,
+    labelAr: node.labelAr || `نقطة المصب (${idx + 1})`,
+    labelEn: node.labelEn || `Outfall Point (${idx + 1})`,
+    isExplicitOutfall: node.isExplicitOutfall
+  }));
 
   return {
     segments,

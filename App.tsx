@@ -377,7 +377,10 @@ const UniversalExportBar = ({
     <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 w-full">
       <button 
         disabled={isExecuting}
-        onClick={onKmzExport} 
+        onClick={() => handleWrapper(
+          lang === 'ar' ? 'جاري تحضير وتصدير ملف KMZ...' : 'Generating KMZ file...',
+          onKmzExport
+        )} 
         className="bg-[#0b2d3d] border border-accent/30 text-accent font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-accent hover:text-primary active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
         <DownloadCloud className="w-4 h-4" />
         {lang === 'ar' ? 'KMZ' : 'KMZ'}
@@ -404,7 +407,10 @@ const UniversalExportBar = ({
       </button>
       <button 
         disabled={isExecuting}
-        onClick={onExcelExport} 
+        onClick={() => handleWrapper(
+          lang === 'ar' ? 'جاري تحضير وتصدير ملف Excel...' : 'Creating Excel file...',
+          onExcelExport
+        )} 
         className="bg-white/5 border border-white/10 text-white/80 font-black py-3 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 active:scale-95 transition-all text-[11px] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed">
         <FileSpreadsheet className="w-4 h-4 text-green-500" />
         {lang === 'ar' ? 'إكسل' : 'Excel'}
@@ -3450,13 +3456,17 @@ const App: React.FC = () => {
   };
 
   const handleReverseGeocodeGlobal = async () => {
-    if (globalPoints.length === 0) return;
+    if (globalPoints.length === 0) {
+      setError(lang === 'ar' ? 'لا توجد بيانات مرفوعة بعد! يرجى رفع ملف أو استيراد خريطة أولاً لجلب الشوارع والعناوين لها.' : 'No data points available to fetch streets. Please upload a file first.');
+      return;
+    }
     setLoading(true);
     setError(null);
-    setProgressPercent(0);
+    setProgressPercent(5);
+    setStatusMessage(lang === 'ar' ? 'جاري بدء جلب الشوارع وتحليل العناوين الجغرافية...' : 'Starting street fetching & reverse geocoding...');
+    await new Promise<void>(r => setTimeout(r, 120));
 
     try {
-        setStatusMessage(lang === 'ar' ? 'جاري بدء جلب الشوارع وتحليل العناوين الجغرافية...' : 'Starting street fetching & reverse geocoding...');
 
         const sitePolygon = globalPoints.find(p => p.type === 'Polygon' && p.path && p.path.length > 2);
         let queryArea: {x: number, y: number}[] = [];
@@ -3696,63 +3706,6 @@ const App: React.FC = () => {
       setGlobalPoints(transformed);
       const newFileId = `${activeFile.filename}-${Date.now()}`;
       setDataId(newFileId);
-
-      // Auto-Alert for Spatial Overlaps upon file import before starting processing
-      const currentFileName = activeFile.filename || 'imported_file';
-      if (lastAlertedFileRef.current !== currentFileName && transformed.length > 0) {
-        lastAlertedFileRef.current = currentFileName;
-        setLoading(true);
-        setProgressPercent(10);
-        setStatusMessage(
-          lang === 'ar'
-            ? 'جاري فحص التداخل الجغرافي والتطابق المكاني...'
-            : 'Checking spatial overlaps...'
-        );
-
-        setTimeout(async () => {
-          try {
-            const dups = await detectExactDuplicates(transformed, duplicateTolerance, p => setProgressPercent(10 + Math.round(p * 0.40)));
-            setProgressPercent(50);
-            const intersections = await detectLineIntersections(transformed, p => setProgressPercent(50 + Math.round(p * 0.45)));
-            const totalOverlaps = dups.length + intersections.length;
-            setProgressPercent(100);
-
-            if (totalOverlaps > 0) {
-              const info = {
-                fileId: newFileId,
-                filename: currentFileName,
-                duplicatesCount: dups.length,
-                intersectionsCount: intersections.length,
-                totalCount: totalOverlaps,
-                dups,
-                intersections
-              };
-              setAutoAlertInfo(info);
-              setShowAutoAlertModal(true);
-              setOverlapResults(dups.length > 0 ? dups : intersections);
-              setOverlapModalType(dups.length > 0 ? 'duplicates' : 'intersections');
-              setStatusMessage(
-                lang === 'ar'
-                  ? `⚠️ تنبيه تلقائي: تم كشف ${totalOverlaps} تداخل مكاني غير محلول في الملف المستورد (${currentFileName})!`
-                  : `⚠️ Auto-Alert: Detected ${totalOverlaps} unresolved spatial overlaps in imported file (${currentFileName})!`
-              );
-            } else {
-              setAutoAlertInfo(null);
-              setStatusMessage(
-                lang === 'ar'
-                  ? 'تم فحص التداخل الجغرافي بنجاح - لا يوجد تداخلات'
-                  : 'Spatial overlap check complete - No overlaps found'
-              );
-              setTimeout(() => setStatusMessage(''), 2500);
-            }
-          } catch (e) {
-            console.error('Error during auto spatial overlap detection:', e);
-          } finally {
-            setLoading(false);
-            setProgressPercent(null);
-          }
-        }, 100);
-      }
     };
     processData();
   }, [activeFile, mapping, sourceEPSG, swapXY, refreshKey]);
@@ -3764,9 +3717,11 @@ const App: React.FC = () => {
     setTimeout(() => {
         setRefreshKey(prev => prev + 1);
         setProgressPercent(100);
-        setLoading(false);
-        setProgressPercent(null);
-        setStatusMessage('');
+        setTimeout(() => {
+          setLoading(false);
+          setProgressPercent(null);
+          setStatusMessage('');
+        }, 300);
     }, 400);
   };
 
@@ -3783,29 +3738,30 @@ const App: React.FC = () => {
     if (!selectedFile) return;
 
     setLoading(true);
-    setProgressPercent(5);
+    setProgressPercent(15);
     setStatusMessage(lang === 'ar' ? `جاري قراءة ومعالجة الملف (${selectedFile.name})...` : `Reading and parsing file (${selectedFile.name})...`);
     setAutoDetected(null);
     setError(null);
     
     // Allow UI to render the loading overlay popup before parsing blocks thread
-    await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+    await new Promise<void>(r => setTimeout(r, 120));
 
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
       let result: ParsedFile;
-      const onProg = (pct: number) => setProgressPercent(pct);
+      const onProg = (pct: number) => setProgressPercent(Math.max(15, Math.min(80, pct)));
       if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile, onProg);
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
       else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile, onProg);
       else throw new Error(t.errors.unsupported);
 
-      setProgressPercent(90);
-      setStatusMessage(lang === 'ar' ? 'جاري تصنيف النقاط وتحويل الإحداثيات...' : 'Categorizing points and transforming coordinates...');
-      await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+      setProgressPercent(85);
+      setStatusMessage(lang === 'ar' ? 'جاري تصنيف النقاط وتحويل الإحداثيات وفحص التداخل...' : 'Categorizing points, transforming coordinates & checking overlaps...');
+      await new Promise<void>(r => setTimeout(r, 80));
 
       setActiveFile(result);
-      setDataId(`${result.filename}-${Date.now()}`);
+      const newFileId = `${result.filename}-${Date.now()}`;
+      setDataId(newFileId);
 
       let detected: string | null = null;
       if (fName.endsWith('.dxf') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) {
@@ -3845,19 +3801,42 @@ const App: React.FC = () => {
         }
         
         if (displayPts.length > 0) {
+            let transformedPts = displayPts;
             if (detected) {
                 const def = COMMON_EPSG.find(e => e.code === detected)?.def || detected;
-                setGlobalPoints(transformPoints(displayPts, def));
-            } else {
-                setGlobalPoints(displayPts);
+                transformedPts = transformPoints(displayPts, def);
+            }
+            setGlobalPoints(transformedPts);
+
+            // Check for overlaps directly in sequence
+            try {
+              const dups = await detectExactDuplicates(transformedPts, duplicateTolerance);
+              const intersections = await detectLineIntersections(transformedPts);
+              const totalOverlaps = dups.length + intersections.length;
+              if (totalOverlaps > 0) {
+                setAutoAlertInfo({
+                  fileId: newFileId,
+                  filename: result.filename,
+                  duplicatesCount: dups.length,
+                  intersectionsCount: intersections.length,
+                  totalCount: totalOverlaps,
+                  dups,
+                  intersections
+                });
+                setShowAutoAlertModal(true);
+                setOverlapResults(dups.length > 0 ? dups : intersections);
+                setOverlapModalType(dups.length > 0 ? 'duplicates' : 'intersections');
+              }
+            } catch (overlapErr) {
+              console.warn("Overlap detection notice:", overlapErr);
             }
         }
       } catch (e) {
          console.warn("Failed to auto-display points on map", e);
       }
       setProgressPercent(100);
-      setStatusMessage(lang === 'ar' ? 'تمت معالجة وتحميل الملف بنجاح!' : 'File processed and loaded successfully!');
-      await new Promise<void>(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 400))); });
+      setStatusMessage(lang === 'ar' ? `تمت معالجة وتحميل الملف (${result.filename}) بنجاح! 🗺️` : `File processed and loaded (${result.filename}) successfully! 🗺️`);
+      await new Promise<void>(r => setTimeout(r, 600));
     } catch (err: any) {
       setError(err.message || String(err));
     } finally {
@@ -4051,12 +4030,14 @@ const App: React.FC = () => {
     task: () => void | Promise<void>
   ) => {
     setLoading(true);
-    setProgressPercent(null);
+    setProgressPercent(15);
     setStatusMessage(statusMsg);
     // Yield to browser event loop so React renders the high-priority modal overlay
-    await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+    await new Promise(r => setTimeout(r, 100));
     try {
       await task();
+      setProgressPercent(100);
+      await new Promise(r => setTimeout(r, 350));
     } catch (err: any) {
       console.error("Task execution error:", err);
       setError(err?.message || String(err));
@@ -4114,12 +4095,12 @@ const App: React.FC = () => {
     }
 
     setLoading(true);
-    setProgressPercent(0);
+    setProgressPercent(5);
     setStatusMessage(lang === 'ar'
         ? `جاري بدء جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'})...`
         : `Starting Street Name Fetching (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'})...`
     );
-    await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); }); // Force UI to paint modal overlay
+    await new Promise<void>(r => setTimeout(r, 120)); // Force UI to paint modal overlay
 
     try {
       const total = newGlobalPoints.length;
@@ -4244,8 +4225,12 @@ const App: React.FC = () => {
       if (callback) {
         setProgressPercent(100);
         setStatusMessage(lang === 'ar' ? 'جاري تحضير وتنسيق الملف للتنزيل...' : 'Preparing and formatting file for download...');
-        await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+        await new Promise<void>(r => setTimeout(r, 100));
         await callback(newGlobalPoints);
+      } else {
+        setProgressPercent(100);
+        setStatusMessage(lang === 'ar' ? 'تم جلب وتحديث أسماء الشوارع بنجاح! 🗺️' : 'Street names fetched and updated successfully! 🗺️');
+        await new Promise<void>(r => setTimeout(r, 600));
       }
     } catch (err: any) {
       console.error("Error in executeWithStreetFetching:", err);
@@ -4279,6 +4264,7 @@ const App: React.FC = () => {
     setLoading(true);
     setProgressPercent(15);
     setStatusMessage(lang === 'ar' ? "جاري الاتصال بخدمات الخرائط وتحديد النطاق..." : "Connecting to map services & setting bounds...");
+    await new Promise<void>(r => setTimeout(r, 120));
 
     try {
       const buffered = bufferPolygon(areaToQuery, plannerBuffer);
@@ -4316,10 +4302,15 @@ const App: React.FC = () => {
       setPlannedStreets(streets);
       setDataId(`streets-${Date.now()}`);
       setProgressPercent(100);
-      setStatusMessage(lang === 'ar' ? `تم جلب ${streets.length} شارع بنجاح! 🗺️` : `Successfully fetched ${streets.length} streets! 🗺️`);
-      await new Promise(r => setTimeout(r, 600));
+      if (streets.length > 0) {
+        setStatusMessage(lang === 'ar' ? `تم جلب ${streets.length} شارع بنجاح! 🗺️` : `Successfully fetched ${streets.length} streets! 🗺️`);
+      } else {
+        setStatusMessage(lang === 'ar' ? 'اكتمل البحث (لم يتم العثور على شوارع رسمية في هذا النطاق، يمكنك توسيع نطاق البحث).' : 'Search complete (no roads detected in this exact zone, you can increase buffer).');
+      }
+      await new Promise(r => setTimeout(r, 700));
     } catch (e: any) {
-      setError(e.message);
+      console.warn("Street planning fetch notice:", e);
+      setError(lang === 'ar' ? 'تعذر جلب الشوارع من خوادم الخرائط حالياً. يرجى المحاولة مرة أخرى أو توسيع النطاق.' : 'Unable to fetch streets from map servers at this moment. Please retry or expand buffer.');
     } finally {
       setLoading(false);
       setProgressPercent(null);
@@ -5005,7 +4996,7 @@ const App: React.FC = () => {
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
-                                                {lang === 'ar' ? 'حسب الطبقة' : 'By Layer'}
+                                                {lang === 'ar' ? 'تصدير المجلدات كما في الملف المصدر' : 'Folders As Source'}
                                             </button>
                                             <button
                                                 type="button"
@@ -5018,6 +5009,18 @@ const App: React.FC = () => {
                                                 )}
                                             >
                                                 {lang === 'ar' ? 'حسب العمود' : 'By Column'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setGroupingMode('geometry')}
+                                                className={cn(
+                                                    "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
+                                                    groupingMode === 'geometry'
+                                                        ? "bg-accent text-primary border-accent"
+                                                        : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
+                                                )}
+                                            >
+                                                {lang === 'ar' ? 'حسب نوع الشكل' : 'By Geometry Type'}
                                             </button>
                                         </div>
 
@@ -5203,9 +5206,9 @@ const App: React.FC = () => {
                                       onKmzExport={() => {
                                           executeWithStreetFetching(filteredPoints, selectedHeaders, () => {
                                               if (converterExportAsZip && groupingMode !== 'none') {
-                                                  downloadKMZGroupedZip(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
+                                                  downloadKMZGroupedZip(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : groupingMode === 'geometry' ? 'geometry' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
                                               } else {
-                                                  downloadKMZ(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
+                                                  downloadKMZ(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : groupingMode === 'geometry' ? 'geometry' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
                                               }
                                           });
                                       }}
@@ -6846,6 +6849,10 @@ const App: React.FC = () => {
                       fetchStreets={executeWithStreetFetching}
                       geocodingMode={geocodingMode}
                       setGeocodingMode={setGeocodingMode}
+                      runWithLoading={runWithLoading}
+                      setGlobalLoading={setLoading}
+                      setGlobalStatus={setStatusMessage}
+                      setGlobalProgress={setProgressPercent}
                     />
                   </div>
                 )}
@@ -6876,6 +6883,9 @@ const App: React.FC = () => {
                     activePoints={globalPoints.length > 0 ? globalPoints : plannedStreets}
                     activeFileName={activeFile?.filename}
                     onLoadProjectToMap={handleLoadSavedProjectToMap}
+                    setGlobalLoading={setLoading}
+                    setGlobalStatus={setStatusMessage}
+                    setGlobalProgress={setProgressPercent}
                   />
                 )}
                 {activeTab === 'sbc-checker' && (
@@ -6893,6 +6903,10 @@ const App: React.FC = () => {
                             : 'Applied Saudi Building Code map color coding (Red=Errors, Yellow=Warnings, Green=Compliant)'
                         );
                       }}
+                      runWithLoading={runWithLoading}
+                      setGlobalLoading={setLoading}
+                      setGlobalStatus={setStatusMessage}
+                      setGlobalProgress={setProgressPercent}
                     />
                   </div>
                 )}
@@ -8302,13 +8316,13 @@ export const CheckResultModalPopup: React.FC<{
       </div>
 
       {/* Global High-Priority Progress & Loading Modal Overlay */}
-      {loading && createPortal(
+      {loading && typeof document !== 'undefined' && createPortal(
         <div 
-          className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto dir-rtl" 
-          style={{ backgroundColor: 'rgba(0,0,0,0.80)', backdropFilter: 'blur(12px)', zIndex: 9999999 }}
+          className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto select-none" 
+          style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 99999999 }}
           dir={lang === 'ar' ? 'rtl' : 'ltr'}
         >
-          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-amber-400/60 rounded-[3rem] shadow-[0_0_80px_rgba(245,158,11,0.35)] max-w-md w-full animate-in zoom-in-95 duration-200">
+          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-amber-400/60 rounded-[3rem] shadow-[0_0_80px_rgba(245,158,11,0.45)] max-w-md w-full animate-in zoom-in-95 duration-200">
             
             {/* Spinning Indicator */}
             <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">

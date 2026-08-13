@@ -119,3 +119,86 @@ export interface AnalysisItem {
 
 export type BaseMapType = 'satellite' | 'streets' | 'terrain' | 'osm';
 export type CheckResultModalState = any;
+
+export type HydraulicVelocityStatus = 'low' | 'optimal' | 'high';
+
+export type AsphaltRestorationScope = 'trench' | 'lane' | 'full_street';
+
+export interface AsphaltCalculationParams {
+  scope: AsphaltRestorationScope;
+  trenchWidth: number; // default: 1.0 m
+  laneWidth: number; // default: 3.5 m
+  fullStreetWidth: number; // default: 15.0 m
+  asphaltThickness: number; // default: 0.10 m (10 cm)
+}
+
+export type HydraulicColorMode = 'velocity' | 'priority' | 'diameter' | 'default';
+
+export interface PipeHydraulicData {
+  id: string | number;
+  length: number; // meters
+  diameterMm: number; // mm
+  diameterM: number; // m
+  slopeDecimal: number; // m/m
+  slopePercent: number; // %
+  slopeSource: 'attribute' | 'elevation_diff' | 'dem_diff' | 'default';
+  manningN: number; // default: 0.013
+  flowArea: number; // m² (full cross-section)
+  hydraulicRadius: number; // m (D/4)
+  velocity: number; // m/s (full pipe)
+  maxCapacityLs: number; // L/s (Q_full)
+  designCapacity75Ls: number; // L/s (Q_75%)
+  velocityStatus: HydraulicVelocityStatus;
+  statusBadgeAr: string; // 'رسوبيات' | 'سلس ومطابق' | 'نحر وتآكل'
+  statusBadgeEn: string; // 'Sedimentation Risk' | 'Optimal Flow' | 'Scour Risk'
+  velocityColor: string; // #FF9800 | #00E676 | #FF1744
+  animationDurationSec: number; // 2.5s | 1.2s | 0.5s
+  animationClass: 'flow-anim-low' | 'flow-anim-optimal' | 'flow-anim-high';
+  
+  // Direction & Topology
+  flowDirectionTextAr: string;
+  flowDirectionTextEn: string;
+  upstreamNode: string;
+  downstreamNode: string;
+  startElevation?: number;
+  endElevation?: number;
+  priority: 1 | 2 | 3;
+  priorityLabelAr: string;
+  priorityLabelEn: string;
+  isReversed: boolean;
+  
+  // Asphalt Restoration Quantities
+  restorationWidth: number; // m
+  asphaltAreaM2: number; // m²
+  asphaltVolumeM3: number; // m³
+}
+
+export interface HydraulicNetworkSummary {
+  totalPipes: number;
+  totalLengthM: number;
+  avgVelocity: number;
+  averageVelocity: number;
+  avgDiameterMm: number;
+  avgSlopePercent: number;
+  totalCapacityLs: number;
+  totalFullCapacityLs: number;
+  
+  lowVelocityCount: number;
+  lowVelocityLengthM: number;
+  optimalVelocityCount: number;
+  optimalVelocityLengthM: number;
+  highVelocityCount: number;
+  highVelocityLengthM: number;
+
+  statsByVelocity: {
+    low: number;
+    optimal: number;
+    high: number;
+  };
+  
+  totalAsphaltAreaM2: number;
+  totalAsphaltVolumeM3: number;
+  
+  pipes: PipeHydraulicData[];
+  pipesMap: Map<string | number, PipeHydraulicData>;
+}

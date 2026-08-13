@@ -1,14 +1,26 @@
 
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import L from 'leaflet';
-import { Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, Globe, Maximize, Download, Navigation2, MapPin, RotateCcw, Info, X, Sparkles, Compass, Mountain, Activity, ArrowDownRight, Waves } from 'lucide-react';
+import { 
+  Search as SearchIcon, Loader2, MousePointerClick, Square, Trash2, 
+  CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, 
+  Globe, Maximize, Download, Navigation2, MapPin, RotateCcw, Info, 
+  X, Sparkles, Compass, Mountain, Activity, ArrowDownRight, Waves, 
+  FileSpreadsheet, ChevronDown, ChevronUp, Gauge, Droplet, Ruler
+} from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { GeoPoint } from '../types';
+import { 
+  GeoPoint, BaseMapType, HydraulicNetworkSummary, 
+  HydraulicColorMode, AsphaltCalculationParams, PipeHydraulicData 
+} from '../types';
 import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
-
 import { NetworkFlowAnalysis } from '../services/flowDirectionService';
+import { 
+  analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
+  DEFAULT_ASPHALT_PARAMS, DEFAULT_MANNING_N 
+} from '../services/hydraulicService';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -36,6 +48,13 @@ export interface MapPreviewProps {
   showFlowDirection?: boolean;
   onToggleFlowDirection?: (val: boolean) => void;
   flowAnalysis?: NetworkFlowAnalysis | null;
+  
+  // Hydraulic & Asphalt props
+  hydraulicSummary?: HydraulicNetworkSummary | null;
+  hydraulicColorMode?: HydraulicColorMode;
+  onSetHydraulicColorMode?: (mode: HydraulicColorMode) => void;
+  asphaltParams?: AsphaltCalculationParams;
+  manningN?: number;
 }
 
 /**
@@ -70,7 +89,12 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   onPointClick,
   showFlowDirection = false,
   onToggleFlowDirection,
-  flowAnalysis
+  flowAnalysis,
+  hydraulicSummary: propHydraulicSummary,
+  hydraulicColorMode: propHydraulicColorMode,
+  onSetHydraulicColorMode,
+  asphaltParams = DEFAULT_ASPHALT_PARAMS,
+  manningN = DEFAULT_MANNING_N
 }) => {
 
   useEffect(() => {
@@ -166,9 +190,28 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const [showFlowInfoOverlay, setShowFlowInfoOverlay] = useState(false);
   const [baseMap, setBaseMap] = useState<BaseMapType>('satellite');
   
+  // Hydraulic States
+  const [localHydraulicColorMode, setLocalHydraulicColorMode] = useState<HydraulicColorMode>('velocity');
+  const [isLegendCollapsed, setIsLegendCollapsed] = useState(false);
+  
+  const activeColorMode = propHydraulicColorMode || localHydraulicColorMode;
+  
+  const handleColorModeChange = (mode: HydraulicColorMode) => {
+    setLocalHydraulicColorMode(mode);
+    if (onSetHydraulicColorMode) {
+      onSetHydraulicColorMode(mode);
+    }
+  };
+
+  const activeHydraulicSummary = useMemo(() => {
+    if (propHydraulicSummary) return propHydraulicSummary;
+    return analyzeNetworkHydraulics(points, flowAnalysis, manningN, asphaltParams);
+  }, [points, flowAnalysis, manningN, asphaltParams, propHydraulicSummary]);
+  
   const [showPolygons, setShowPolygons] = useState(true);
   const [showLines, setShowLines] = useState(true);
   const [showPoints, setShowPoints] = useState(true);
+  const [showOutfalls, setShowOutfalls] = useState(true);
   const [showDataOverlay, setShowDataOverlay] = useState(true);
 
   const t = translations[lang];
@@ -292,8 +335,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     const segId = extractSegmentId(pt);
     const permitNo = extractPermitNo(pt);
     const diameter = extractDiameter(pt);
+    const pipeHyd = activeHydraulicSummary.pipesMap.get(pt.id) || activeHydraulicSummary.pipesMap.get(String(pt.id)) || (typeof pt.id === 'number' ? activeHydraulicSummary.pipesMap.get(Number(pt.id)) : undefined);
 
-    let html = `<div class="p-3 bg-[#0b1329]/95 backdrop-blur-md text-white rounded-2xl border border-cyan-500/40 shadow-2xl font-sans text-xs min-w-[220px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">`;
+    let html = `<div class="p-3 bg-[#0b1329]/95 backdrop-blur-md text-white rounded-2xl border border-cyan-500/40 shadow-2xl font-sans text-xs min-w-[240px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">`;
     
     html += `<div class="flex items-center justify-between border-b border-slate-700/80 pb-2 mb-2 gap-2">
       <div class="flex items-center gap-1.5 font-bold text-amber-400 text-[12px] truncate">
@@ -304,6 +348,37 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     </div>`;
 
     html += `<div class="space-y-1.5 text-[11px]">`;
+
+    if (pipeHyd && showFlowDirection) {
+      html += `<div class="p-2 rounded-xl bg-cyan-950/60 border border-cyan-500/40 space-y-1 my-1">
+        <div class="flex items-center justify-between">
+          <span class="text-cyan-300 font-bold">🌊 ${lang === 'ar' ? 'سرعة التدفق (V):' : 'Velocity:'}</span>
+          <span class="font-mono font-black" style="color: ${pipeHyd.velocityColor}">${pipeHyd.velocity.toFixed(2)} m/s</span>
+        </div>
+        <div class="flex items-center justify-between text-[10px]">
+          <span class="text-white/70">${lang === 'ar' ? 'الحالة:' : 'Status:'}</span>
+          <span class="font-bold px-1.5 py-0.5 rounded text-[9px]" style="background-color: ${pipeHyd.velocityColor}33; color: ${pipeHyd.velocityColor}; border: 1px solid ${pipeHyd.velocityColor}66;">
+            ${lang === 'ar' ? pipeHyd.statusBadgeAr : pipeHyd.statusBadgeEn}
+          </span>
+        </div>
+        <div class="flex items-center justify-between text-[10px]">
+          <span class="text-white/70">${lang === 'ar' ? 'التصريف (Q_full):' : 'Max Q:'}</span>
+          <span class="font-mono font-bold text-blue-300">${pipeHyd.maxCapacityLs.toFixed(1)} L/s</span>
+        </div>
+        <div class="flex items-center justify-between text-[10px]">
+          <span class="text-white/70">${lang === 'ar' ? 'التصريف 75%:' : 'Design Q75%:'}</span>
+          <span class="font-mono font-bold text-emerald-300">${pipeHyd.designCapacity75Ls.toFixed(1)} L/s</span>
+        </div>
+        <div class="flex items-center justify-between text-[10px]">
+          <span class="text-white/70">${lang === 'ar' ? 'الميل (Slope):' : 'Slope:'}</span>
+          <span class="font-mono font-bold text-white">${pipeHyd.slopePercent.toFixed(2)}%</span>
+        </div>
+        <div class="flex items-center justify-between text-[10px]">
+          <span class="text-white/70">${lang === 'ar' ? 'الأسفلت:' : 'Asphalt:'}</span>
+          <span class="font-mono font-bold text-amber-300">${pipeHyd.asphaltAreaM2.toFixed(1)} m² (${pipeHyd.asphaltVolumeM3.toFixed(2)} m³)</span>
+        </div>
+      </div>`;
+    }
 
     if (segId) {
       html += `<div class="flex items-center justify-between gap-3 bg-purple-950/40 px-2.5 py-1 rounded-xl border border-purple-500/30">
@@ -319,7 +394,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       </div>`;
     }
 
-    if (diameter) {
+    if (diameter && (!pipeHyd || !showFlowDirection)) {
       html += `<div class="flex items-center justify-between gap-3 bg-cyan-950/40 px-2.5 py-1 rounded-xl border border-cyan-500/30">
         <span class="text-cyan-200/80 font-medium">${lang === 'ar' ? 'القطر (Diameter):' : 'Diameter:'}</span>
         <span class="font-bold text-cyan-300">${diameter}</span>
@@ -747,7 +822,28 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             const isProfileSelected = selectedProfilePoints?.some(sp => sp.id === pt.id);
             const profileSeqIndex = selectedProfilePoints ? selectedProfilePoints.findIndex(sp => sp.id === pt.id) : -1;
 
-            if (isFlowActive && segResult) {
+            const pipeHyd = activeHydraulicSummary.pipesMap.get(pt.id) || activeHydraulicSummary.pipesMap.get(String(pt.id)) || (typeof pt.id === 'number' ? activeHydraulicSummary.pipesMap.get(Number(pt.id)) : undefined);
+
+            if (isFlowActive && pipeHyd) {
+              popupContent += `<div class="mb-3 p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-cyan-950 to-slate-900 text-[11px] font-medium space-y-2 shadow-xl border border-cyan-500/40 text-white">
+                <div class="flex items-center justify-between border-b border-cyan-500/20 pb-1.5 font-bold">
+                  <span class="text-cyan-300 flex items-center gap-1">🌊 ${lang === 'ar' ? 'الخصائص الهيدروليكية (معادلة مانينغ):' : 'Hydraulic Flow (Manning):'}</span>
+                  <span class="text-[9.5px] px-2 py-0.5 rounded-full font-bold shadow" style="background-color: ${pipeHyd.velocityColor}33; color: ${pipeHyd.velocityColor}; border: 1px solid ${pipeHyd.velocityColor}66;">
+                    ${lang === 'ar' ? pipeHyd.statusBadgeAr : pipeHyd.statusBadgeEn}
+                  </span>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-1.5 text-[10px]">
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5"><span class="text-white/60">${lang === 'ar' ? 'السرعة V:' : 'Velocity:'}</span> <b style="color:${pipeHyd.velocityColor}" class="font-mono">${pipeHyd.velocity.toFixed(2)} m/s</b></div>
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5"><span class="text-white/60">${lang === 'ar' ? 'القطر D:' : 'Diameter:'}</span> <b class="text-white font-mono">${pipeHyd.diameterMm} mm</b></div>
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5"><span class="text-white/60">${lang === 'ar' ? 'الميل S:' : 'Slope:'}</span> <b class="text-white font-mono">${pipeHyd.slopePercent.toFixed(2)}%</b></div>
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5"><span class="text-white/60">${lang === 'ar' ? 'التصريف Q:' : 'Max Q:'}</span> <b class="text-blue-300 font-mono">${pipeHyd.maxCapacityLs.toFixed(1)} L/s</b></div>
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2"><span class="text-white/60">${lang === 'ar' ? 'التصريف 75%:' : 'Design Q75%:'}</span> <b class="text-emerald-300 font-mono">${pipeHyd.designCapacity75Ls.toFixed(1)} L/s</b></div>
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2"><span class="text-white/60">${lang === 'ar' ? 'الاتجاه:' : 'Direction:'}</span> <b class="text-cyan-200 font-mono">${pipeHyd.flowDirectionTextAr}</b></div>
+                  <div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2 flex items-center justify-between"><span class="text-white/60">${lang === 'ar' ? 'الأسفلت (أمانة الرياض):' : 'Asphalt:'}</span> <span class="font-mono font-bold text-amber-300">${pipeHyd.asphaltAreaM2.toFixed(1)} m² | ${pipeHyd.asphaltVolumeM3.toFixed(2)} m³</span></div>
+                </div>
+              </div>`;
+            } else if (isFlowActive && segResult) {
               const priorityBadgeBg = segResult.priority === 1 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40' : (segResult.priority === 2 ? 'bg-amber-500/20 text-amber-300 border-amber-400/40' : 'bg-cyan-500/20 text-cyan-300 border-cyan-400/40');
               const priorityBoxBorder = segResult.priority === 1 ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-200' : (segResult.priority === 2 ? 'bg-amber-950/80 border-amber-500/40 text-amber-200' : 'bg-cyan-950/80 border-cyan-500/40 text-cyan-200');
 
@@ -761,20 +857,58 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               </div>`;
             }
 
-            // Determine line color by priority method: Priority 1 (Green), Priority 2 (Amber), Priority 3 (Cyan)
-            let flowLineColor = '#06b6d4'; // Priority 3 Default (DEM)
-            if (segResult) {
-              if (segResult.priority === 1) flowLineColor = '#22c55e'; // P1: Green (Pipe Invert Elevations)
-              else if (segResult.priority === 2) flowLineColor = '#f59e0b'; // P2: Amber/Yellow (Connected Manholes)
-              else if (segResult.priority === 3) flowLineColor = '#06b6d4'; // P3: Cyan (DEM Elevation)
+            // Determine line color by activeColorMode independently of flow direction
+            let flowLineColor = featColor || '#06b6d4';
+            let flowAnimClass = isFlowActive ? 'flow-anim-optimal' : undefined;
+
+            if (activeColorMode === 'velocity') {
+              if (pipeHyd) {
+                flowLineColor = pipeHyd.velocityColor;
+                flowAnimClass = isFlowActive ? pipeHyd.animationClass : undefined;
+              } else {
+                flowLineColor = '#00E676';
+              }
+            } else if (activeColorMode === 'priority') {
+              if (pipeHyd) {
+                if (pipeHyd.priority === 1) flowLineColor = '#22c55e';
+                else if (pipeHyd.priority === 2) flowLineColor = '#f59e0b';
+                else flowLineColor = '#06b6d4';
+              } else if (segResult) {
+                if (segResult.priority === 1) flowLineColor = '#22c55e';
+                else if (segResult.priority === 2) flowLineColor = '#f59e0b';
+                else flowLineColor = '#06b6d4';
+              } else {
+                flowLineColor = '#06b6d4';
+              }
+            } else if (activeColorMode === 'diameter') {
+              if (pipeHyd) {
+                if (pipeHyd.diameterMm <= 200) flowLineColor = '#06b6d4';
+                else if (pipeHyd.diameterMm <= 400) flowLineColor = '#3b82f6';
+                else if (pipeHyd.diameterMm <= 600) flowLineColor = '#8b5cf6';
+                else flowLineColor = '#ec4899';
+              } else {
+                flowLineColor = featColor || '#06b6d4';
+              }
+            } else {
+              // 'default' mode: Preserve original layer/file colors
+              flowLineColor = featColor || '#06b6d4';
             }
 
+            // Determine final display color
+            const polylineColor = isProfileSelected 
+              ? '#dcb13c' 
+              : (hasIssue 
+                ? '#dc2626' 
+                : (isOverlap 
+                  ? '#000000' 
+                  : (activeColorMode !== 'default' ? flowLineColor : (isFlowActive ? '#00E676' : featColor))));
+
             marker = L.polyline(latLngs, { 
-              color: isFlowActive ? flowLineColor : (isProfileSelected ? '#dcb13c' : (hasIssue ? '#dc2626' : (isOverlap ? '#000000' : featColor))), 
-              weight: isFlowActive ? 6 : (isProfileSelected ? 10 : (hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : 3))), 
-              opacity: isFlowActive ? 0.95 : (isProfileSelected ? 1 : (hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : 0.8))),
+              color: polylineColor, 
+              weight: isProfileSelected ? 10 : (hasIssue ? 8 : ((isOverlap || isIntersectionLine) ? 8 : (isFlowActive ? 6 : 3))), 
+              opacity: isProfileSelected ? 1 : (hasIssue ? 1 : ((isOverlap || isIntersectionLine) ? 1 : (isFlowActive ? 0.95 : 0.8))),
               dashArray: isFlowActive ? '8, 12' : (hasIssue ? '10, 8' : undefined),
-              className: isFlowActive ? 'flow-direction-animated-pipe' : undefined
+              className: isFlowActive ? (flowAnimClass || 'flow-anim-optimal') : undefined
             });
 
             // If flow direction is active, add downstream directional arrow in RED
@@ -925,15 +1059,15 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       });
     }
 
-    // Render Outfall Destination Nodes when Flow Direction is enabled
-    if (showFlowDirection && flowAnalysis?.outfallNodes) {
+    // Render Outfall Destination Nodes when Flow Direction and Outfalls are enabled
+    if (showFlowDirection && showOutfalls && flowAnalysis?.outfallNodes) {
       flowAnalysis.outfallNodes.forEach(outfallNode => {
         if (!isValidLatLng(outfallNode.y, outfallNode.x)) return;
 
         const outfallHtml = `
-          <div style="position:relative; width:44px; height:44px; display:flex; align-items:center; justify-content:center;">
-            <div class="leaflet-outfall-pulse-bg" style="position:absolute; width:100%; height:100%; background-color:#06b6d4; border-radius:50%;"></div>
-            <div style="position:relative; width:30px; height:30px; background:linear-gradient(135deg, #0284c7, #06b6d4); border:2.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-weight:900; font-size:14px; box-shadow:0 6px 16px rgba(6,182,212,0.8);">
+          <div style="position:relative; width:22px; height:22px; display:flex; align-items:center; justify-content:center;">
+            <div class="leaflet-outfall-pulse-bg" style="position:absolute; width:100%; height:100%; border:1.5px solid #06b6d4; border-radius:50%;"></div>
+            <div style="position:relative; width:20px; height:20px; background:linear-gradient(135deg, #0284c7, #06b6d4); border:1.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:10px; box-shadow:0 2px 8px rgba(0,0,0,0.6);">
               🌊
             </div>
           </div>
@@ -942,8 +1076,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         const outfallIcon = L.divIcon({
           className: 'bg-transparent border-0',
           html: outfallHtml,
-          iconSize: [44, 44],
-          iconAnchor: [22, 22]
+          iconSize: [22, 22],
+          iconAnchor: [11, 11]
         });
 
         const outfallMarker = L.marker([outfallNode.y, outfallNode.x], { icon: outfallIcon, zIndexOffset: 15000 });
@@ -951,7 +1085,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           <div class="p-3 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[200px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
             <div class="flex items-center gap-2 text-cyan-400 font-bold border-b border-cyan-500/30 pb-2 mb-2 text-xs">
               <span>🌊</span>
-              <span>${lang === 'ar' ? 'نقطة المصب النهاية (Outfall Node)' : 'Outfall Terminal Node'}</span>
+              <span>${lang === 'ar' ? 'نقطة المصب النهائية' : 'Outfall Terminal Node'}</span>
             </div>
             <div class="text-[11px] space-y-1 text-slate-200">
               <div><b>${lang === 'ar' ? 'معرف المصب' : 'Outfall ID'}:</b> <span class="font-bold text-amber-300">${outfallNode.id}</span></div>
@@ -969,7 +1103,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showOutfalls, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis, activeColorMode, activeHydraulicSummary]);
 
   const toggleDrawing = () => {
     if (isDrawing) {
@@ -1084,6 +1218,237 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 <span>{lang === 'ar' ? 'إزالة نتائج الفحص' : 'Clear Audit'}</span>
               </button>
             )}
+          </div>
+        )}
+
+        {/* Floating Hydraulic Flow & Velocity Legend (Shown when showFlowDirection is active) */}
+        {showFlowDirection && (
+          <div className={cn(
+            "absolute top-4 sm:top-6 z-[600] transition-all duration-300 max-w-[92vw] sm:max-w-xs",
+            lang === 'ar' ? 'left-3 sm:left-6' : 'right-3 sm:right-6'
+          )}>
+            <div className="bg-slate-950/95 backdrop-blur-2xl border border-cyan-500/40 rounded-3xl shadow-2xl overflow-hidden text-white transition-all">
+              {/* Card Header */}
+              <div className="p-3 bg-gradient-to-r from-slate-900 via-cyan-950/80 to-slate-900 border-b border-white/10 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-cyan-300">
+                    <Waves className="w-4 h-4 animate-pulse" />
+                  </div>
+                  <div>
+                    <h4 className="text-[11px] font-black text-white flex items-center gap-1.5 leading-tight">
+                      <span>{lang === 'ar' ? 'سرعات الجريان (مانينغ)' : 'Flow Velocity (Manning)'}</span>
+                    </h4>
+                    <span className="text-[9px] text-cyan-300 font-mono font-semibold">
+                      {lang === 'ar' ? 'المتوسط:' : 'Avg:'} {(activeHydraulicSummary?.avgVelocity ?? activeHydraulicSummary?.averageVelocity ?? 0).toFixed(2)} m/s
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1">
+                  {/* Outfalls Toggle Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowOutfalls(!showOutfalls)}
+                    className={cn(
+                      "p-1.5 rounded-xl border transition-all text-[10px] flex items-center gap-1 font-bold",
+                      showOutfalls 
+                        ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30" 
+                        : "bg-slate-900/80 text-slate-400 border-white/10 opacity-70"
+                    )}
+                    title={lang === 'ar' ? (showOutfalls ? 'إخفاء نقاط المصب' : 'إظهار نقاط المصب') : (showOutfalls ? 'Hide Outfalls' : 'Show Outfalls')}
+                  >
+                    <span className="text-[11px]">🌊</span>
+                    <span className="text-[9px] font-black">{lang === 'ar' ? 'المصبات' : 'Outfalls'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => exportHydraulicFlowExcel(activeHydraulicSummary, 'Hydraulic_Flow_Report', lang)}
+                    className="p-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 transition-all text-[10px] flex items-center gap-1 font-bold"
+                    title={lang === 'ar' ? 'تصدير تقرير Excel الهيدروليكي' : 'Export Hydraulic Excel'}
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsLegendCollapsed(!isLegendCollapsed)}
+                    className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white transition-all"
+                    title={isLegendCollapsed ? (lang === 'ar' ? 'توسيع' : 'Expand') : (lang === 'ar' ? 'طي' : 'Collapse')}
+                  >
+                    {isLegendCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Card Body (Collapsible) */}
+              {!isLegendCollapsed && (
+                <div className="p-3 space-y-2.5 text-xs animate-in fade-in duration-200">
+                  {/* Color Mode Switcher Chips */}
+                  <div>
+                    <div className="text-[9.5px] font-black text-slate-400 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>{lang === 'ar' ? 'نمط تلوين الخريطة:' : 'Color Coding Mode:'}</span>
+                      <span className="text-cyan-400 font-mono">{activeColorMode}</span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleColorModeChange('velocity')}
+                        className={cn(
+                          "py-1 px-1 rounded-xl text-[8.5px] font-extrabold transition-all border flex items-center justify-center gap-1",
+                          activeColorMode === 'velocity'
+                            ? "bg-cyan-500 text-white border-cyan-300 shadow-md shadow-cyan-500/20"
+                            : "bg-slate-900 text-slate-300 border-white/10 hover:bg-slate-800"
+                        )}
+                      >
+                        <Gauge className="w-2.5 h-2.5" />
+                        <span>{lang === 'ar' ? 'السرعة' : 'Velocity'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleColorModeChange('priority')}
+                        className={cn(
+                          "py-1 px-1 rounded-xl text-[8.5px] font-extrabold transition-all border flex items-center justify-center gap-1",
+                          activeColorMode === 'priority'
+                            ? "bg-cyan-500 text-white border-cyan-300 shadow-md shadow-cyan-500/20"
+                            : "bg-slate-900 text-slate-300 border-white/10 hover:bg-slate-800"
+                        )}
+                      >
+                        <Compass className="w-2.5 h-2.5" />
+                        <span>{lang === 'ar' ? 'الأولوية' : 'Priority'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleColorModeChange('diameter')}
+                        className={cn(
+                          "py-1 px-1 rounded-xl text-[8.5px] font-extrabold transition-all border flex items-center justify-center gap-1",
+                          activeColorMode === 'diameter'
+                            ? "bg-cyan-500 text-white border-cyan-300 shadow-md shadow-cyan-500/20"
+                            : "bg-slate-900 text-slate-300 border-white/10 hover:bg-slate-800"
+                        )}
+                      >
+                        <Ruler className="w-2.5 h-2.5" />
+                        <span>{lang === 'ar' ? 'القطر' : 'Diameter'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleColorModeChange('default')}
+                        className={cn(
+                          "py-1 px-1 rounded-xl text-[8.5px] font-extrabold transition-all border flex items-center justify-center gap-1",
+                          activeColorMode === 'default'
+                            ? "bg-cyan-500 text-white border-cyan-300 shadow-md shadow-cyan-500/20"
+                            : "bg-slate-900 text-slate-300 border-white/10 hover:bg-slate-800"
+                        )}
+                      >
+                        <LayersIcon className="w-2.5 h-2.5" />
+                        <span>{lang === 'ar' ? 'الأصلي' : 'Default'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Velocity Tiers Legend */}
+                  {activeColorMode === 'velocity' && (
+                    <div className="space-y-1 pt-1 border-t border-white/10 text-[10px]">
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#00E676] shadow-sm shadow-[#00E676]/60 inline-block" />
+                          <span className="font-bold text-emerald-300">{lang === 'ar' ? '0.6 - 3.0 m/s (سلس ومطابق)' : '0.6 - 3.0 m/s (Optimal)'}</span>
+                        </div>
+                        <span className="font-mono font-bold text-emerald-400">{activeHydraulicSummary?.optimalVelocityCount ?? activeHydraulicSummary?.statsByVelocity?.optimal ?? 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-amber-950/40 border border-amber-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#FF9800] shadow-sm shadow-[#FF9800]/60 inline-block" />
+                          <span className="font-bold text-amber-300">{lang === 'ar' ? '< 0.6 m/s (رسوبيات)' : '< 0.6 m/s (Sedimentation)'}</span>
+                        </div>
+                        <span className="font-mono font-bold text-amber-400">{activeHydraulicSummary?.lowVelocityCount ?? activeHydraulicSummary?.statsByVelocity?.low ?? 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-rose-950/40 border border-rose-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#FF1744] shadow-sm shadow-[#FF1744]/60 inline-block" />
+                          <span className="font-bold text-rose-300">{lang === 'ar' ? '> 3.0 m/s (نحر وتآكل)' : '> 3.0 m/s (Scour Risk)'}</span>
+                        </div>
+                        <span className="font-mono font-bold text-rose-400">{activeHydraulicSummary?.highVelocityCount ?? activeHydraulicSummary?.statsByVelocity?.high ?? 0}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Priority Tiers Legend */}
+                  {activeColorMode === 'priority' && (
+                    <div className="space-y-1 pt-1 border-t border-white/10 text-[10px]">
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
+                          <span className="font-bold text-emerald-300">{lang === 'ar' ? 'P1 مناسيب الأنابيب (Inverts)' : 'P1 Pipe Inverts'}</span>
+                        </div>
+                        <span className="font-mono font-bold text-emerald-400">{flowAnalysis?.statsByPriority.priority1_pipeElevation || 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-amber-950/40 border border-amber-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
+                          <span className="font-bold text-amber-300">{lang === 'ar' ? 'P2 أرقام المناهل (Manholes)' : 'P2 Manholes'}</span>
+                        </div>
+                        <span className="font-mono font-bold text-amber-400">{flowAnalysis?.statsByPriority.priority2_manholes || 0}</span>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-cyan-950/40 border border-cyan-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 inline-block" />
+                          <span className="font-bold text-cyan-300">{lang === 'ar' ? 'P3 تضاريس الأرض (DEM)' : 'P3 DEM Elevation'}</span>
+                        </div>
+                        <span className="font-mono font-bold text-cyan-400">{flowAnalysis?.statsByPriority.priority3_dem || 0}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Diameter Tiers Legend */}
+                  {activeColorMode === 'diameter' && (
+                    <div className="space-y-1 pt-1 border-t border-white/10 text-[10px]">
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-cyan-950/40 border border-cyan-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#06b6d4] inline-block" />
+                          <span className="font-bold text-cyan-300">≤ 200 mm</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-blue-950/40 border border-blue-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#3b82f6] inline-block" />
+                          <span className="font-bold text-blue-300">201 - 400 mm</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-purple-950/40 border border-purple-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#8b5cf6] inline-block" />
+                          <span className="font-bold text-purple-300">401 - 600 mm</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between p-1.5 rounded-xl bg-pink-950/40 border border-pink-500/30">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#ec4899] inline-block" />
+                          <span className="font-bold text-pink-300">&gt; 600 mm</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Summary Network Totals */}
+                  <div className="pt-2 border-t border-white/10 grid grid-cols-2 gap-1.5 text-[9.5px]">
+                    <div className="p-1.5 rounded-xl bg-slate-900/80 border border-white/5">
+                      <span className="text-slate-400 block">{lang === 'ar' ? 'إجمالي التصريف:' : 'Total Q:'}</span>
+                      <span className="font-mono font-bold text-cyan-300 text-[10.5px]">
+                        {(activeHydraulicSummary?.totalCapacityLs ?? activeHydraulicSummary?.totalFullCapacityLs ?? 0) >= 1000 
+                          ? `${((activeHydraulicSummary?.totalCapacityLs ?? activeHydraulicSummary?.totalFullCapacityLs ?? 0) / 1000).toFixed(2)} m³/s`
+                          : `${(activeHydraulicSummary?.totalCapacityLs ?? activeHydraulicSummary?.totalFullCapacityLs ?? 0).toFixed(0)} L/s`}
+                      </span>
+                    </div>
+                    <div className="p-1.5 rounded-xl bg-slate-900/80 border border-white/5">
+                      <span className="text-slate-400 block">{lang === 'ar' ? 'كمية الأسفلت:' : 'Asphalt Vol:'}</span>
+                      <span className="font-mono font-bold text-amber-300 text-[10.5px]">
+                        {(activeHydraulicSummary?.totalAsphaltVolumeM3 ?? 0).toFixed(1)} m³
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -1313,27 +1678,72 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                     </button>
                     <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-slate-100">
                         <h4 className="text-[11px] font-black uppercase text-slate-400 mb-1">{lang === 'ar' ? 'تصفية العناصر' : 'Filter Elements'}</h4>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 gap-2">
                             <button 
                                 onClick={() => setShowPolygons(!showPolygons)}
-                                className={`py-2 px-1 rounded-xl transition-all border text-[9px] font-black uppercase flex flex-col items-center gap-1 ${showPolygons ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9.5px] font-black uppercase flex items-center justify-center gap-1.5 ${showPolygons ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
                             >
-                                <Square className="w-4 h-4" />
+                                <Square className="w-3.5 h-3.5" />
                                 {lang === 'ar' ? 'مضلعات' : 'Polygons'}
                             </button>
                             <button 
                                 onClick={() => setShowLines(!showLines)}
-                                className={`py-2 px-1 rounded-xl transition-all border text-[9px] font-black uppercase flex flex-col items-center gap-1 ${showLines ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9.5px] font-black uppercase flex items-center justify-center gap-1.5 ${showLines ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
                             >
-                                <Navigation2 className="w-4 h-4" />
+                                <Navigation2 className="w-3.5 h-3.5" />
                                 {lang === 'ar' ? 'خطوط' : 'Lines'}
                             </button>
                             <button 
                                 onClick={() => setShowPoints(!showPoints)}
-                                className={`py-2 px-1 rounded-xl transition-all border text-[9px] font-black uppercase flex flex-col items-center gap-1 ${showPoints ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9.5px] font-black uppercase flex items-center justify-center gap-1.5 ${showPoints ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
                             >
-                                <MapPin className="w-4 h-4" />
+                                <MapPin className="w-3.5 h-3.5" />
                                 {lang === 'ar' ? 'نقاط' : 'Points'}
+                            </button>
+                            <button 
+                                onClick={() => setShowOutfalls(!showOutfalls)}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9.5px] font-black uppercase flex items-center justify-center gap-1.5 ${showOutfalls ? "bg-cyan-600 text-white border-cyan-600 shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
+                            >
+                                <Waves className="w-3.5 h-3.5" />
+                                {lang === 'ar' ? 'المصبات' : 'Outfalls'}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Hydraulic Layer Coloring Settings */}
+                    <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-slate-100">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-[11px] font-black uppercase text-slate-400">{lang === 'ar' ? 'تلوين الشبكة الهيدروليكية' : 'Hydraulic Coloring'}</h4>
+                            <span className="text-[9px] font-mono text-cyan-600 font-bold uppercase">{activeColorMode}</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                            <button 
+                                onClick={() => handleColorModeChange('velocity')}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9px] font-black flex items-center justify-center gap-1.5 ${activeColorMode === 'velocity' ? "bg-cyan-500 text-white border-cyan-500 shadow-md" : "bg-slate-50 text-slate-500 border-slate-100 hover:bg-white"}`}
+                            >
+                                <Gauge className="w-3 h-3" />
+                                {lang === 'ar' ? 'سرعة التدفق' : 'Velocity'}
+                            </button>
+                            <button 
+                                onClick={() => handleColorModeChange('priority')}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9px] font-black flex items-center justify-center gap-1.5 ${activeColorMode === 'priority' ? "bg-cyan-500 text-white border-cyan-500 shadow-md" : "bg-slate-50 text-slate-500 border-slate-100 hover:bg-white"}`}
+                            >
+                                <Compass className="w-3 h-3" />
+                                {lang === 'ar' ? 'الأولوية (DEM)' : 'Priority'}
+                            </button>
+                            <button 
+                                onClick={() => handleColorModeChange('diameter')}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9px] font-black flex items-center justify-center gap-1.5 ${activeColorMode === 'diameter' ? "bg-cyan-500 text-white border-cyan-500 shadow-md" : "bg-slate-50 text-slate-500 border-slate-100 hover:bg-white"}`}
+                            >
+                                <Ruler className="w-3 h-3" />
+                                {lang === 'ar' ? 'أقطار الأنابيب' : 'Diameter'}
+                            </button>
+                            <button 
+                                onClick={() => handleColorModeChange('default')}
+                                className={`py-2 px-2 rounded-xl transition-all border text-[9px] font-black flex items-center justify-center gap-1.5 ${activeColorMode === 'default' ? "bg-slate-800 text-white border-slate-800 shadow-md" : "bg-slate-50 text-slate-500 border-slate-100 hover:bg-white"}`}
+                            >
+                                <LayersIcon className="w-3 h-3" />
+                                {lang === 'ar' ? 'ألوان الملف الأصلية' : 'Original Colors'}
                             </button>
                         </div>
                     </div>

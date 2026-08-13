@@ -368,11 +368,13 @@ export const getReverseGeocode = async (
         const endpoints = [
             'https://overpass-api.de/api/interpreter',
             'https://lz4.overpass-api.de/api/interpreter',
-            'https://overpass.kumi.systems/api/interpreter'
+            'https://z.overpass-api.de/api/interpreter',
+            'https://overpass.private.coffee/api/interpreter',
+            'https://overpass.osm.ch/api/interpreter'
         ];
         
         const radius = isAccurate ? 80 : 50;
-        const query = `[out:json][timeout:3];way(around:${radius},${lat},${lon})["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|service"]["name"];out body geom;`;
+        const query = `[out:json][timeout:3];way(around:${radius},${queryLat},${queryLon})["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|service"]["name"];out body geom;`;
         
         for (const endpoint of endpoints) {
             try {
@@ -397,7 +399,7 @@ export const getReverseGeocode = async (
                             if (way.geometry && way.geometry.length > 0) {
                                 for (let i = 0; i < way.geometry.length - 1; i++) {
                                     const dist = pointToSegmentDistanceMeters(
-                                        lat, lon,
+                                        queryLat, queryLon,
                                         way.geometry[i].lat, way.geometry[i].lon,
                                         way.geometry[i+1].lat, way.geometry[i+1].lon
                                     );
@@ -426,7 +428,7 @@ export const getReverseGeocode = async (
     // 3. Fallback: Nominatim if street or district is still incomplete
     if (!street || street.length <= 2 || !district) {
         try {
-            const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1&accept-language=ar`;
+            const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${queryLat}&lon=${queryLon}&zoom=18&addressdetails=1&accept-language=ar`;
             const nomRes = await fetchWithTimeout(nomUrl, {}, 2000);
             if (nomRes && nomRes.ok) {
                 const text = await nomRes.text();
@@ -453,82 +455,131 @@ export const getReverseGeocode = async (
     return result;
 };
 
-export const fetchStreetsInPolygon = async (polygon: {x: number, y: number}[], shouldClip: boolean = true, highwayTypes: string[] = []): Promise<GeoPoint[]> => {
-    if (polygon.length < 3) throw new Error("يرجى تحديد منطقة صالحة على الخريطة أولاً.");
+export const fetchStreetsInPolygon = async (
+    polygon: {x: number, y: number}[], 
+    shouldClip: boolean = true, 
+    highwayTypes: string[] = []
+): Promise<GeoPoint[]> => {
+    if (!polygon || polygon.length < 3) {
+        throw new Error("يرجى تحديد منطقة صالحة على الخريطة أولاً.");
+    }
     
-    const polyStr = polygon.map(p => `${p.y.toFixed(5)} ${p.x.toFixed(5)}`).join(' ');
-    
-    // بناء الفلتر حسب الأنواع المختارة
+    // Normalize polygon vertices into WGS84 Lat/Lon (convert UTM if necessary)
+    const normalizedPolygon = polygon.map(p => {
+        let lat = p.y;
+        let lon = p.x;
+        if (Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+            let easting = Math.min(Math.abs(lat), Math.abs(lon));
+            let northing = Math.max(Math.abs(lat), Math.abs(lon));
+            if (northing > 100000 && easting > 100000) {
+                for (const z of [38, 37, 39, 36]) {
+                    const converted = utmToLatLon(easting, northing, z, true);
+                    if (converted.lat >= 12 && converted.lat <= 36 && converted.lon >= 33 && converted.lon <= 60) {
+                        lat = converted.lat;
+                        lon = converted.lon;
+                        break;
+                    }
+                }
+            }
+        }
+        return { x: lon, y: lat };
+    });
+
+    const minLat = Math.min(...normalizedPolygon.map(p => p.y));
+    const maxLat = Math.max(...normalizedPolygon.map(p => p.y));
+    const minLon = Math.min(...normalizedPolygon.map(p => p.x));
+    const maxLon = Math.max(...normalizedPolygon.map(p => p.x));
+
+    // Build Highway Filter
     let highwayFilter = highwayTypes.length > 0 
         ? `["highway"~"${highwayTypes.join('|')}"]` 
-        : `["highway"]`;
+        : `["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|service|trunk|motorway"]`;
         
-    const query = `[out:json][timeout:25]; ( way${highwayFilter}(poly:"${polyStr}"); ); out body geom;`;
+    // Use Bounding Box query (much faster, resilient against complex polygon geometry errors in Overpass)
+    // Then clip accurately to polygon using clipLineToPolygon below
+    const bboxQuery = `[out:json][timeout:15]; ( way${highwayFilter}(${minLat.toFixed(5)},${minLon.toFixed(5)},${maxLat.toFixed(5)},${maxLon.toFixed(5)}); ); out body geom;`;
+
+    // Also prepare polygon query if small polygon
+    const polyStr = normalizedPolygon.slice(0, 30).map(p => `${p.y.toFixed(5)} ${p.x.toFixed(5)}`).join(' ');
+    const polyQuery = `[out:json][timeout:15]; ( way${highwayFilter}(poly:"${polyStr}"); ); out body geom;`;
+
+    const queriesToTry = normalizedPolygon.length <= 20 ? [polyQuery, bboxQuery] : [bboxQuery];
 
     const endpoints = [
         'https://overpass-api.de/api/interpreter',
         'https://lz4.overpass-api.de/api/interpreter',
         'https://z.overpass-api.de/api/interpreter',
-        'https://overpass.kumi.systems/api/interpreter',
-        
+        'https://overpass.private.coffee/api/interpreter',
+        'https://overpass.osm.ch/api/interpreter'
     ];
 
-    let data = null;
-    let lastError = null;
+    let data: any = null;
+    let lastError: any = null;
 
     for (const endpoint of endpoints) {
-        try {
-            let response = await fetchWithTimeout(endpoint, { 
-                method: 'POST', 
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `data=${encodeURIComponent(query)}`
-            }, 25000);
-            if (response && response.ok) {
-                data = await response.json();
-                break;
-            } else {
-                lastError = new Error(`Server ${endpoint} failed or returned error status`);
+        for (const query of queriesToTry) {
+            try {
+                const response = await fetchWithTimeout(endpoint, { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `data=${encodeURIComponent(query)}`
+                }, 12000);
+                
+                if (response && response.ok) {
+                    const text = await response.text();
+                    if (text && text.trim().startsWith('{')) {
+                        const parsed = JSON.parse(text);
+                        if (parsed && Array.isArray(parsed.elements)) {
+                            data = parsed;
+                            break;
+                        }
+                    }
+                } else if (response) {
+                    lastError = new Error(`Server ${endpoint} returned status ${response.status}`);
+                }
+            } catch (err: any) {
+                lastError = err;
             }
-        } catch (err) {
-            lastError = err;
         }
+        if (data) break;
     }
 
-    if (!data) {
-        console.error("Overpass API Error:", lastError);
-        throw new Error("فشل الاتصال بخادم البيانات الجغرافية. جميع الخوادم غير متاحة.");
+    if (!data || !data.elements) {
+        console.warn("Overpass API fallback notice:", lastError);
+        // Fallback: return empty list gracefully rather than breaking app state
+        return [];
     }
 
     const results: GeoPoint[] = [];
-    if (data.elements) {
-        data.elements.forEach((el: any) => {
-            if (el.type === 'way' && el.geometry) {
-                const rawPath = el.geometry.map((g: any) => ({ x: g.lon, y: g.lat }));
-                
-                const segmentsToProcess = shouldClip ? clipLineToPolygon(rawPath, polygon) : [rawPath];
-                
-                segmentsToProcess.forEach((segment, idx) => {
-                    const name = el.tags?.name || el.tags?.name_ar || `شارع ${el.id}`;
-                    const type = el.tags?.highway || 'street';
-                    let color = '#dcb13c';
-                    if (['primary', 'motorway', 'trunk'].includes(type)) color = '#ef4444';
-                    if (['secondary', 'tertiary'].includes(type)) color = '#3b82f6';
-                    if (['residential', 'service'].includes(type)) color = '#10b981';
-                    results.push({ 
-                        id: segmentsToProcess.length > 1 ? `${name} [${idx + 1}]` : name, 
-                        x: segment[0].x, 
-                        y: segment[0].y, 
-                        description: `نوع الطريق: ${type}`, 
-                        layer: 'Overpass Streets', 
-                        type: 'LineString', 
-                        path: segment, 
-                        color, 
-                        originalLength: calculatePathLength(segment) 
-                    });
+    data.elements.forEach((el: any) => {
+        if (el.type === 'way' && el.geometry && el.geometry.length > 1) {
+            const rawPath = el.geometry.map((g: any) => ({ x: g.lon, y: g.lat }));
+            
+            const segmentsToProcess = shouldClip ? clipLineToPolygon(rawPath, normalizedPolygon) : [rawPath];
+            
+            segmentsToProcess.forEach((segment, idx) => {
+                if (!segment || segment.length < 2) return;
+                const name = el.tags?.['name:ar'] || el.tags?.name || `شارع ${el.id}`;
+                const type = el.tags?.highway || 'street';
+                let color = '#dcb13c';
+                if (['primary', 'motorway', 'trunk'].includes(type)) color = '#ef4444';
+                if (['secondary', 'tertiary'].includes(type)) color = '#3b82f6';
+                if (['residential', 'service'].includes(type)) color = '#10b981';
+                results.push({ 
+                    id: segmentsToProcess.length > 1 ? `${name} [${idx + 1}]` : name, 
+                    x: segment[0].x, 
+                    y: segment[0].y, 
+                    description: `نوع الطريق: ${type}`, 
+                    layer: 'Overpass Streets', 
+                    type: 'LineString', 
+                    path: segment, 
+                    color, 
+                    originalLength: calculatePathLength(segment) 
                 });
-            }
-        });
-    }
+            });
+        }
+    });
+
     return results;
 };
 export const splitLinesAtIntersections = (lines: import('../types').GeoPoint[]): import('../types').GeoPoint[] => {

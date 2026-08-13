@@ -13,6 +13,10 @@ interface SbcValidatorProps {
   lang: 'ar' | 'en';
   onHighlightPoints?: (points: GeoPoint[], color: string) => void;
   onApplySbcColors?: (coloredPoints: GeoPoint[]) => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
+  setGlobalLoading?: (val: boolean) => void;
+  setGlobalStatus?: (msg: string) => void;
+  setGlobalProgress?: (pct: number | null) => void;
 }
 
 export interface ValidationIssue {
@@ -291,8 +295,32 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
   lang,
   onHighlightPoints,
   onApplySbcColors,
+  runWithLoading,
+  setGlobalLoading,
+  setGlobalStatus,
+  setGlobalProgress
 }) => {
   const [activeTab, setActiveTab] = useState<'audit' | 'reference'>('audit');
+
+  const wrapLoading = async (msg: string, task: () => void | Promise<void>) => {
+    if (runWithLoading) {
+      await runWithLoading(msg, task);
+    } else if (setGlobalLoading) {
+      setGlobalLoading(true);
+      if (setGlobalStatus) setGlobalStatus(msg);
+      if (setGlobalProgress) setGlobalProgress(10);
+      try {
+        await new Promise(r => setTimeout(r, 60));
+        await task();
+        if (setGlobalProgress) setGlobalProgress(100);
+      } finally {
+        setGlobalLoading(false);
+        if (setGlobalProgress) setGlobalProgress(null);
+      }
+    } else {
+      await task();
+    }
+  };
   const [filterSeverity, setFilterSeverity] = useState<'all' | 'error' | 'warning' | 'success'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -768,65 +796,74 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
 
   // --- EXPORT FUNCTIONS ---
   // 1. Export Excel (.xlsx) with Summary & Findings
-  const exportSbcAuditExcel = () => {
+  const exportSbcAuditExcel = async () => {
     if (auditResults.length === 0) return;
+    await wrapLoading(
+      lang === 'ar' ? 'جاري تجهيز وتصدير تقرير التدقيق لكود البناء (Excel)...' : 'Generating SBC Audit Excel Report...',
+      async () => {
+        const wb = XLSX.utils.book_new();
 
-    const wb = XLSX.utils.book_new();
+        // Summary Sheet
+        const summaryRows = [
+          { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'نسبة المطابقة لكود البناء السعودي' : 'SBC Compliance Index', [lang === 'ar' ? 'القيمة' : 'Value']: `${stats.complianceScore}%` },
+          { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'إجمالي عناصر الصرف الصحي' : 'Sewer Lines Evaluated', [lang === 'ar' ? 'القيمة' : 'Value']: parsedNetworks.sewerPoints.length },
+          { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'إجمالي عناصر مياه الشرب' : 'Water Lines Evaluated', [lang === 'ar' ? 'القيمة' : 'Value']: parsedNetworks.waterPoints.length },
+          { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'المخالفات الصريحة (Errors)' : 'Critical Violations', [lang === 'ar' ? 'القيمة' : 'Value']: stats.errors },
+          { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'التحذيرات والملاحظات (Warnings)' : 'Warnings', [lang === 'ar' ? 'القيمة' : 'Value']: stats.warnings },
+          { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'تاريخ التدقيق' : 'Audit Timestamp', [lang === 'ar' ? 'القيمة' : 'Value']: new Date().toLocaleString() },
+        ];
+        const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'SBC_Summary');
 
-    // Summary Sheet
-    const summaryRows = [
-      { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'نسبة المطابقة لكود البناء السعودي' : 'SBC Compliance Index', [lang === 'ar' ? 'القيمة' : 'Value']: `${stats.complianceScore}%` },
-      { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'إجمالي عناصر الصرف الصحي' : 'Sewer Lines Evaluated', [lang === 'ar' ? 'القيمة' : 'Value']: parsedNetworks.sewerPoints.length },
-      { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'إجمالي عناصر مياه الشرب' : 'Water Lines Evaluated', [lang === 'ar' ? 'القيمة' : 'Value']: parsedNetworks.waterPoints.length },
-      { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'المخالفات الصريحة (Errors)' : 'Critical Violations', [lang === 'ar' ? 'القيمة' : 'Value']: stats.errors },
-      { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'التحذيرات والملاحظات (Warnings)' : 'Warnings', [lang === 'ar' ? 'القيمة' : 'Value']: stats.warnings },
-      { [lang === 'ar' ? 'المؤشر / المعيار' : 'Metric']: lang === 'ar' ? 'تاريخ التدقيق' : 'Audit Timestamp', [lang === 'ar' ? 'القيمة' : 'Value']: new Date().toLocaleString() },
-    ];
-    const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
-    XLSX.utils.book_append_sheet(wb, wsSummary, 'SBC_Summary');
+        // Detailed Findings Sheet
+        const rows = auditResults.map((item, index) => ({
+          '#': index + 1,
+          [lang === 'ar' ? 'نوع الفحص' : 'Check Type']: item.type,
+          [lang === 'ar' ? 'درجة المخالفة' : 'Severity']: item.severity.toUpperCase(),
+          [lang === 'ar' ? 'العنوان' : 'Title']: lang === 'ar' ? item.titleAr : item.titleEn,
+          [lang === 'ar' ? 'التفاصيل والوصف' : 'Description']: lang === 'ar' ? item.descriptionAr : item.descriptionEn,
+          [lang === 'ar' ? 'القيمة الحالية' : 'Actual Value']: item.actualValue,
+          [lang === 'ar' ? 'اشتراط الكود السعودي' : 'SBC Requirement']: item.expectedValue,
+          [lang === 'ar' ? 'الموقع والاحداثيات' : 'Location']: item.locationStr || '-',
+        }));
 
-    // Detailed Findings Sheet
-    const rows = auditResults.map((item, index) => ({
-      '#': index + 1,
-      [lang === 'ar' ? 'نوع الفحص' : 'Check Type']: item.type,
-      [lang === 'ar' ? 'درجة المخالفة' : 'Severity']: item.severity.toUpperCase(),
-      [lang === 'ar' ? 'العنوان' : 'Title']: lang === 'ar' ? item.titleAr : item.titleEn,
-      [lang === 'ar' ? 'التفاصيل والوصف' : 'Description']: lang === 'ar' ? item.descriptionAr : item.descriptionEn,
-      [lang === 'ar' ? 'القيمة الحالية' : 'Actual Value']: item.actualValue,
-      [lang === 'ar' ? 'اشتراط الكود السعودي' : 'SBC Requirement']: item.expectedValue,
-      [lang === 'ar' ? 'الموقع والاحداثيات' : 'Location']: item.locationStr || '-',
-    }));
+        const wsDetails = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, wsDetails, 'Audit_Findings');
 
-    const wsDetails = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, wsDetails, 'Audit_Findings');
-
-    XLSX.writeFile(wb, `Saudi_Building_Code_Audit_Report_${Date.now()}.xlsx`);
-    setShowExportMenu(false);
+        XLSX.writeFile(wb, `Saudi_Building_Code_Audit_Report_${Date.now()}.xlsx`);
+        setShowExportMenu(false);
+      }
+    );
   };
 
   // 2. Export CSV (.csv)
-  const exportSbcAuditCsv = () => {
+  const exportSbcAuditCsv = async () => {
     if (auditResults.length === 0) return;
-    const rows = auditResults.map((item, index) => ({
-      'ID': index + 1,
-      'CheckType': item.type,
-      'Severity': item.severity.toUpperCase(),
-      'Title': lang === 'ar' ? item.titleAr : item.titleEn,
-      'Description': lang === 'ar' ? item.descriptionAr : item.descriptionEn,
-      'ActualValue': item.actualValue,
-      'ExpectedValue': item.expectedValue,
-      'Location': item.locationStr || '',
-    }));
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const csvStr = XLSX.utils.sheet_to_csv(ws);
-    const blob = new Blob(["\uFEFF" + csvStr], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `SBC_Audit_Findings_${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setShowExportMenu(false);
+    await wrapLoading(
+      lang === 'ar' ? 'جاري تجهيز وتصدير ملف CSV...' : 'Generating SBC Audit CSV...',
+      async () => {
+        const rows = auditResults.map((item, index) => ({
+          'ID': index + 1,
+          'CheckType': item.type,
+          'Severity': item.severity.toUpperCase(),
+          'Title': lang === 'ar' ? item.titleAr : item.titleEn,
+          'Description': lang === 'ar' ? item.descriptionAr : item.descriptionEn,
+          'ActualValue': item.actualValue,
+          'ExpectedValue': item.expectedValue,
+          'Location': item.locationStr || '',
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const csvStr = XLSX.utils.sheet_to_csv(ws);
+        const blob = new Blob(["\uFEFF" + csvStr], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `SBC_Audit_Findings_${Date.now()}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        setShowExportMenu(false);
+      }
+    );
   };
 
   // 3. Export Executive Text Report (.txt)
