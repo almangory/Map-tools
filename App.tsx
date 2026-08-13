@@ -50,7 +50,7 @@ import { ToolHoverTooltip } from './components/ToolHoverTooltip';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
 
-const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule as any).default || JSZipModule;
+const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule && (JSZipModule as any).default) ? (JSZipModule as any).default : JSZipModule;
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 

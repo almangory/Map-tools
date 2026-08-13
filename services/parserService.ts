@@ -7,7 +7,7 @@ import JSZipModule from 'jszip';
 import { ParsedFile, GeoPoint, ColumnMapping } from '../types';
 import { calculatePathLength } from './geometryService';
 
-const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule as any).default || JSZipModule;
+const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule && (JSZipModule as any).default) ? (JSZipModule as any).default : JSZipModule;
 
 
 // تحويل لون KML (AABBGGRR) إلى HEX (#RRGGBB)

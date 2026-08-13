@@ -32,6 +32,7 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
   const [endYCol, setEndYCol] = useState<string>('');
   const [idCol, setIdCol] = useState<string>('');
   const [layerCol, setLayerCol] = useState<string>('');
+  const [colorCol, setColorCol] = useState<string>('');
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -68,6 +69,7 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
       setEndYCol(findCol(['endy', 'y2', 'lat2', 'شمـال2', 'شمال النهاية', 'north2']));
       setIdCol(findCol(['id', 'معرف', 'رقم']));
       setLayerCol(findCol(['layer', 'طبقة', 'type', 'نوع']));
+      setColorCol(findCol(['color', 'colour', 'لون', 'اللون', 'كود_اللون', 'كود اللون', 'hex', 'الرقم_الهكس', 'color_code', 'colorcode', 'كود']));
 
     } catch (err: any) {
       setError(err.message);
@@ -102,6 +104,7 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
       const endYIdx = headers.indexOf(endYCol);
       const idIdx = idCol ? headers.indexOf(idCol) : -1;
       const layerIdx = layerCol ? headers.indexOf(layerCol) : -1;
+      const colorIdx = colorCol ? headers.indexOf(colorCol) : -1;
 
       const newPoints: GeoPoint[] = [];
 
@@ -121,6 +124,18 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
         const id = idIdx >= 0 && row[idIdx] ? String(row[idIdx]) : `LINE_${Date.now()}_${i}`;
         const layer = layerIdx >= 0 && row[layerIdx] ? String(row[layerIdx]) : 'Generated Lines';
 
+        let color = '#3b82f6'; // Default blue color
+        if (colorIdx >= 0 && row[colorIdx] !== undefined && row[colorIdx] !== null) {
+          const rawColor = String(row[colorIdx]).trim();
+          if (rawColor) {
+            if (/^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(rawColor)) {
+              color = rawColor.startsWith('#') ? rawColor : `#${rawColor}`;
+            } else {
+              color = rawColor;
+            }
+          }
+        }
+
         newPoints.push({
           id,
           x: sx,
@@ -128,7 +143,7 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
           type: 'LineString',
           path,
           layer,
-          color: '#3b82f6', // Default blue color
+          color,
           originalRow: row
         });
       });
@@ -320,6 +335,28 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
                     className="w-full bg-[#071c27] border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:border-accent outline-none"
                   >
                     <option value="">{lang === 'ar' ? 'توليد تلقائي' : 'Auto generate'}</option>
+                    {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
+                  </select>
+                </div>
+
+                {/* Color Column */}
+                <div className="space-y-2 sm:col-span-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-white/60">
+                      {lang === 'ar' ? 'عمود كود اللون (Color Code) - اختياري' : 'Color Code Column - Optional'}
+                    </label>
+                    {colorCol && (
+                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-md flex items-center gap-1">
+                        🎨 {lang === 'ar' ? `تلوين مفعّل من [${colorCol}]` : `Colored using [${colorCol}]`}
+                      </span>
+                    )}
+                  </div>
+                  <select 
+                    value={colorCol}
+                    onChange={(e) => setColorCol(e.target.value)}
+                    className="w-full bg-[#071c27] border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white focus:border-accent outline-none"
+                  >
+                    <option value="">{lang === 'ar' ? 'افتراضي (أزرق #3b82f6)' : 'Default (Blue #3b82f6)'}</option>
                     {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
                   </select>
                 </div>

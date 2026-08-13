@@ -3,7 +3,7 @@ import JSZipModule from 'jszip';
 import { GeoPoint, KmlExportOptions, SplitterMode } from '../types';
 import { matchStatusByColor } from './colorUtils';
 
-const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule as any).default || JSZipModule;
+const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule && (JSZipModule as any).default) ? (JSZipModule as any).default : JSZipModule;
 
 export const getEffectiveColor = (pt: GeoPoint, options?: KmlExportOptions): string => {
     let colorHex = pt.color;
