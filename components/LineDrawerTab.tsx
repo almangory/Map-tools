@@ -292,7 +292,8 @@ export const LineDrawerTab = ({
   const handleExportKMZ = async () => {
     if (activeExportLines.length === 0) return;
     const baseName = file?.filename ? file.filename.replace(/\.[^/.]+$/, '') : 'Drawn_Map_Lines';
-    const task = () => downloadKMZ(activeExportLines, baseName, { mode: 'none' });
+    const headers = file?.headers || (activeExportLines[0]?.attributes ? Object.keys(activeExportLines[0].attributes) : undefined);
+    const task = () => downloadKMZ(activeExportLines, baseName, { mode: 'none' }, headers, headers);
     if (runWithLoading) {
       await runWithLoading(lang === 'ar' ? 'جاري تحضير وتصدير ملف KMZ...' : 'Generating KMZ file...', task);
     } else {

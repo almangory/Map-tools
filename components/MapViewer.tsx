@@ -66,7 +66,7 @@ export const MapViewer: React.FC<MapViewerProps> = ({
   onUpdateAsphaltParams,
   manningN: propManningN = DEFAULT_MANNING_N,
   onUpdateManningN,
-  hydraulicColorMode = 'velocity',
+  hydraulicColorMode = 'default',
   onSetHydraulicColorMode,
   filename = 'Map_Network'
 }) => {

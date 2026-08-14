@@ -8,6 +8,7 @@ export interface GeoPoint {
   attr1?: string; // Extra Attribute 1
   attr2?: string; // Extra Attribute 2
   layer?: string;
+  folderPath?: string[]; // Nested folder path from source file e.g. ['Main Folder', 'Subfolder 1', 'Subfolder 2']
   type?: 'Point' | 'LineString' | 'Polygon'; // Geometry Type
   path?: { x: number; y: number; z?: number }[]; // Array of coordinates
   color?: string; // Hex color for analysis

@@ -368,6 +368,91 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
     return stylesXML;
 };
 
+// --- HIERARCHICAL FOLDER TREE TYPES & HELPERS ---
+export interface FolderTreeNode {
+    name: string;
+    points: GeoPoint[];
+    children: Map<string, FolderTreeNode>;
+}
+
+export const buildFolderTree = (points: GeoPoint[]): { rootPoints: GeoPoint[]; rootFolders: Map<string, FolderTreeNode> } => {
+    const rootFolders = new Map<string, FolderTreeNode>();
+    const rootPoints: GeoPoint[] = [];
+
+    points.forEach(pt => {
+        const path = (pt.folderPath && pt.folderPath.length > 0)
+            ? pt.folderPath
+            : (pt.layer ? [pt.layer] : []);
+
+        if (path.length === 0) {
+            rootPoints.push(pt);
+            return;
+        }
+
+        let currentMap = rootFolders;
+        let currentNode: FolderTreeNode | null = null;
+
+        for (let i = 0; i < path.length; i++) {
+            const seg = path[i];
+            if (!currentMap.has(seg)) {
+                currentMap.set(seg, {
+                    name: seg,
+                    points: [],
+                    children: new Map()
+                });
+            }
+            currentNode = currentMap.get(seg)!;
+            currentMap = currentNode.children;
+        }
+
+        if (currentNode) {
+            currentNode.points.push(pt);
+        } else {
+            rootPoints.push(pt);
+        }
+    });
+
+    return { rootPoints, rootFolders };
+};
+
+export const renderFolderTreeNode = (
+    node: FolderTreeNode,
+    chunks: string[],
+    indent: string,
+    headers?: string[],
+    selectedHeaders?: string[],
+    options?: KmlExportOptions
+) => {
+    let totalLen = 0;
+    const calculateSubtreeLength = (n: FolderTreeNode) => {
+        for (const pt of n.points) {
+            if (pt.type === 'LineString' && pt.path) totalLen += calculatePathLength(pt.path);
+            else if (pt.originalLength) totalLen += pt.originalLength;
+        }
+        for (const child of n.children.values()) {
+            calculateSubtreeLength(child);
+        }
+    };
+    calculateSubtreeLength(node);
+    
+    // Prevent adding duplicate length string if name already contains (XX.XX km) or (XX m)
+    const alreadyHasLength = /\(\s*\d+(\.\d+)?\s*(km|m|كم|م)\s*\)\s*$/i.test(node.name.trim());
+    const shouldAddLength = !alreadyHasLength && Boolean(options?.includeFolderLengths || options?.groupByColumn || options?.groupByAttribute);
+    const lenStr = (shouldAddLength && totalLen > 0) ? ` (${(totalLen / 1000).toFixed(2)} km)` : '';
+
+    chunks.push(`\n${indent}<Folder>\n${indent}  <name>${escapeXML(node.name)}${lenStr}</name>\n${indent}  <open>0</open>\n`);
+
+    for (const pt of node.points) {
+        chunks.push(createPlacemarkXML(pt, headers, selectedHeaders, options));
+    }
+
+    for (const child of node.children.values()) {
+        renderFolderTreeNode(child, chunks, indent + '  ', headers, selectedHeaders, options);
+    }
+
+    chunks.push(`\n${indent}</Folder>`);
+};
+
 // --- MAIN: Generate KML Chunks ---
 export const generateKMLFolderContent = (points: GeoPoint[], headers?: string[], selectedHeaders?: string[], options?: KmlExportOptions): string[] => {
     return points.map(p => createPlacemarkXML(p, headers, selectedHeaders, options));
@@ -387,7 +472,19 @@ ${stylesXML}`;
 
   const chunks: string[] = [header];
 
-  if (options.groupByAttribute || options.groupByColumn) {
+  const hasExplicitFolders = points.some(p => p.folderPath && p.folderPath.length > 0);
+  const isLayerGrouping = options.groupByAttribute === 'layer';
+  const shouldRenderHierarchy = isLayerGrouping || (!options.groupByAttribute && !options.groupByColumn && hasExplicitFolders);
+
+  if (shouldRenderHierarchy) {
+      const { rootPoints, rootFolders } = buildFolderTree(points);
+      for (const pt of rootPoints) {
+          chunks.push(createPlacemarkXML(pt, headers, selectedHeaders, options));
+      }
+      for (const folderNode of rootFolders.values()) {
+          renderFolderTreeNode(folderNode, chunks, '    ', headers, selectedHeaders, options);
+      }
+  } else if (options.groupByAttribute || options.groupByColumn) {
       const groups: Record<string, { pts: GeoPoint[], totalLen: number }> = {};
       
       points.forEach(pt => {
@@ -408,8 +505,6 @@ ${stylesXML}`;
           } else if (options.groupByAttribute === 'color') {
               const originalColor = String(pt.color || '#3b82f6').toUpperCase();
               key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
-          } else if (options.groupByAttribute === 'layer') {
-              key = pt.layer || 'Default';
           } else if (options.groupByAttribute === 'geometry') {
               const t = pt.type || 'Point';
               key = t === 'Polygon' ? 'مضلعات (Polygons)' : t === 'LineString' ? 'مسارات وخطوط (Lines)' : 'نقاط وعلامات (Points)';
@@ -450,6 +545,55 @@ export const generateKML = (points: GeoPoint[], docName: string, options: KmlExp
 // --- MAIN: Download KMZ Grouped as ZIP ---
 export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string, options: KmlExportOptions = { mode: 'none' }, headers?: string[], selectedHeaders?: string[]) => {
     try {
+        const hasExplicitFolders = points.some(p => p.folderPath && p.folderPath.length > 0);
+        const isLayerGrouping = options.groupByAttribute === 'layer';
+        const shouldRenderHierarchy = isLayerGrouping || (!options.groupByAttribute && !options.groupByColumn && hasExplicitFolders);
+
+        if (shouldRenderHierarchy) {
+            const { rootPoints, rootFolders } = buildFolderTree(points);
+            const zip = new JSZip();
+
+            if (rootPoints.length > 0) {
+                const kmlChunks = generateKMLChunks(rootPoints, docName, { ...options, mode: 'none' }, headers, selectedHeaders);
+                const kmlBlob = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
+                const subZip = new JSZip();
+                subZip.file("doc.kml", kmlBlob);
+                const subKmzBlob = await subZip.generateAsync({ type: "blob", compression: "DEFLATE" });
+                zip.file("Main_Elements.kmz", subKmzBlob);
+            }
+
+            for (const [folderName, node] of rootFolders.entries()) {
+                const collectPoints = (n: FolderTreeNode): GeoPoint[] => {
+                    let res = [...n.points];
+                    for (const child of n.children.values()) {
+                        res = res.concat(collectPoints(child));
+                    }
+                    return res;
+                };
+                const folderPoints = collectPoints(node);
+
+                const stylesXML = generateKMLStyles(folderPoints, options);
+                const kmlHeader = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n  <Document>\n    <name>${escapeXML(folderName)}</name>\n${stylesXML}`;
+                const kmlFooter = `\n  </Document>\n</kml>`;
+                const kmlChunks: string[] = [kmlHeader];
+
+                renderFolderTreeNode(node, kmlChunks, '    ', headers, selectedHeaders, options);
+                kmlChunks.push(kmlFooter);
+
+                const kmlBlob = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
+                const subZip = new JSZip();
+                subZip.file("doc.kml", kmlBlob);
+                const subKmzBlob = await subZip.generateAsync({ type: "blob", compression: "DEFLATE" });
+                const safeName = folderName.replace(/[\\/:*?"<>|]/g, "_") || "Folder";
+                zip.file(`${safeName}.kmz`, subKmzBlob);
+            }
+
+            const zipBlob = await zip.generateAsync({ type: "blob" });
+            const cleanDocName = docName.replace(/\.[^/.]+$/, "");
+            downloadBlob(zipBlob, `${cleanDocName}_Grouped_KMZs.zip`);
+            return;
+        }
+
         const groups: Record<string, { pts: GeoPoint[], totalLen: number }> = {};
         
         points.forEach(pt => {
@@ -470,8 +614,6 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
             } else if (options.groupByAttribute === 'color') {
                 const originalColor = String(pt.color || '#3b82f6').toUpperCase();
                 key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
-            } else if (options.groupByAttribute === 'layer') {
-                key = pt.layer || 'Default';
             } else if (options.groupByAttribute === 'geometry') {
                 const t = pt.type || 'Point';
                 key = t === 'Polygon' ? 'مضلعات (Polygons)' : t === 'LineString' ? 'مسارات وخطوط (Lines)' : 'نقاط وعلامات (Points)';
@@ -489,7 +631,6 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
         const zip = new JSZip();
         
         for (const [groupName, data] of Object.entries(groups)) {
-            // Generate individual KMZ containing doc.kml for that single group
             const kmlChunks = generateKMLChunks(data.pts, groupName, { ...options, mode: 'none' }, headers, selectedHeaders);
             const kmlBlob = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
             const subZip = new JSZip();

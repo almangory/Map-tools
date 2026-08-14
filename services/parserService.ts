@@ -525,6 +525,83 @@ export const extractHeadersFromPoints = (points: GeoPoint[]): string[] => {
     return Array.from(keysSet);
 };
 
+export const extractFolderHierarchy = (pm: Element): { folderPath: string[]; layerName: string } => {
+    const folderNames: string[] = [];
+    let curr = pm.parentElement;
+    while (curr) {
+        const tagName = String(curr.localName || curr.tagName || '').toLowerCase();
+        if (tagName === 'folder' || tagName === 'networklink') {
+            const nameEl = Array.from(curr.childNodes).find(n => {
+                const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                return nName === 'name';
+            });
+            let fName = nameEl?.textContent?.trim();
+            if (fName) {
+                if (fName.startsWith('<![CDATA[')) {
+                    fName = fName.substring(9, fName.length - 3).trim();
+                }
+                if (fName) folderNames.unshift(fName);
+            }
+        } else if (tagName === 'document') {
+            const parentTag = String(curr.parentElement?.localName || curr.parentElement?.tagName || '').toLowerCase();
+            // Include document name if it is nested or if there are multiple documents
+            const isRootKml = parentTag === 'kml';
+            const hasSiblingDocs = isRootKml && (curr.parentElement?.getElementsByTagName('Document').length || 0) > 1;
+            if (parentTag === 'folder' || parentTag === 'document' || hasSiblingDocs) {
+                const nameEl = Array.from(curr.childNodes).find(n => {
+                    const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                    return nName === 'name';
+                });
+                let dName = nameEl?.textContent?.trim();
+                if (dName) {
+                    if (dName.startsWith('<![CDATA[')) {
+                        dName = dName.substring(9, dName.length - 3).trim();
+                    }
+                    if (dName) folderNames.unshift(dName);
+                }
+            }
+        }
+        curr = curr.parentElement;
+    }
+
+    const layerName = folderNames.length > 0 ? folderNames[folderNames.length - 1] : 'KML Import';
+    return {
+        folderPath: folderNames.length > 0 ? folderNames : [layerName],
+        layerName
+    };
+};
+
+const getActiveFolderPathRegex = (kml: string, charIndex: number): { folderPath: string[]; layerName: string } => {
+    const textBefore = kml.substring(0, charIndex);
+    const tagRegex = /<(\/)?(Folder)[\s>]/gi;
+    let m;
+    const activeOpenIndices: number[] = [];
+    while ((m = tagRegex.exec(textBefore)) !== null) {
+        if (!m[1]) {
+            activeOpenIndices.push(m.index);
+        } else {
+            activeOpenIndices.pop();
+        }
+    }
+    const folderNames: string[] = [];
+    for (const openIdx of activeOpenIndices) {
+        const afterTag = textBefore.substring(openIdx, Math.min(openIdx + 600, textBefore.length));
+        const nameMatch = afterTag.match(/<name[^>]*>([\s\S]*?)<\/name>/i);
+        if (nameMatch) {
+            let fName = nameMatch[1].trim();
+            if (fName.startsWith('<![CDATA[')) {
+                fName = fName.substring(9, fName.length - 3).trim();
+            }
+            if (fName) folderNames.push(fName);
+        }
+    }
+    const layerName = folderNames.length > 0 ? folderNames[folderNames.length - 1] : 'KML Import (Recovered)';
+    return {
+        folderPath: folderNames.length > 0 ? folderNames : [layerName],
+        layerName
+    };
+};
+
 const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
     const points: GeoPoint[] = [];
     const placemarkRegex = /<Placemark[^>]*>([\s\S]*?)<\/Placemark>/g;
@@ -534,19 +611,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
     while ((match = placemarkRegex.exec(kml)) !== null) {
         const content = match[1];
         
-        const beforePlacemark = kml.substring(0, match.index);
-        const lastFolderOpen = Math.max(beforePlacemark.lastIndexOf('<Folder'), beforePlacemark.lastIndexOf('<Document'), beforePlacemark.lastIndexOf('<folder'), beforePlacemark.lastIndexOf('<document'));
-        let layerName = 'KML Import (Recovered)';
-        if (lastFolderOpen !== -1) {
-            const folderStr = beforePlacemark.substring(lastFolderOpen);
-            const nameMatch = folderStr.match(/<name[^>]*>([\s\S]*?)<\/name>/i);
-            if (nameMatch) {
-                layerName = nameMatch[1].trim();
-                if (layerName.startsWith('<![CDATA[')) {
-                    layerName = layerName.substring(9, layerName.length - 3).trim();
-                }
-            }
-        }
+        const { folderPath, layerName } = getActiveFolderPathRegex(kml, match.index);
         
         // Extract name
         const nameMatch = content.match(/<name[^>]*>([\s\S]*?)<\/name>/i);
@@ -624,6 +689,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         z: path[0].z,
                         description: desc,
                         layer: layerName,
+                        folderPath: folderPath,
                         type: isPoly ? 'Polygon' : 'LineString',
                         path: path,
                         color: "#3b82f6",
@@ -641,6 +707,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         z: parts.length > 2 ? parseFloat(parts[2]) : 0,
                         description: desc,
                         layer: layerName,
+                        folderPath: folderPath,
                         type: 'Point',
                         color: "#3b82f6",
                         attributes
@@ -737,23 +804,7 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
                if (inlineIconHref) iconUrl = inlineIconHref;
            }
 
-           let layerName = 'KML Import';
-           let parent = pm.parentElement;
-           while (parent) {
-               const lowerTag = String(parent.localName || parent.tagName || '').toLowerCase();
-               if (lowerTag === 'folder' || lowerTag === 'document') {
-                   const nameNode = Array.from(parent.childNodes).find(n => {
-                       const nName = String(n.localName || n.nodeName || '').toLowerCase();
-                       return nName === 'name';
-                   });
-                   const folderName = nameNode?.textContent;
-                   if (folderName) {
-                       layerName = folderName;
-                       break;
-                   }
-               }
-               parent = parent.parentElement;
-           }
+           const { folderPath, layerName } = extractFolderHierarchy(pm);
 
            const attributes: Record<string, string> = {};
            const extendedDataTags = Array.from(pm.getElementsByTagName("ExtendedData"));
@@ -845,13 +896,13 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
 
                         const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
                         const uniqueId = name ? `${name}_${points.length + 1}` : `Feature_${points.length + 1}`;
-                        points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: featureType, path: path, color, attributes, iconUrl });
+                        points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, folderPath, type: featureType, path: path, color, attributes, iconUrl });
                     }
                 } else {
                     const parts = tuples[0].split(',');
                     if (parts.length >= 2) {
                         const uniqueId = name ? `${name}_${points.length + 1}` : `Point_${points.length + 1}`;
-                        points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
+                        points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, folderPath, type: 'Point', color, attributes, iconUrl });
                     }
                 }
            });
@@ -871,7 +922,7 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
 /**
  * Async wrapper for parseKMLContent to handle NetworkLinks with UI yielding & progress
  */
-export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (percent: number) => void): Promise<GeoPoint[]> => {
+export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (percent: number) => void, zipContext?: any): Promise<GeoPoint[]> => {
     const preprocessed = preprocessKML(kmlContent);
     if (onProgress) onProgress(10);
     await yieldToMain();
@@ -961,23 +1012,7 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                 if (inlineIconHref) iconUrl = inlineIconHref;
             }
 
-            let layerName = 'KML Import';
-            let parent = pm.parentElement;
-            while (parent) {
-                const lowerTag = String(parent.localName || parent.tagName || '').toLowerCase();
-                if (lowerTag === 'folder' || lowerTag === 'document') {
-                    const nameNode = Array.from(parent.childNodes).find(n => {
-                        const nName = String(n.localName || n.nodeName || '').toLowerCase();
-                        return nName === 'name';
-                    });
-                    const folderName = nameNode?.textContent;
-                    if (folderName) {
-                        layerName = folderName;
-                        break;
-                    }
-                }
-                parent = parent.parentElement;
-            }
+            const { folderPath, layerName } = extractFolderHierarchy(pm);
 
             const attributes: Record<string, string> = {};
             const extendedDataTags = Array.from(pm.getElementsByTagName("ExtendedData"));
@@ -1069,13 +1104,13 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
 
                          const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
                          const uniqueId = name ? `${name}_${points.length + 1}` : `Feature_${points.length + 1}`;
-                         points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, type: featureType, path: path, color, attributes, iconUrl });
+                         points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, folderPath, type: featureType, path: path, color, attributes, iconUrl });
                      }
                  } else {
                      const parts = tuples[0].split(',');
                      if (parts.length >= 2) {
                          const uniqueId = name ? `${name}_${points.length + 1}` : `Point_${points.length + 1}`;
-                         points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, type: 'Point', color, attributes, iconUrl });
+                         points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, folderPath, type: 'Point', color, attributes, iconUrl });
                      }
                  }
             });
@@ -1083,19 +1118,76 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
 
         const networkLinks = xmlDoc.getElementsByTagName("NetworkLink");
         for (let i = 0; i < networkLinks.length; i++) {
+            const nl = networkLinks[i];
             let href = "";
-            const linkNode = networkLinks[i].getElementsByTagName("Link")[0];
+            const linkNode = nl.getElementsByTagName("Link")[0];
             if (linkNode) {
                 href = linkNode.getElementsByTagName("href")[0]?.textContent?.trim() || "";
             } else {
-                const urlNode = networkLinks[i].getElementsByTagName("Url")[0];
+                const urlNode = nl.getElementsByTagName("Url")[0];
                 if (urlNode) {
                     href = urlNode.getElementsByTagName("href")[0]?.textContent?.trim() || "";
                 }
             }
 
+            // Extract the NetworkLink's direct name
+            const nlNameNode = Array.from(nl.childNodes).find(n => {
+                const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                return nName === 'name';
+            });
+            let nlName = nlNameNode?.textContent?.trim() || '';
+            if (nlName.startsWith('<![CDATA[')) {
+                nlName = nlName.substring(9, nlName.length - 3).trim();
+            }
+
+            // Extract parent folder hierarchy of the NetworkLink element
+            const { folderPath: nlParentPath } = extractFolderHierarchy(nl);
+            let nlPrefixPath: string[] = [];
+            if (nlName) {
+                if (nlParentPath.length > 0 && nlParentPath[nlParentPath.length - 1] === nlName) {
+                    nlPrefixPath = nlParentPath;
+                } else {
+                    nlPrefixPath = [...nlParentPath, nlName];
+                }
+            } else {
+                nlPrefixPath = nlParentPath;
+            }
+
             href = href.replace(/&amp;/g, '&');
-            if (href && href.startsWith('http')) {
+            
+            // Check if href is a local file in zipContext
+            let childPoints: GeoPoint[] | null = null;
+            if (zipContext && href && !href.startsWith('http')) {
+                const cleanHref = href.replace(/^\.\//, '').trim();
+                const zipFiles = Object.keys(zipContext.files);
+                const matchingFile = zipFiles.find(f => f === cleanHref || f.toLowerCase() === cleanHref.toLowerCase() || f.endsWith('/' + cleanHref));
+                
+                if (matchingFile) {
+                    try {
+                        if (matchingFile.toLowerCase().endsWith('.kmz')) {
+                            const subBuffer = await zipContext.file(matchingFile)?.async("arraybuffer");
+                            if (subBuffer) {
+                                const subZip = await JSZip.loadAsync(subBuffer);
+                                const subKmlName = Object.keys(subZip.files).find(name => name.toLowerCase().endsWith('.kml')) || 'doc.kml';
+                                const subKmlText = await subZip.file(subKmlName)?.async("string") || "";
+                                if (subKmlText) {
+                                    childPoints = await parseKMLContentAsync(subKmlText, undefined, subZip);
+                                }
+                            }
+                        } else if (matchingFile.toLowerCase().endsWith('.kml')) {
+                            const subKmlText = await zipContext.file(matchingFile)?.async("string") || "";
+                            if (subKmlText) {
+                                childPoints = await parseKMLContentAsync(subKmlText, undefined, zipContext);
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("Failed to load local NetworkLink from zip:", matchingFile, err);
+                    }
+                }
+            }
+
+            // If not found in zip or is an HTTP url, fetch remotely
+            if (!childPoints && href && href.startsWith('http')) {
                 if (onProgress) onProgress(70 + Math.round((i / networkLinks.length) * 25));
                 await yieldToMain();
                 try {
@@ -1103,7 +1195,7 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                         if (onProgress) onProgress(70 + Math.round((pct / 100) * 25));
                     });
                     if (parsedLink && parsedLink.data) {
-                        points.push(...(parsedLink.data as GeoPoint[]));
+                        childPoints = parsedLink.data as GeoPoint[];
                     }
                 } catch(e: any) {
                     console.warn("Failed to fetch NetworkLink:", href, e);
@@ -1111,6 +1203,21 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
                         throw new Error("NETWORK_LINK_ERROR:" + (e.message || ''));
                     }
                 }
+            }
+
+            if (childPoints && childPoints.length > 0) {
+                childPoints.forEach(lp => {
+                    const existingPath = (lp.folderPath && lp.folderPath.length > 0) ? lp.folderPath : (lp.layer ? [lp.layer] : []);
+                    if (nlPrefixPath.length > 0) {
+                        lp.folderPath = [...nlPrefixPath, ...existingPath];
+                    } else {
+                        lp.folderPath = existingPath;
+                    }
+                    if (nlName && (!lp.layer || lp.layer === 'KML Import' || lp.layer === 'Default')) {
+                        lp.layer = nlName;
+                    }
+                });
+                points.push(...childPoints);
             }
         }
 
@@ -1356,7 +1463,7 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
                 }
             }
             if (onProgress) onProgress(60);
-            const points = await parseKMLContentAsync(kmlContent, onProgress);
+            const points = await parseKMLContentAsync(kmlContent, onProgress, zip);
             if (onProgress) onProgress(100);
             return { filename: file.name, type: 'kmz', data: points, headers: extractHeadersFromPoints(points), preview: [] };
         }
@@ -1387,11 +1494,12 @@ export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {
   entities.forEach(entity => {
     const extras = getExtras(entity);
     const layer = entity.layer || 'Default';
+    const folderPath = [layer];
     if ((entity.type === 'POINT' || entity.type === 'INSERT') && entity.position) {
-      points.push({ id: entity.name || entity.handle || counter++, x: entity.position.x, y: entity.position.y, z: entity.position.z || 0, layer, description: `DXF ${entity.type}`, attr1: extras, type: 'Point' });
+      points.push({ id: entity.name || entity.handle || counter++, x: entity.position.x, y: entity.position.y, z: entity.position.z || 0, layer, folderPath, description: `DXF ${entity.type}`, attr1: extras, type: 'Point' });
     } 
     else if (entity.type === 'CIRCLE' && entity.center) {
-       points.push({ id: entity.handle || counter++, x: entity.center.x, y: entity.center.y, z: entity.center.z || 0, layer, description: `DXF Circle`, attr1: extras, type: 'Point' });
+       points.push({ id: entity.handle || counter++, x: entity.center.x, y: entity.center.y, z: entity.center.z || 0, layer, folderPath, description: `DXF Circle`, attr1: extras, type: 'Point' });
     }
     else if (entity.type === 'ARC' && entity.center) {
         const { center, radius, startAngle, endAngle } = entity;
@@ -1406,22 +1514,22 @@ export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {
             const theta = (sAngle + (step * i)) * (Math.PI / 180);
             path.push({ x: center.x + radius * Math.cos(theta), y: center.y + radius * Math.sin(theta), z: center.z || 0 });
         }
-        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, description: `Arc (R=${radius.toFixed(2)})`, attr1: extras, type: 'LineString', path: path });
+        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, folderPath, description: `Arc (R=${radius.toFixed(2)})`, attr1: extras, type: 'LineString', path: path });
     }
     else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && entity.vertices && entity.vertices.length > 0) {
         const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
         if (entity.shape || entity.closed) path.push({ ...path[0] });
-        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, description: `Polyline`, attr1: extras, type: 'LineString', path: path });
+        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, folderPath, description: `Polyline`, attr1: extras, type: 'LineString', path: path });
     }
     else if (entity.type === 'LINE' && entity.vertices && entity.vertices.length >= 2) {
         const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
-        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, description: `Line`, attr1: extras, type: 'LineString', path: path });
+        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, folderPath, description: `Line`, attr1: extras, type: 'LineString', path: path });
     }
     else if ((entity.type === 'TEXT' || entity.type === 'MTEXT')) {
         const pos = entity.position || entity.insertionPoint;
         if (pos) {
             const textContent = entity.text || '';
-            points.push({ id: textContent || entity.handle || counter++, x: pos.x, y: pos.y, z: pos.z || 0, layer, description: `Text: ${textContent}`, attr1: extras, type: 'Point' });
+            points.push({ id: textContent || entity.handle || counter++, x: pos.x, y: pos.y, z: pos.z || 0, layer, folderPath, description: `Text: ${textContent}`, attr1: extras, type: 'Point' });
         }
     }
   });
