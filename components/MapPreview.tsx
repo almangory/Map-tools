@@ -6,7 +6,8 @@ import {
   CheckCircle2, Layers as LayersIcon, Map as MapIcon, Eye, EyeOff, 
   Globe, Maximize, Download, Navigation2, MapPin, RotateCcw, Info, 
   X, Sparkles, Compass, Mountain, Activity, ArrowDownRight, Waves, 
-  FileSpreadsheet, ChevronDown, ChevronUp, Gauge, Droplet, Ruler
+  FileSpreadsheet, ChevronDown, ChevronUp, Gauge, Droplet, Ruler,
+  PenTool, Undo2, Check, Target
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -17,6 +18,7 @@ import {
 import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
 import { NetworkFlowAnalysis } from '../services/flowDirectionService';
+import { calculatePathLength } from '../services/kmlService';
 import { 
   analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
   DEFAULT_ASPHALT_PARAMS, DEFAULT_MANNING_N 
@@ -55,6 +57,20 @@ export interface MapPreviewProps {
   onSetHydraulicColorMode?: (mode: HydraulicColorMode) => void;
   asphaltParams?: AsphaltCalculationParams;
   manningN?: number;
+
+  // Main Map Direct Line Drawing Props
+  isLineDrawingMode?: boolean;
+  activeLineVertices?: { x: number; y: number }[];
+  activeLineColor?: string;
+  activeLineWidth?: number;
+  activeLineName?: string;
+  activeLineLayer?: string;
+  onAddLineVertex?: (pt: { x: number; y: number }) => void;
+  onUndoLineVertex?: () => void;
+  onFinishLine?: () => void;
+  onCancelLineDraw?: () => void;
+  isPickingCoordinate?: 'start' | 'end' | null;
+  onPickMapCoordinate?: (coord: { x: number; y: number }) => void;
 }
 
 /**
@@ -94,7 +110,19 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   hydraulicColorMode: propHydraulicColorMode,
   onSetHydraulicColorMode,
   asphaltParams = DEFAULT_ASPHALT_PARAMS,
-  manningN = DEFAULT_MANNING_N
+  manningN = DEFAULT_MANNING_N,
+  isLineDrawingMode = false,
+  activeLineVertices = [],
+  activeLineColor = '#3b82f6',
+  activeLineWidth = 4,
+  activeLineName = 'LINE_1',
+  activeLineLayer = 'شبكة المياه',
+  onAddLineVertex,
+  onUndoLineVertex,
+  onFinishLine,
+  onCancelLineDraw,
+  isPickingCoordinate = null,
+  onPickMapCoordinate
 }) => {
 
   useEffect(() => {
@@ -171,6 +199,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const layerGroup = useRef<L.LayerGroup | null>(null);
   const drawLayerGroup = useRef<L.LayerGroup | null>(null);
   const currentDrawGroup = useRef<L.LayerGroup | null>(null);
+  const lineDrawLayerGroup = useRef<L.LayerGroup | null>(null);
   const hoverMarkerRef = useRef<L.Marker | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const issueMarkersMap = useRef<Map<string | number, L.Marker | L.CircleMarker | L.Polyline>>(new Map());
@@ -178,6 +207,23 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const isDrawingRef = useRef(false);
   const polygonCoordsRef = useRef<L.LatLng[]>([]);
   const lastDataIdRef = useRef<string | null>(null);
+
+  // Synchronization refs for direct map line drawing & picking
+  const isLineDrawingModeRef = useRef(false);
+  const activeLineVerticesRef = useRef<{ x: number; y: number }[]>([]);
+  const onAddLineVertexRef = useRef(onAddLineVertex);
+  const onFinishLineRef = useRef(onFinishLine);
+  const isPickingCoordinateRef = useRef(isPickingCoordinate);
+  const onPickMapCoordinateRef = useRef(onPickMapCoordinate);
+
+  useEffect(() => {
+    isLineDrawingModeRef.current = !!isLineDrawingMode;
+    activeLineVerticesRef.current = activeLineVertices || [];
+    onAddLineVertexRef.current = onAddLineVertex;
+    onFinishLineRef.current = onFinishLine;
+    isPickingCoordinateRef.current = isPickingCoordinate;
+    onPickMapCoordinateRef.current = onPickMapCoordinate;
+  }, [isLineDrawingMode, activeLineVertices, onAddLineVertex, onFinishLine, isPickingCoordinate, onPickMapCoordinate]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -214,6 +260,11 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     if (propHydraulicSummary) return propHydraulicSummary;
     return analyzeNetworkHydraulics(points, flowAnalysis, manningN, asphaltParams);
   }, [points, flowAnalysis, manningN, asphaltParams, propHydraulicSummary]);
+
+  const activeLineLengthMeters = useMemo(() => {
+    if (!activeLineVertices || activeLineVertices.length < 2) return 0;
+    return calculatePathLength(activeLineVertices);
+  }, [activeLineVertices]);
   
   const [showPolygons, setShowPolygons] = useState(true);
   const [showLines, setShowLines] = useState(true);
@@ -680,15 +731,33 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     layerGroup.current = L.layerGroup().addTo(mapInstance.current);
     drawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
     currentDrawGroup.current = L.layerGroup().addTo(mapInstance.current);
+    lineDrawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
 
     // Add scale bar
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(mapInstance.current);
 
     mapInstance.current.on('mousemove', (e: L.LeafletMouseEvent) => {
-        setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
+      setCursorCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
     });
 
     mapInstance.current.on('click', (e: L.LeafletMouseEvent) => {
+      // 1. Check if picking a coordinate manually
+      if (isPickingCoordinateRef.current) {
+        if (onPickMapCoordinateRef.current) {
+          onPickMapCoordinateRef.current({ x: e.latlng.lng, y: e.latlng.lat });
+        }
+        return;
+      }
+
+      // 2. Check if drawing a line interactively on main map
+      if (isLineDrawingModeRef.current) {
+        if (onAddLineVertexRef.current) {
+          onAddLineVertexRef.current({ x: e.latlng.lng, y: e.latlng.lat });
+        }
+        return;
+      }
+
+      // 3. Polygon selection mode
       if (!isDrawingRef.current) return;
       polygonCoordsRef.current = [...polygonCoordsRef.current, e.latlng];
       setHasPolygon(true);
@@ -704,6 +773,15 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       }
     });
 
+    mapInstance.current.on('dblclick', (e: L.LeafletMouseEvent) => {
+      if (isLineDrawingModeRef.current && activeLineVerticesRef.current.length >= 2) {
+        L.DomEvent.stopPropagation(e);
+        if (onFinishLineRef.current) {
+          onFinishLineRef.current();
+        }
+      }
+    });
+
     L.control.zoom({ position: lang === 'ar' ? 'topleft' : 'topright' }).addTo(mapInstance.current);
 
     return () => {
@@ -711,6 +789,87 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       mapInstance.current = null;
     };
   }, []);
+
+  // Update cursor style when in line drawing or coordinate picking mode
+  useEffect(() => {
+    if (!mapContainer.current) return;
+    if (isLineDrawingMode || isPickingCoordinate) {
+      mapContainer.current.style.cursor = 'crosshair';
+    } else if (isDrawing) {
+      mapContainer.current.style.cursor = 'crosshair';
+    } else {
+      mapContainer.current.style.cursor = '';
+    }
+  }, [isLineDrawingMode, isPickingCoordinate, isDrawing]);
+
+  // Render active line segments, numbered vertices, and rubber-band guide on main map
+  useEffect(() => {
+    if (!mapInstance.current || !lineDrawLayerGroup.current) return;
+    lineDrawLayerGroup.current.clearLayers();
+
+    if (!activeLineVertices || activeLineVertices.length === 0) return;
+
+    const latLngs = activeLineVertices.map(v => [v.y, v.x] as [number, number]);
+
+    // Draw solid line for confirmed points
+    if (latLngs.length >= 2) {
+      const line = L.polyline(latLngs, {
+        color: activeLineColor || '#3b82f6',
+        weight: activeLineWidth || 4,
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round'
+      });
+      lineDrawLayerGroup.current.addLayer(line);
+    }
+
+    // Numbered circular pins for each vertex
+    activeLineVertices.forEach((v, idx) => {
+      const isStart = idx === 0;
+      const isLatest = idx === activeLineVertices.length - 1;
+      const vertexColor = isStart ? '#10b981' : isLatest ? '#f59e0b' : (activeLineColor || '#3b82f6');
+
+      const icon = L.divIcon({
+        className: 'custom-vertex-pin',
+        html: `
+          <div style="
+            width: 24px;
+            height: 24px;
+            background-color: ${vertexColor};
+            color: #ffffff;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 900;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.6);
+            transform: translate(-50%, -50%);
+          ">
+            ${idx + 1}
+          </div>
+        `,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+
+      const marker = L.marker([v.y, v.x], { icon, interactive: false });
+      lineDrawLayerGroup.current?.addLayer(marker);
+    });
+
+    // Rubber-band dashed line connecting last vertex to cursor
+    if (isLineDrawingMode && cursorCoords && latLngs.length >= 1) {
+      const lastPt = latLngs[latLngs.length - 1];
+      const rubberBand = L.polyline([lastPt, [cursorCoords.lat, cursorCoords.lng]], {
+        color: activeLineColor || '#3b82f6',
+        weight: Math.max(2, (activeLineWidth || 4) - 1),
+        dashArray: '6, 6',
+        opacity: 0.85
+      });
+      lineDrawLayerGroup.current.addLayer(rubberBand);
+    }
+  }, [activeLineVertices, isLineDrawingMode, activeLineColor, activeLineWidth, cursorCoords]);
 
   useEffect(() => {
     if (tileLayerRef.current && mapInstance.current) {
@@ -1807,6 +1966,90 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 </div>
                 {t.drawInstruction}
             </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* INTERACTIVE DIRECT LINE DRAWING FLOATING ON-MAP HUD */}
+        {/* ======================================================== */}
+        {isLineDrawingMode && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[800] bg-[#071c27]/95 backdrop-blur-md border-2 border-accent/60 text-white px-4 sm:px-6 py-3 rounded-2xl sm:rounded-3xl shadow-2xl flex flex-wrap items-center justify-center gap-3 sm:gap-4 animate-in fade-in slide-in-from-top-3 max-w-[95%]">
+            <div className="flex items-center gap-2">
+              <div className="w-2.5 h-2.5 rounded-full bg-accent animate-ping" />
+              <div className="flex flex-col">
+                <span className="text-xs font-black text-white flex items-center gap-1.5">
+                  <PenTool className="w-3.5 h-3.5 text-accent" />
+                  <span>{lang === 'ar' ? `رسم مباشر: ${activeLineName || 'خط جديد'}` : `Drawing: ${activeLineName || 'New Line'}`}</span>
+                </span>
+                {activeLineLayer && (
+                  <span className="text-[10px] text-white/60 font-medium">
+                    {lang === 'ar' ? `الطبقة: ${activeLineLayer}` : `Layer: ${activeLineLayer}`}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="h-6 w-px bg-white/20 hidden sm:block" />
+
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="bg-accent/20 text-accent font-black px-2.5 py-1 rounded-xl border border-accent/30 text-[11px]">
+                {activeLineVertices?.length || 0} {lang === 'ar' ? 'نقاط' : 'pts'}
+              </span>
+              {activeLineLengthMeters > 0 && (
+                <span className="bg-emerald-500/20 text-emerald-300 font-black px-2.5 py-1 rounded-xl border border-emerald-500/30 text-[11px]">
+                  {activeLineLengthMeters >= 1000 
+                    ? `${(activeLineLengthMeters / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` 
+                    : `${activeLineLengthMeters.toFixed(1)} ${lang === 'ar' ? 'م' : 'm'}`}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                onClick={onUndoLineVertex}
+                disabled={!activeLineVertices || activeLineVertices.length === 0}
+                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white font-bold text-xs rounded-xl flex items-center gap-1 disabled:opacity-40 transition-all active:scale-95"
+                title={lang === 'ar' ? 'تراجع عن آخر نقطة' : 'Undo Last Point'}
+              >
+                <Undo2 className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">{lang === 'ar' ? 'تراجع' : 'Undo'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onCancelLineDraw}
+                className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold text-xs rounded-xl flex items-center gap-1 transition-all active:scale-95"
+                title={lang === 'ar' ? 'إلغاء الرسم' : 'Cancel Draw'}
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>{lang === 'ar' ? 'إلغاء' : 'Cancel'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onFinishLine}
+                disabled={!activeLineVertices || activeLineVertices.length < 2}
+                className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs rounded-xl shadow-lg flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none"
+              >
+                <Check className="w-4 h-4" />
+                <span>{lang === 'ar' ? 'إنهاء وحفظ' : 'Finish & Save'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* MANUAL COORDINATE PICKING BANNER */}
+        {/* ======================================================== */}
+        {isPickingCoordinate && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[800] bg-accent text-primary px-6 py-3 rounded-2xl shadow-2xl font-black text-xs sm:text-sm flex items-center gap-2.5 border-2 border-primary animate-pulse">
+            <Target className="w-5 h-5 animate-spin" />
+            <span>
+              {isPickingCoordinate === 'start' 
+                ? (lang === 'ar' ? '🎯 انقر على الخريطة لتحديد نقطة البداية (Start Point)' : '🎯 Click on map to pick START point')
+                : (lang === 'ar' ? '🎯 انقر على الخريطة لتحديد نقطة النهاية (End Point)' : '🎯 Click on map to pick END point')}
+            </span>
+          </div>
         )}
     </div>
   );

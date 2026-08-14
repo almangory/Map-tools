@@ -13,7 +13,7 @@ import {
   ChevronRight, ListOrdered, Locate, Zap, Navigation, FolderOpen, Package,
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
-  Database, Droplet, AlertTriangle, RotateCcw, Save, Smartphone, PenTool,
+  Database, Droplet, AlertTriangle, AlertOctagon, RotateCcw, Save, Smartphone, PenTool,
   Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
@@ -345,6 +345,64 @@ export const isLineElement = (pt: GeoPoint): boolean => {
 
   // 8. Open path with 2+ coordinates
   return true;
+};
+
+export const isYellowLineElement = (pt: GeoPoint): boolean => {
+  if (!pt || !isLineElement(pt)) return false;
+
+  const ptColor = String(pt.color || '').trim().toUpperCase();
+  const layerName = String(pt.layer || '').toLowerCase();
+  const desc = String(pt.description || '').toLowerCase();
+
+  // 1. Text cues in color, layer, or description
+  if (
+    layerName.includes('yellow') || layerName.includes('أصفر') || layerName.includes('اصفر') ||
+    layerName.includes('جاري العمل') || layerName.includes('جارى العمل') || layerName.includes('قيد التنفيذ') ||
+    layerName.includes('قيد العمل') || layerName.includes('in_progress') || layerName.includes('in progress') ||
+    desc.includes('yellow') || desc.includes('أصفر') || desc.includes('اصفر') ||
+    desc.includes('جاري العمل') || desc.includes('جارى العمل') || desc.includes('قيد التنفيذ') ||
+    ptColor.includes('YELLOW')
+  ) {
+    return true;
+  }
+
+  // 2. Check Hex Code & RGB
+  let cleanHex = ptColor;
+  if (cleanHex.startsWith('#')) cleanHex = cleanHex.substring(1);
+  if (cleanHex.length === 8) cleanHex = cleanHex.substring(2); // strip alpha
+  if (cleanHex.length === 6) {
+    const r = parseInt(cleanHex.substring(0, 2), 16);
+    const g = parseInt(cleanHex.substring(2, 4), 16);
+    const b = parseInt(cleanHex.substring(4, 6), 16);
+
+    if (!isNaN(r) && !isNaN(g) && !isNaN(b)) {
+      // Yellow RGB characteristics: High red & green, low blue
+      if (r >= 140 && g >= 120 && b <= 140 && (r + g) > (b * 2.2)) {
+        return true;
+      }
+    }
+  }
+
+  // 3. Color distance to standard yellow reference palette
+  const yellowShades = [
+    '#FFEA00', '#FFFF00', '#FFD700', '#DCB13C', '#FFEB3B',
+    '#FDD835', '#FBC02D', '#F59E0B', '#EAB308', '#E6C619',
+    '#FFE87C', '#FFE57F', '#FFDF00', '#D4AF37', '#FFC107', '#E5C158'
+  ];
+
+  for (const yShade of yellowShades) {
+    if (colorDistance(ptColor || '#DCB13C', yShade) <= 80) {
+      return true;
+    }
+  }
+
+  // 4. Status Category check
+  const statusCat = matchStatusByColor(ptColor);
+  if (statusCat && statusCat.key === 'in_progress') {
+    return true;
+  }
+
+  return false;
 };
 
 
@@ -1288,6 +1346,321 @@ const App: React.FC = () => {
       setTimeout(() => setStatusMessage(''), 5000);
     } catch (e: any) {
       console.error("Error in verifyPermitNo:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+    }
+  };
+
+  const verifyYellowLinesMissingPermitAndSegmentId = async () => {
+    setActiveIssueItems([]);
+    setLoading(true);
+    setProgressPercent(15);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري فحص الخطوط الصفراء فقط بدون Permit No أو segment id...'
+        : 'Auditing yellow lines only (missing Permit No / Segment ID)...'
+    );
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
+
+    try {
+      setProgressPercent(45);
+      let totalLinesChecked = 0;
+      let totalYellowLines = 0;
+      let missingBothCount = 0;
+      let missingPermitOnlyCount = 0;
+      let missingSegmentOnlyCount = 0;
+      let fullyCompliantCount = 0;
+      const flaggedIssuesList: GeoPoint[] = [];
+
+      const stripHtmlStr = (html: any): string => {
+        if (!html) return '';
+        return String(html)
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&#160;/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[\s\u00A0]+/g, ' ')
+          .trim();
+      };
+
+      const isValidAttrValue = (val: any, keyName?: string): boolean => {
+        if (val === undefined || val === null) return false;
+        const cleanStr = stripHtmlStr(val);
+        if (!cleanStr) return false;
+        if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) return false;
+        const lower = String(cleanStr || '').toLowerCase();
+        const emptyValues = new Set([
+          '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
+          'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
+          'no data', 'nodata', 'no_data', 'not available', 'not applicable',
+          'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
+          'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
+        ]);
+        if (emptyValues.has(lower)) return false;
+
+        const labelValues = new Set([
+          'permit no', 'permit_no', 'permitno', 'permit', 'permit id', 'permit_id', 'permitid',
+          'segment id', 'segment_id', 'segmentid', 'segment no', 'segment_no', 'segmentno',
+          'segment number', 'segment', 'seg id', 'seg_id', 'segid', 'seg no', 'seg_no', 'segno',
+          'رقم الترخيص', 'رقم ترخيص', 'الترخيص', 'رقم الرخصة', 'رقم رخصة', 'الرخصة', 'ترخيص',
+          'رقم التصريح', 'رقم تصريح', 'التصريح', 'تصريح', 'شريحة', 'رقم الشريحة', 'كود الشريحة',
+          'معرف الشريحة', 'رقم شريحة', 'كود شريحة', 'معرف شريحة'
+        ]);
+        if (labelValues.has(lower)) return false;
+        if (keyName && lower === String(stripHtmlStr(keyName) || '').toLowerCase()) return false;
+        if (/^(segment|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
+        return true;
+      };
+
+      const normalizeKeyStr = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
+
+      const isPermitAttributeKey = (key: string): boolean => {
+        if (!key) return false;
+        const norm = normalizeKeyStr(key);
+        if (!norm) return false;
+        const permitKeys = new Set([
+          'permitno', 'permitid', 'permit_no', 'permit_id', 'permit', 'permitnumber', 'permitnum', 'permitcode', 'permitref',
+          'licenseno', 'licenceno', 'license', 'licence', 'licenseid', 'licenceid',
+          'رقمالترخيص', 'رقمترخيص', 'الترخيص', 'رقمالرخصة', 'رقمرخصة', 'كودالترخيص', 'معرفالترخيص',
+          'رقمالتصريح', 'رقمتصريح', 'التصريح', 'تصريح', 'ترخيص', 'رخصة'
+        ]);
+        if (permitKeys.has(norm)) return true;
+        return (
+          norm.includes('permit') ||
+          norm.includes('license') ||
+          norm.includes('licence') ||
+          norm.includes('ترخيص') ||
+          norm.includes('رخصة') ||
+          norm.includes('تصريح')
+        );
+      };
+
+      const isSegmentAttributeKey = (key: string): boolean => {
+        if (!key) return false;
+        const norm = normalizeKeyStr(key);
+        if (!norm) return false;
+        const segmentKeys = new Set([
+          'segment', 'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno', 'seg',
+          'شريحة', 'شريحه', 'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+          'رقمالقطع', 'كودالقطع', 'معرفالقطع', 'قطاع', 'رقمالقطاع', 'كودالقطاع', 'معرفالقطاع'
+        ]);
+        return (
+          segmentKeys.has(norm) ||
+          norm.startsWith('segment') ||
+          norm.startsWith('segid') ||
+          norm.includes('segmentid') ||
+          norm.includes('segment_id') ||
+          norm.includes('رقمالشريحة') ||
+          norm.includes('كودالشريحة')
+        );
+      };
+
+      const extractPermitVal = (pt: GeoPoint): string | null => {
+        if (pt.attributes) {
+          for (const [key, val] of Object.entries(pt.attributes)) {
+            if (isPermitAttributeKey(key) && isValidAttrValue(val, key)) {
+              return stripHtmlStr(val);
+            }
+          }
+        }
+        if (pt.attr1 && isPermitAttributeKey('attr1') && isValidAttrValue(pt.attr1)) return stripHtmlStr(pt.attr1);
+        if (pt.attr2 && isPermitAttributeKey('attr2') && isValidAttrValue(pt.attr2)) return stripHtmlStr(pt.attr2);
+        if (pt.description) {
+          const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+          const match = pt.description.match(tableCellRegex);
+          if (match && match[1] && isValidAttrValue(stripHtmlStr(match[1]), 'permit no')) {
+            return stripHtmlStr(match[1]);
+          }
+          const textRegex = /(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+          const match2 = pt.description.match(textRegex);
+          if (match2 && match2[1] && isValidAttrValue(stripHtmlStr(match2[1]), 'permit no')) {
+            return stripHtmlStr(match2[1]);
+          }
+        }
+        return null;
+      };
+
+      const extractSegmentVal = (pt: GeoPoint): string | null => {
+        if (pt.attributes) {
+          for (const [key, val] of Object.entries(pt.attributes)) {
+            if (isSegmentAttributeKey(key) && isValidAttrValue(val, key)) {
+              return stripHtmlStr(val);
+            }
+          }
+        }
+        if (pt.attr1 && isSegmentAttributeKey('attr1') && isValidAttrValue(pt.attr1)) return stripHtmlStr(pt.attr1);
+        if (pt.attr2 && isSegmentAttributeKey('attr2') && isValidAttrValue(pt.attr2)) return stripHtmlStr(pt.attr2);
+        if (pt.description) {
+          const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+          const match = pt.description.match(tableCellRegex);
+          if (match && match[1] && isValidAttrValue(stripHtmlStr(match[1]), 'segment id')) {
+            return stripHtmlStr(match[1]);
+          }
+          const textRegex = /(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+          const match2 = pt.description.match(textRegex);
+          if (match2 && match2[1] && isValidAttrValue(stripHtmlStr(match2[1]), 'segment id')) {
+            return stripHtmlStr(match2[1]);
+          }
+        }
+        return null;
+      };
+
+      const processPoints = (pts: GeoPoint[]) => {
+        return pts.map(pt => {
+          if (!pt || pt.isDuplicateOverlay) return pt;
+          if (!isLineElement(pt)) return pt;
+
+          totalLinesChecked++;
+          const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+          const origLayer = (pt as any).originalLayer || pt.layer;
+
+          // Check if it's a yellow line
+          const isYellow = isYellowLineElement(pt);
+          if (!isYellow) {
+            return {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              isIssue: false,
+              issueReason: undefined
+            };
+          }
+
+          totalYellowLines++;
+          const permitVal = extractPermitVal(pt);
+          const segmentVal = extractSegmentVal(pt);
+
+          const hasPermit = Boolean(permitVal);
+          const hasSegment = Boolean(segmentVal);
+
+          if (!hasPermit && !hasSegment) {
+            missingBothCount++;
+            const issueReason = lang === 'ar'
+              ? '⚠️ خط أصفر (جاري العمل): لا يوجد محتوى بيان لـ (Permit No) ولا لـ (segment id)'
+              : '⚠️ Yellow Line (WIP): Missing Permit No and Missing Segment ID';
+            const flaggedPt: GeoPoint = {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#FF0055',
+              isIssue: true,
+              issueReason
+            };
+            flaggedIssuesList.push(flaggedPt);
+            return flaggedPt;
+          } else if (!hasPermit) {
+            missingPermitOnlyCount++;
+            const issueReason = lang === 'ar'
+              ? `⚠️ خط أصفر (جاري العمل): لا يوجد محتوى بيان لـ (Permit No) [معرف الشريحة: ${segmentVal}]`
+              : `⚠️ Yellow Line (WIP): Missing Permit No [Segment ID: ${segmentVal}]`;
+            const flaggedPt: GeoPoint = {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#FF6D00',
+              isIssue: true,
+              issueReason
+            };
+            flaggedIssuesList.push(flaggedPt);
+            return flaggedPt;
+          } else if (!hasSegment) {
+            missingSegmentOnlyCount++;
+            const issueReason = lang === 'ar'
+              ? `⚠️ خط أصفر (جاري العمل): لا يوجد محتوى بيان لـ (segment id) [الترخيص: ${permitVal}]`
+              : `⚠️ Yellow Line (WIP): Missing Segment ID [Permit: ${permitVal}]`;
+            const flaggedPt: GeoPoint = {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#9000FF',
+              isIssue: true,
+              issueReason
+            };
+            flaggedIssuesList.push(flaggedPt);
+            return flaggedPt;
+          } else {
+            fullyCompliantCount++;
+            return {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: origColor,
+              isIssue: false,
+              issueReason: undefined
+            };
+          }
+        });
+      };
+
+      if (globalPoints.length > 0) {
+        setGlobalPoints(processPoints(globalPoints));
+      }
+      if (plannedStreets.length > 0) {
+        setPlannedStreets(processPoints(plannedStreets));
+      }
+
+      setDataId(`yellow-missing-check-${Date.now()}`);
+      setProgressPercent(100);
+
+      const totalIssues = missingBothCount + missingPermitOnlyCount + missingSegmentOnlyCount;
+
+      setCheckResultModal({
+        type: 'essential',
+        titleAr: 'نتائج فحص الخطوط الصفراء بدون Permit No و segment id',
+        titleEn: 'Yellow Lines Only Audit: Missing Permit No & Segment ID',
+        icon: 'essential',
+        totalChecked: totalYellowLines,
+        issuesCount: totalIssues,
+        successCount: fullyCompliantCount,
+        badgeTextAr: totalIssues > 0
+          ? `⚠️ وُجدت ${totalIssues} خطوط صفراء بدون بيانات مطلوبة`
+          : (totalYellowLines > 0 ? '✅ جميع الخطوط الصفراء مكتملة البيانات' : 'لا توجد خطوط صفراء في الخريطة'),
+        badgeTextEn: totalIssues > 0
+          ? `⚠️ Found ${totalIssues} Yellow Lines Missing Attributes`
+          : (totalYellowLines > 0 ? '✅ All Yellow Lines Fully Complete' : 'No Yellow Lines Found'),
+        detailsAr: totalYellowLines > 0
+          ? (totalIssues > 0
+              ? `تم فحص (${totalYellowLines} خطاً أصفر) في المشروع، وتبين وجود (${totalIssues} خط) باللون الأصفر ينقصها محتوى بيان رقم الترخيص (Permit No) أو معرف الشريحة (segment id)، منها (${missingBothCount} خط) ينقصها الاثنان معاً. تم تمييزها وتثبيت تنبيهات على الخريطة.`
+              : `تم فحص جميع الخطوط الصفراء (${totalYellowLines} خط)، وتبين أنها جميعاً تحتوي على بيانات أرقام التراخيص (Permit No) ومعرفات الشرائح (segment id) مكتملة ومطابقة.`)
+          : `تم فحص العناصر الخطية (${totalLinesChecked} خط)، ولم يتم العثور على أي خطوط باللون الأصفر (جاري العمل).`,
+        detailsEn: totalYellowLines > 0
+          ? (totalIssues > 0
+              ? `Audited ${totalYellowLines} yellow lines. Found ${totalIssues} yellow lines lacking Permit No or segment id (${missingBothCount} missing both). Highlighted with alert markers on the map.`
+              : `Audited ${totalYellowLines} yellow lines. All lines have complete Permit No and segment id attributes with zero issues.`)
+          : `Audited ${totalLinesChecked} lines. No yellow (WIP) lines found in this dataset.`,
+        issueItems: flaggedIssuesList,
+        stats: [
+          { labelAr: 'إجمالي الخطوط الصفراء المفحوصة', labelEn: 'Total Yellow Lines Audited', value: totalYellowLines, colorClass: 'text-yellow-300 font-black' },
+          { labelAr: 'خطوط صفراء بها تنبيه ونواقص', labelEn: 'Yellow Lines with Alerts', value: totalIssues, colorClass: totalIssues > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
+          { labelAr: 'ينقصها كلاهما (ترخيص + شريحة)', labelEn: 'Missing Both (Permit & Segment)', value: missingBothCount, colorClass: missingBothCount > 0 ? 'text-rose-500 font-black' : 'text-emerald-400' },
+          { labelAr: 'ينقصها رقم الترخيص فقط', labelEn: 'Missing Permit No Only', value: missingPermitOnlyCount, colorClass: missingPermitOnlyCount > 0 ? 'text-amber-400 font-bold' : 'text-slate-400' },
+          { labelAr: 'ينقصها معرف الشريحة فقط', labelEn: 'Missing Segment ID Only', value: missingSegmentOnlyCount, colorClass: missingSegmentOnlyCount > 0 ? 'text-purple-400 font-bold' : 'text-slate-400' },
+          { labelAr: 'خطوط صفراء مكتملة وسليمة', labelEn: 'Fully Compliant Yellow Lines', value: fullyCompliantCount, colorClass: 'text-emerald-300 font-black' }
+        ]
+      });
+
+      if (totalIssues > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `⚠️ تم رصد وتمييز ${totalIssues} خطاً أصفر ينقصها Permit No أو segment id بتنبيهات على الخريطة.`
+            : `⚠️ Highlighted ${totalIssues} yellow lines missing Permit No or segment id with map alerts.`
+        );
+      } else if (totalYellowLines > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? '✅ جميع الخطوط الصفراء تحتوي على أرقام تراخيص ومعرفات شرائح مكتملة.'
+            : '✅ All yellow lines have complete Permit No and segment id data.'
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? 'لم يتم العثور على خطوط باللون الأصفر في المشروع الحالي.'
+            : 'No yellow lines found in the current project.'
+        );
+      }
+      setTimeout(() => setStatusMessage(''), 5000);
+    } catch (e: any) {
+      console.error("Error in verifyYellowLinesMissingPermitAndSegmentId:", e);
     } finally {
       setLoading(false);
       setProgressPercent(null);
@@ -6148,6 +6521,10 @@ const App: React.FC = () => {
                                 <DownloadCloud className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
                                 {lang === 'ar' ? 'تصدير الفجوات الشبكية كملف KML / KMZ' : 'Export Network Gaps as KML / KMZ File'}
                             </button>
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص الخطوط الصفراء فقط بدون Permit No أو segment id...' : 'Auditing yellow lines missing Permit / Segment ID...', verifyYellowLinesMissingPermitAndSegmentId)} className="w-full bg-[#3d330b] border-2 border-[#FFE600]/80 text-[#FFF275] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-[#FFE600] hover:text-black transition-all text-sm group scale-[1.01] hover:scale-[1.02]">
+                                <AlertOctagon className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FFE600] group-hover:text-black animate-pulse" />
+                                {lang === 'ar' ? 'فحص الخطوط الصفراء فقط بدون (Permit No / segment id)' : 'Audit Yellow Lines Only (Missing Permit / Segment ID)'}
+                            </button>
                             <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص العناصر الناقصة (قطر/منطقة)...' : 'Auditing missing attributes...', verifyEssentialAttributes)} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
@@ -6880,6 +7257,7 @@ const App: React.FC = () => {
                       onVerifyMissingAttributes={verifyEssentialAttributes}
                       onVerifyPermitSegment={verifyPermitAndSegmentId}
                       onVerifyPermitNo={verifyPermitNo}
+                      onVerifyYellowMissing={verifyYellowLinesMissingPermitAndSegmentId}
                       onVerifySbc={verifySaudiBuildingCodeSbc}
                       points={globalPoints}
                       headers={activeFile?.headers}

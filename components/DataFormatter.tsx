@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Download, AlertTriangle, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map as MapIcon } from 'lucide-react';
+import { Database, Download, AlertTriangle, AlertOctagon, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map as MapIcon } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { OverlapResult } from '../services/geometryService';
 import { downloadKMZ } from '../services/kmlService';
@@ -116,6 +116,7 @@ interface Props {
   onVerifyMissingAttributes?: () => void;
   onVerifyPermitSegment?: () => void;
   onVerifyPermitNo?: () => void;
+  onVerifyYellowMissing?: () => void;
   onVerifySbc?: () => void;
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
   runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
@@ -446,7 +447,7 @@ const ProcessingModal = ({ lang }: { lang: 'ar' | 'en' }) => {
   );
 };
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifySbc, runWithLoading, setGlobalLoading, setGlobalStatus, setGlobalProgress }: DataFormatterProps) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifyYellowMissing, onVerifySbc, runWithLoading, setGlobalLoading, setGlobalStatus, setGlobalProgress }: DataFormatterProps) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -1546,8 +1547,14 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
           
           
+          {onVerifyYellowMissing && (
+            <button onClick={onVerifyYellowMissing} className="w-full bg-[#3d330b] border-2 border-[#FFE600]/80 text-[#FFF275] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-[#FFE600] hover:text-black transition-all text-sm group mt-6 scale-[1.01] hover:scale-[1.02]">
+                <AlertOctagon className="w-5 h-5 group-hover:scale-110 transition-transform text-[#FFE600] group-hover:text-black animate-pulse" />
+                {lang === 'ar' ? 'فحص الخطوط الصفراء فقط بدون (Permit No / segment id)' : 'Audit Yellow Lines Only (Missing Permit / Segment ID)'}
+            </button>
+          )}
           {onVerifyMissingAttributes && (
-            <button onClick={onVerifyMissingAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group mt-6">
+            <button onClick={onVerifyMissingAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group mt-3">
                 <AlertTriangle className="w-5 h-5 group-hover:scale-110 transition-transform" />
                 {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
             </button>
