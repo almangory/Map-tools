@@ -17,12 +17,13 @@ interface Props {
   setTargetAssets: (assets: GeoPoint[]) => void;
   setRefPolygons?: (zones: GeoPoint[]) => void;
   setDataId?: (id: string) => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
   setGlobalLoading?: (loading: boolean) => void;
   setGlobalProgress?: (percent: number | null) => void;
   setGlobalStatus?: (status: string) => void;
 }
 
-export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolygons, setDataId, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
+export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolygons, setDataId, runWithLoading, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
   const [refZones, setRefZones] = useState<GeoPoint[]>([]);
   const [classifiedResults, setClassifiedResults] = useState<ClassifiedAsset[]>([]);
   const [loading, setLoading] = useState(false);
@@ -204,6 +205,27 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
     }
   };
 
+  const handleWrapper = (msg: string, task: () => void | Promise<void>) => {
+    if (runWithLoading) {
+      runWithLoading(msg, task);
+    } else {
+      if (setGlobalLoading) setGlobalLoading(true);
+      if (setGlobalStatus) setGlobalStatus(msg);
+      if (setGlobalProgress) setGlobalProgress(25);
+      setTimeout(async () => {
+        try {
+          await task();
+          if (setGlobalProgress) setGlobalProgress(100);
+        } catch (e: any) {
+          console.error(e);
+        } finally {
+          if (setGlobalLoading) setGlobalLoading(false);
+          if (setGlobalProgress) setGlobalProgress(null);
+        }
+      }, 100);
+    }
+  };
+
   const handleStartClassification = () => {
     if (refZones.length === 0) {
       alert(lang === 'ar' ? 'يرجى رفع ملف المناطق أولاً' : 'Please upload reference zones first');
@@ -215,23 +237,18 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
       return;
     }
 
-    if (setGlobalLoading) setGlobalLoading(true);
-    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري تصنيف الأصول على المضلعات الجغرافية...' : 'Classifying assets within geographic polygons...');
-    if (setGlobalProgress) setGlobalProgress(30);
-
-    setTimeout(() => {
-      // استدعاء الدالة السابقة
+    const task = async () => {
       const results = classifyAssetsToZones(assetsToClassify, refZones);
-      
-      if (setGlobalProgress) setGlobalProgress(100);
-      // حفظ النتيجة في State لطباعتها للمستخدم
       setClassifiedResults(results);
       setTargetAssets(results);
       if (setDataId) setDataId(`classifier-colored-${Date.now()}`);
-      if (setGlobalLoading) setGlobalLoading(false);
-      if (setGlobalProgress) setGlobalProgress(null);
       alert(lang === 'ar' ? 'اكتمل التصنيف بنجاح!' : 'Classification completed successfully!');
-    }, 150);
+    };
+
+    handleWrapper(
+      lang === 'ar' ? 'جاري تصنيف الأصول على المضلعات الجغرافية...' : 'Classifying assets within geographic polygons...',
+      task
+    );
   };
 
   
@@ -552,7 +569,10 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
 
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6">
                 <button 
-                  onClick={downloadAssetsKMZ}
+                  onClick={() => handleWrapper(
+                    lang === 'ar' ? 'جاري تحضير وتصدير ملف KMZ...' : 'Generating KMZ file...',
+                    downloadAssetsKMZ
+                  )}
                   className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
                   <CloudDownload className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />
@@ -560,7 +580,10 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 </button>
 
                 <button 
-                  onClick={() => downloadDXF(exportPoints, "Classified_Assets")}
+                  onClick={() => handleWrapper(
+                    lang === 'ar' ? 'جاري تحضير وتصدير ملف DXF...' : 'Generating DXF file...',
+                    () => downloadDXF(exportPoints, "Classified_Assets")
+                  )}
                   className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
                   <PenTool className="w-5 h-5 text-orange-400 group-hover:scale-110 transition-transform" />
@@ -568,7 +591,10 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 </button>
 
                 <button 
-                  onClick={downloadMergedExcel}
+                  onClick={() => handleWrapper(
+                    lang === 'ar' ? 'جاري تصدير ملف الإكسل المدمج...' : 'Exporting merged Excel...',
+                    downloadMergedExcel
+                  )}
                   className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
                   <FileSpreadsheet className="w-5 h-5 text-[#2ecc71] group-hover:scale-110 transition-transform" />
@@ -576,7 +602,10 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 </button>
 
                 <button 
-                  onClick={downloadRawSourceExcel}
+                  onClick={() => handleWrapper(
+                    lang === 'ar' ? 'جاري تصدير ملف إكسل المصدر...' : 'Exporting source Excel...',
+                    downloadRawSourceExcel
+                  )}
                   className="bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
                   <FileSpreadsheet className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
@@ -586,7 +615,10 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                 </button>
 
                 <button 
-                  onClick={() => downloadDataPDF(exportPoints, "Classified_Assets", lang)}
+                  onClick={() => handleWrapper(
+                    lang === 'ar' ? 'جاري توليد وتصدير ملف PDF...' : 'Generating PDF file...',
+                    () => downloadDataPDF(exportPoints, "Classified_Assets", lang)
+                  )}
                   className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner"
                 >
                   <FileText className="w-5 h-5 text-[#D32F2F] group-hover:scale-110 transition-transform" />

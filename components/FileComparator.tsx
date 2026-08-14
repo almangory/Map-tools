@@ -12,12 +12,13 @@ interface Props {
   lang: 'ar' | 'en';
   setGlobalPoints: (points: GeoPoint[]) => void;
   setDataId: (id: string) => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
   setGlobalLoading?: (loading: boolean) => void;
   setGlobalProgress?: (percent: number | null) => void;
   setGlobalStatus?: (status: string) => void;
 }
 
-export const FileComparator = ({ lang, setGlobalPoints, setDataId, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
+export const FileComparator = ({ lang, setGlobalPoints, setDataId, runWithLoading, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
   const [file1Name, setFile1Name] = useState<string>('');
   const [file2Name, setFile2Name] = useState<string>('');
   

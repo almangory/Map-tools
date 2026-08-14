@@ -47,6 +47,7 @@ interface SegmentVaultManagerProps {
   activePoints: GeoPoint[];
   activeFileName?: string;
   onLoadProjectToMap: (points: GeoPoint[], name: string) => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
 }
 
 export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
@@ -54,6 +55,7 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
   activePoints,
   activeFileName,
   onLoadProjectToMap,
+  runWithLoading,
 }) => {
   const [projects, setProjects] = useState<SavedProject[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -229,7 +231,14 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
       alert(lang === 'ar' ? 'يرجى تحديد مشروع واحد على الأقل لتصدير التقرير المجمع.' : 'Please select at least one project.');
       return;
     }
-    exportAggregatedSegmentIdReport(selectedProjects, lang);
+    if (runWithLoading) {
+      runWithLoading(
+        lang === 'ar' ? 'جاري تحضير وتصدير التقرير المجمع للـ Segment ID...' : 'Generating aggregated Segment ID report...',
+        () => exportAggregatedSegmentIdReport(selectedProjects, lang)
+      );
+    } else {
+      exportAggregatedSegmentIdReport(selectedProjects, lang);
+    }
   };
 
   const selectedProjectsList = projects.filter((p) => selectedIds.has(p.id));

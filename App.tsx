@@ -616,7 +616,7 @@ const App: React.FC = () => {
     let timer: any;
     if (loading) {
       if (progressPercent === null || progressPercent === undefined || progressPercent === 0) {
-        setProgressPercent(12);
+        setProgressPercent(15);
       }
       timer = setInterval(() => {
         setProgressPercent(prev => {
@@ -625,12 +625,35 @@ const App: React.FC = () => {
           const delta = Math.max(1, Math.floor((96 - prev) / 6));
           return Math.min(95, prev + delta);
         });
-      }, 250);
+      }, 200);
     }
     return () => {
       if (timer) clearInterval(timer);
     };
   }, [loading]);
+
+  const runWithLoading = async (
+    statusMsg: string,
+    task: () => void | Promise<void>
+  ) => {
+    setLoading(true);
+    setProgressPercent(15);
+    setStatusMessage(statusMsg);
+    // Yield to browser event loop so React mounts and renders the high-priority modal overlay
+    await new Promise(r => setTimeout(r, 120));
+    try {
+      await task();
+      setProgressPercent(100);
+      await new Promise(r => setTimeout(r, 350));
+    } catch (err: any) {
+      console.error("Task execution error:", err);
+      setError(err?.message || String(err));
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+      setStatusMessage('');
+    }
+  };
 
   const verifyEssentialAttributes = () => {
     setActiveIssueItems([]);
@@ -4025,29 +4048,6 @@ const App: React.FC = () => {
     }
   };
 
-  const runWithLoading = async (
-    statusMsg: string,
-    task: () => void | Promise<void>
-  ) => {
-    setLoading(true);
-    setProgressPercent(15);
-    setStatusMessage(statusMsg);
-    // Yield to browser event loop so React renders the high-priority modal overlay
-    await new Promise(r => setTimeout(r, 100));
-    try {
-      await task();
-      setProgressPercent(100);
-      await new Promise(r => setTimeout(r, 350));
-    } catch (err: any) {
-      console.error("Task execution error:", err);
-      setError(err?.message || String(err));
-    } finally {
-      setLoading(false);
-      setProgressPercent(null);
-      setStatusMessage('');
-    }
-  };
-
   const handleExportPolygonsOnly = async () => {
     if (splitPolygons.length === 0) return;
     const polyGeoPoints: GeoPoint[] = splitPolygons.map(p => ({
@@ -5202,6 +5202,7 @@ const App: React.FC = () => {
                                       filename={activeFile.filename} 
                                       lang={lang} 
                                       isExecuting={loading}
+                                      runWithLoading={runWithLoading}
                                       onExcelExport={() => executeWithStreetFetching(filteredPoints, selectedHeaders, downloadExcelAnalysis)}
                                       onKmzExport={() => {
                                           executeWithStreetFetching(filteredPoints, selectedHeaders, () => {
@@ -5407,6 +5408,7 @@ const App: React.FC = () => {
                                     filename={activeFile?.filename || 'Full_Street_Project'}
                                     lang={lang}
                                     isExecuting={loading}
+                                    runWithLoading={runWithLoading}
                                     onExcelExport={downloadExcelWithStreets}
                                     onKmzExport={() => executeWithStreetFetching([...globalPoints, ...plannedStreets], selectedHeaders, () => { downloadKMZ([...globalPoints, ...plannedStreets], "Full_Street_Project", { mode: 'none', groupByAttribute: 'layer', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
                                 />
@@ -6096,39 +6098,39 @@ const App: React.FC = () => {
                                 {lang === 'ar' ? 'تصدير إكسل مع أسماء الشوارع' : 'Export Excel with Streets'}
                             </button>
                             
-                            <button onClick={verifyNetworkGaps} className="w-full bg-[#3d180b] border border-[#FF3300]/60 text-[#ff8c66] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري تحليل وفحص الفجوات والخطوط المقطوعة (Network Gaps)...' : 'Auditing network gaps...', verifyNetworkGaps)} className="w-full bg-[#3d180b] border border-[#FF3300]/60 text-[#ff8c66] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
                                 <GitBranch className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص وإبراز الفجوات الشبكية (Network Gaps)' : 'Highlight Network Gaps & Disconnected Lines'}
                             </button>
-                            <button onClick={exportNetworkGapsExcel} className="w-full bg-[#2a120b] border border-[#FF3300]/40 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300]/80 hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري تصدير تقرير الفجوات الشبكية Excel...' : 'Exporting gaps report (Excel)...', exportNetworkGapsExcel)} className="w-full bg-[#2a120b] border border-[#FF3300]/40 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300]/80 hover:text-white transition-all text-sm group">
                                 <FileSpreadsheet className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
                                 {lang === 'ar' ? 'تصدير تقرير الفجوات الشبكية Excel' : 'Export Network Gaps Report (Excel)'}
                             </button>
-                            <button onClick={exportNetworkGapsPDFHandler} className="w-full bg-[#2a120b] border border-[#FF3300]/50 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري توليد وتصدير تقرير الفجوات PDF...' : 'Exporting gaps report (PDF)...', exportNetworkGapsPDFHandler)} className="w-full bg-[#2a120b] border border-[#FF3300]/50 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
                                 <FileText className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
                                 {lang === 'ar' ? 'تصدير تقرير الفجوات الشبكية PDF (مع صور الخريطة)' : 'Export Network Gaps PDF Report (with Map Thumbnails)'}
                             </button>
-                            <button onClick={exportNetworkGapsKMLHandler} className="w-full bg-[#2a120b] border border-[#FF3300]/60 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري تصدير الفجوات كملف KML / KMZ...' : 'Exporting gaps as KML...', exportNetworkGapsKMLHandler)} className="w-full bg-[#2a120b] border border-[#FF3300]/60 text-[#ffaa80] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF3300] hover:text-white transition-all text-sm group">
                                 <DownloadCloud className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF3300] group-hover:text-white" />
                                 {lang === 'ar' ? 'تصدير الفجوات الشبكية كملف KML / KMZ' : 'Export Network Gaps as KML / KMZ File'}
                             </button>
-                            <button onClick={verifyEssentialAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص العناصر الناقصة (قطر/منطقة)...' : 'Auditing missing attributes...', verifyEssentialAttributes)} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
                             </button>
-                            <button onClick={verifyPermitAndSegmentId} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص عناصر Segment ID...' : 'Auditing Segment ID...', verifyPermitAndSegmentId)} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group">
                                 <Layers2 className="w-6 h-6 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
                             </button>
-                            <button onClick={verifyPermitNo} className="w-full bg-[#3d1e0b] border border-[#FF6D00]/50 text-[#ffc499] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF6D00] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص رقم الترخيص (Permit No)...' : 'Auditing Permit No...', verifyPermitNo)} className="w-full bg-[#3d1e0b] border border-[#FF6D00]/50 text-[#ffc499] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FF6D00] hover:text-white transition-all text-sm group">
                                 <FileText className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FF6D00] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص رقم الترخيص (Permit No) برتقالي' : 'Highlight Permit No (Neon Orange)'}
                             </button>
-                            <button onClick={verifySaudiBuildingCodeSbc} className="w-full bg-[#0b281d] border border-emerald-500/50 text-emerald-300 font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-emerald-500 hover:text-black transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص مطابقة كود البناء السعودي (SBC)...' : 'Auditing Saudi Building Code (SBC)...', verifySaudiBuildingCodeSbc)} className="w-full bg-[#0b281d] border border-emerald-500/50 text-emerald-300 font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-emerald-500 hover:text-black transition-all text-sm group">
                                 <ShieldCheck className="w-6 h-6 group-hover:scale-110 transition-transform text-emerald-400 group-hover:text-black" />
                                 {lang === 'ar' ? 'فحص مطابقة كود البناء السعودي (SBC)' : 'Saudi Building Code (SBC) Compliance Audit'}
                             </button>
-                            <button onClick={verifyApprovedColors} className="w-full bg-[#3d2a0b] border border-[#FFD700]/50 text-[#FFE87C] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FFD700] hover:text-black transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص الألوان المخالفة للألوان المعتمدة...' : 'Auditing non-compliant colors...', verifyApprovedColors)} className="w-full bg-[#3d2a0b] border border-[#FFD700]/50 text-[#FFE87C] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#FFD700] hover:text-black transition-all text-sm group">
                                 <Palette className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FFD700] group-hover:text-black" />
                                 {lang === 'ar' ? 'فحص وإبراز الألوان المخالفة للألوان المعتمدة' : 'Highlight Non-Compliant Colors'}
                             </button>
@@ -6807,13 +6809,14 @@ const App: React.FC = () => {
                       <FileUploadZone id="poly-up" />
                       {activeFile && (
                         <div className="space-y-4 animate-in slide-in-from-bottom">
-                            <button onClick={() => { setLoading(true); setStatusMessage("جاري المعالجة..."); setTimeout(() => { const poly = globalPoints.map(p => p.path && p.path.length >= 3 ? {...p, type: 'Polygon' as const, path: [...p.path, p.path[0]]} : p); setGlobalPoints(poly); setLoading(false); setStatusMessage("تم التحويل!"); setTimeout(() => setStatusMessage(''), 2000); }, 1000); }} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><Scissors className="w-5 h-5 text-accent" />{lang === 'ar' ? 'تحويل الخطوط لمضلعات' : 'Lines to Polygons'}</button>
-                            <button onClick={() => { const all: {x:number, y:number}[] = []; globalPoints.forEach(p => p.path ? p.path.forEach(pt => all.push({x:pt.x, y:pt.y})) : all.push({x:p.x, y:p.y})); const hull = calculateConvexHull(all); const bound: GeoPoint = { id: 'Boundary', x: hull[0].x, y: hull[0].y, type: 'Polygon', path: hull, color: '#ffffff', layer: 'Boundary' }; setGlobalPoints([bound]); setDataId(`boundary-gen-${Date.now()}`); }} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl"><BoxSelect className="w-5 h-5" />{lang === 'ar' ? 'إنشاء مضلع شامل (Boundary)' : 'Create Convex Boundary'}</button>
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري تحويل الخطوط لمضلعات...' : 'Converting lines to polygons...', () => { const poly = globalPoints.map(p => p.path && p.path.length >= 3 ? {...p, type: 'Polygon' as const, path: [...p.path, p.path[0]]} : p); setGlobalPoints(poly); })} className="w-full bg-white/10 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-2 hover:bg-white/20 transition-all"><Scissors className="w-5 h-5 text-accent" />{lang === 'ar' ? 'تحويل الخطوط لمضلعات' : 'Lines to Polygons'}</button>
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري إنشاء المضلع الشامل (Boundary)...' : 'Generating Convex Boundary...', () => { const all: {x:number, y:number}[] = []; globalPoints.forEach(p => p.path ? p.path.forEach(pt => all.push({x:pt.x, y:pt.y})) : all.push({x:p.x, y:p.y})); const hull = calculateConvexHull(all); const bound: GeoPoint = { id: 'Boundary', x: hull[0].x, y: hull[0].y, type: 'Polygon', path: hull, color: '#ffffff', layer: 'Boundary' }; setGlobalPoints([bound]); setDataId(`boundary-gen-${Date.now()}`); })} className="w-full bg-accent text-primary font-black py-4 rounded-2xl flex items-center justify-center gap-2 shadow-xl"><BoxSelect className="w-5 h-5" />{lang === 'ar' ? 'إنشاء مضلع شامل (Boundary)' : 'Create Convex Boundary'}</button>
                             <UniversalExportBar
                                 data={globalPoints}
                                 filename={activeFile?.filename || 'Polygon_Data'}
                                 lang={lang}
                                 isExecuting={loading}
+                                runWithLoading={runWithLoading}
                                 onExcelExport={() => downloadExcelAnalysis()}
                                 onKmzExport={() => downloadKMZ(globalPoints, activeFile?.filename || 'Polygon_Data', { mode: 'none' }, activeFile?.headers)}
                             />
@@ -6829,6 +6832,7 @@ const App: React.FC = () => {
                     setTargetAssets={setGlobalPoints}
                     setRefPolygons={setClassifierRefZones}
                     setDataId={setDataId}
+                    runWithLoading={runWithLoading}
                     setGlobalLoading={setLoading}
                     setGlobalProgress={setProgressPercent}
                     setGlobalStatus={setStatusMessage}
@@ -6861,6 +6865,7 @@ const App: React.FC = () => {
                     lang={lang}
                     setGlobalPoints={setGlobalPoints}
                     setDataId={setDataId}
+                    runWithLoading={runWithLoading}
                     setGlobalLoading={setLoading}
                     setGlobalProgress={setProgressPercent}
                     setGlobalStatus={setStatusMessage}
@@ -6872,6 +6877,7 @@ const App: React.FC = () => {
                     globalPoints={globalPoints}
                     setGlobalPoints={setGlobalPoints}
                     setDataId={setDataId}
+                    runWithLoading={runWithLoading}
                     setGlobalLoading={setLoading}
                     setGlobalProgress={setProgressPercent}
                     setGlobalStatus={setStatusMessage}
@@ -6883,9 +6889,7 @@ const App: React.FC = () => {
                     activePoints={globalPoints.length > 0 ? globalPoints : plannedStreets}
                     activeFileName={activeFile?.filename}
                     onLoadProjectToMap={handleLoadSavedProjectToMap}
-                    setGlobalLoading={setLoading}
-                    setGlobalStatus={setStatusMessage}
-                    setGlobalProgress={setProgressPercent}
+                    runWithLoading={runWithLoading}
                   />
                 )}
                 {activeTab === 'sbc-checker' && (

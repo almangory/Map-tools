@@ -14,12 +14,13 @@ interface Props {
   globalPoints: GeoPoint[];
   setGlobalPoints: (points: GeoPoint[]) => void;
   setDataId: (id: string) => void;
+  runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
   setGlobalLoading?: (loading: boolean) => void;
   setGlobalProgress?: (percent: number | null) => void;
   setGlobalStatus?: (status: string) => void;
 }
 
-export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
+export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, runWithLoading, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
   const [file, setFile] = useState<ParsedFile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,15 +89,10 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
       return;
     }
 
-    setLoading(true);
-    if (setGlobalLoading) setGlobalLoading(true);
-    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري تحويل الإحداثيات ورسم الخطوط/القطاعات...' : 'Converting coordinates and generating line segments...');
-    if (setGlobalProgress) setGlobalProgress(25);
+    const task = async () => {
+      setError(null);
+      setSuccess(null);
 
-    setError(null);
-    setSuccess(null);
-
-    try {
       const headers = file.headers || [];
       const startXIdx = headers.indexOf(startXCol);
       const startYIdx = headers.indexOf(startYCol);
@@ -152,17 +148,33 @@ export const LineDrawerTab = ({ lang, globalPoints, setGlobalPoints, setDataId, 
         throw new Error(lang === 'ar' ? 'لم يتم العثور على أي خطوط صالحة في الملف' : 'No valid lines found in the file');
       }
 
-      if (setGlobalProgress) setGlobalProgress(100);
       setGlobalPoints([...globalPoints, ...newPoints]);
       setDataId(`lines-${Date.now()}`);
       setSuccess(lang === 'ar' ? `تم رسم ${newPoints.length} خط بنجاح!` : `Successfully drew ${newPoints.length} lines!`);
-      
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      if (setGlobalLoading) setGlobalLoading(false);
-      if (setGlobalProgress) setGlobalProgress(null);
+    };
+
+    if (runWithLoading) {
+      runWithLoading(
+        lang === 'ar' ? 'جاري تحويل الإحداثيات ورسم الخطوط/القطاعات على الخريطة...' : 'Converting coordinates and generating lines on map...',
+        task
+      );
+    } else {
+      setLoading(true);
+      if (setGlobalLoading) setGlobalLoading(true);
+      if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري تحويل الإحداثيات ورسم الخطوط/القطاعات...' : 'Converting coordinates and generating line segments...');
+      if (setGlobalProgress) setGlobalProgress(30);
+      setTimeout(async () => {
+        try {
+          await task();
+          if (setGlobalProgress) setGlobalProgress(100);
+        } catch (err: any) {
+          setError(err.message);
+        } finally {
+          setLoading(false);
+          if (setGlobalLoading) setGlobalLoading(false);
+          if (setGlobalProgress) setGlobalProgress(null);
+        }
+      }, 100);
     }
   };
 
