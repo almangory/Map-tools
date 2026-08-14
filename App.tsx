@@ -7487,13 +7487,6 @@ const App: React.FC = () => {
               </div>
           )}
 
-          <CheckResultModalPopup
-            checkResultModal={checkResultModal}
-            setCheckResultModal={setCheckResultModal}
-            lang={lang}
-            setActiveTab={setActiveTab}
-          />
-
          {showOverlapModal && overlapResults && (
              <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
                  <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
@@ -8127,6 +8120,73 @@ const App: React.FC = () => {
             onClearAudit={clearAuditResults}
          />
       </main>
+
+      {/* Global High-Priority Progress & Loading Modal Overlay */}
+      {loading && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto select-none" 
+          style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 99999999 }}
+          dir={lang === 'ar' ? 'rtl' : 'ltr'}
+        >
+          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-amber-400/60 rounded-[3rem] shadow-[0_0_80px_rgba(245,158,11,0.45)] max-w-md w-full animate-in zoom-in-95 duration-200">
+            
+            {/* Spinning Indicator */}
+            <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-amber-400/20 border-t-amber-400 animate-spin" />
+              <MapPin className="w-8 h-8 text-amber-400 animate-pulse stroke-[2.5]" />
+            </div>
+
+            {/* Title Badge */}
+            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[11px] font-black mb-3">
+              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+              <span>
+                {lang === 'ar' ? 'جاري معالجة البيانات المكانية' : 'Processing Spatial Data'}
+              </span>
+            </div>
+
+            {/* Message Body */}
+            <div className="space-y-2 mb-4 px-2">
+              {(statusMessage || (lang === 'ar' ? 'جاري معالجة وجلب البيانات...' : 'Processing data...')).split('\n').map((line, idx) => (
+                <p key={idx} className="text-white font-black text-base sm:text-lg leading-relaxed">
+                  {line}
+                </p>
+              ))}
+            </div>
+
+            {/* Progress Bar & Percentage */}
+            {progressPercent !== null && progressPercent !== undefined ? (
+              <div className="w-full mt-4 space-y-2.5">
+                <div className="w-full bg-black/60 rounded-full h-4 overflow-hidden p-0.5 border border-white/10 shadow-inner">
+                  <div
+                    className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(245,158,11,0.8)]"
+                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs font-black pt-1 px-1">
+                  <span className="text-amber-400 text-sm font-black">{Math.round(progressPercent)}%</span>
+                  <span className="text-white/60 font-bold">{lang === 'ar' ? 'نسبة الإنجاز' : 'Progress'}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="w-full mt-4 bg-black/60 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
+                <div className="bg-amber-400/80 h-full rounded-full animate-pulse w-full shadow-[0_0_10px_rgba(245,158,11,0.5)]" />
+              </div>
+            )}
+
+            <p className="text-[10px] text-white/40 font-bold mt-5 pt-3 border-t border-white/5">
+              {lang === 'ar' ? '⚡ يرجى الانتظار، لا تغلق التطبيق أو المتصفح أثناء المعالجة...' : '⚡ Please wait, do not close the browser during processing...'}
+            </p>
+          </div>
+        </div>,
+        document.body
+      )}
+      {hoveredTabTooltip && (
+        <ToolHoverTooltip
+          toolId={hoveredTabTooltip.id}
+          lang={lang}
+          position={{ top: hoveredTabTooltip.top, left: hoveredTabTooltip.left, side: hoveredTabTooltip.side }}
+        />
+      )}
       </div>
     </div>
   );
@@ -8352,73 +8412,6 @@ export const CheckResultModalPopup: React.FC<{
           </div>
         </div>
       </div>
-
-      {/* Global High-Priority Progress & Loading Modal Overlay */}
-      {loading && typeof document !== 'undefined' && createPortal(
-        <div 
-          className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto select-none" 
-          style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 99999999 }}
-          dir={lang === 'ar' ? 'rtl' : 'ltr'}
-        >
-          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-amber-400/60 rounded-[3rem] shadow-[0_0_80px_rgba(245,158,11,0.45)] max-w-md w-full animate-in zoom-in-95 duration-200">
-            
-            {/* Spinning Indicator */}
-            <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full border-4 border-amber-400/20 border-t-amber-400 animate-spin" />
-              <MapPin className="w-8 h-8 text-amber-400 animate-pulse stroke-[2.5]" />
-            </div>
-
-            {/* Title Badge */}
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[11px] font-black mb-3">
-              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              <span>
-                {lang === 'ar' ? 'جاري معالجة البيانات المكانية' : 'Processing Spatial Data'}
-              </span>
-            </div>
-
-            {/* Message Body */}
-            <div className="space-y-2 mb-4 px-2">
-              {(statusMessage || (lang === 'ar' ? 'جاري معالجة وجلب البيانات...' : 'Processing data...')).split('\n').map((line, idx) => (
-                <p key={idx} className="text-white font-black text-base sm:text-lg leading-relaxed">
-                  {line}
-                </p>
-              ))}
-            </div>
-
-            {/* Progress Bar & Percentage */}
-            {progressPercent !== null && progressPercent !== undefined ? (
-              <div className="w-full mt-4 space-y-2.5">
-                <div className="w-full bg-black/60 rounded-full h-4 overflow-hidden p-0.5 border border-white/10 shadow-inner">
-                  <div
-                    className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(245,158,11,0.8)]"
-                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                  />
-                </div>
-                <div className="flex items-center justify-between text-xs font-black pt-1 px-1">
-                  <span className="text-amber-400 text-sm font-black">{Math.round(progressPercent)}%</span>
-                  <span className="text-white/60 font-bold">{lang === 'ar' ? 'نسبة الإنجاز' : 'Progress'}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="w-full mt-4 bg-black/60 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
-                <div className="bg-amber-400/80 h-full rounded-full animate-pulse w-full shadow-[0_0_10px_rgba(245,158,11,0.5)]" />
-              </div>
-            )}
-
-            <p className="text-[10px] text-white/40 font-bold mt-5 pt-3 border-t border-white/5">
-              {lang === 'ar' ? '⚡ يرجى الانتظار، لا تغلق التطبيق أو المتصفح أثناء المعالجة...' : '⚡ Please wait, do not close the browser during processing...'}
-            </p>
-          </div>
-        </div>,
-        document.body
-      )}
-      {hoveredTabTooltip && (
-        <ToolHoverTooltip
-          toolId={hoveredTabTooltip.id}
-          lang={lang}
-          position={{ top: hoveredTabTooltip.top, left: hoveredTabTooltip.left, side: hoveredTabTooltip.side }}
-        />
-      )}
     </div>
   );
 };
