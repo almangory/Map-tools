@@ -27,7 +27,7 @@ import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
-import { getReverseGeocode, calculatePathLength, splitLineString, splitLineIntoParts, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, detectNetworkGaps, NetworkGap, OverlapResult, isBlackLine } from './services/geometryService';
+import { getReverseGeocode, matchNearestStreetName, calculatePathLength, splitLineString, splitLineIntoParts, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, detectNetworkGaps, NetworkGap, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
 import { formatProjectIdForExcel, cleanSegmentId, getCanonicalSegmentKey } from './services/storageService';
 import { downloadDXF } from './services/dxfExportService';
@@ -655,13 +655,14 @@ const App: React.FC = () => {
     }
   };
 
-  const verifyEssentialAttributes = () => {
+  const verifyEssentialAttributes = async () => {
     setActiveIssueItems([]);
     setLoading(true);
-    setProgressPercent(10);
+    setProgressPercent(15);
     setStatusMessage(lang === 'ar' ? 'جاري فحص العناصر الناقصة (قطر/منطقة)...' : 'Verifying missing diameter/zone attributes...');
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
     
-    setTimeout(() => {
+    try {
         setProgressPercent(50);
         let totalChecked = 0;
         let missingCount = 0;
@@ -860,8 +861,6 @@ const App: React.FC = () => {
 
         setDataId(`essential-check-${Date.now()}`);
         setProgressPercent(100);
-        setLoading(false);
-        setProgressPercent(null);
 
         const completeCount = Math.max(0, totalChecked - missingCount);
 
@@ -892,16 +891,23 @@ const App: React.FC = () => {
 
         setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية (قطر/منطقة) باللون الأسود.` : `Highlighted ${missingCount} segments missing essential attributes in black.`);
         setTimeout(() => setStatusMessage(''), 4000);
-    }, 300);
+    } catch (e: any) {
+        console.error("Error in verifyEssentialAttributes:", e);
+    } finally {
+        setLoading(false);
+        setProgressPercent(null);
+    }
   };
 
-  const verifyPermitAndSegmentId = () => {
+  const verifyPermitAndSegmentId = async () => {
     setActiveIssueItems([]);
     setLoading(true);
-    setProgressPercent(10);
+    setProgressPercent(15);
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى (segment id)...' : 'Verifying content of segment id...');
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
 
-    setTimeout(() => {
+    try {
+      setProgressPercent(50);
       let totalChecked = 0;
       let matchedCount = 0;
       const uniqueSegmentIdsSet = new Set<string>();
@@ -1043,8 +1049,6 @@ const App: React.FC = () => {
 
       setDataId(`segment-check-${Date.now()}`);
       setProgressPercent(100);
-      setLoading(false);
-      setProgressPercent(null);
 
       const missingCount = Math.max(0, totalChecked - matchedCount);
 
@@ -1084,16 +1088,23 @@ const App: React.FC = () => {
         );
       }
       setTimeout(() => setStatusMessage(''), 5000);
-    }, 500);
+    } catch (e: any) {
+      console.error("Error in verifyPermitAndSegmentId:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+    }
   };
 
-  const verifyPermitNo = () => {
+  const verifyPermitNo = async () => {
     setActiveIssueItems([]);
     setLoading(true);
-    setProgressPercent(10);
+    setProgressPercent(15);
     setStatusMessage(lang === 'ar' ? 'جاري فحص محتوى أرقام التراخيص (Permit No)...' : 'Verifying content of Permit No...');
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
 
-    setTimeout(() => {
+    try {
+      setProgressPercent(50);
       let totalChecked = 0;
       let matchedCount = 0;
       const uniquePermitSet = new Set<string>();
@@ -1236,8 +1247,6 @@ const App: React.FC = () => {
 
       setDataId(`permit-check-${Date.now()}`);
       setProgressPercent(100);
-      setLoading(false);
-      setProgressPercent(null);
 
       const missingCount = Math.max(0, totalChecked - matchedCount);
 
@@ -1277,10 +1286,15 @@ const App: React.FC = () => {
         );
       }
       setTimeout(() => setStatusMessage(''), 5000);
-    }, 500);
+    } catch (e: any) {
+      console.error("Error in verifyPermitNo:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+    }
   };
 
-  const verifySaudiBuildingCodeSbc = () => {
+  const verifySaudiBuildingCodeSbc = async () => {
     const pts = getPointsToCheck();
 
     if (!pts || pts.length === 0) {
@@ -1303,68 +1317,86 @@ const App: React.FC = () => {
       return;
     }
 
-    const issues = performSbcAuditEngine(pts);
-    const errorsCount = issues.filter(i => i.severity === 'error').length;
-    const warningsCount = issues.filter(i => i.severity === 'warning').length;
-    const totalIssues = errorsCount + warningsCount;
-    const compliantCount = Math.max(0, pts.length - totalIssues);
+    setLoading(true);
+    setProgressPercent(20);
+    setStatusMessage(lang === 'ar' ? 'جاري تطبيق قواعد كود البناء السعودي (SBC)...' : 'Auditing against Saudi Building Code (SBC)...');
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
 
-    const sbcIssueMap = new Map<string, string>();
-    issues.forEach(iss => {
-      const targetId = iss.elementId || iss.element1Id;
-      if (targetId) {
-        sbcIssueMap.set(String(targetId), lang === 'ar' ? (iss.messageAr || iss.titleAr) : (iss.messageEn || iss.titleEn));
+    try {
+      setProgressPercent(60);
+      const issues = performSbcAuditEngine(pts);
+      const errorsCount = issues.filter(i => i.severity === 'error').length;
+      const warningsCount = issues.filter(i => i.severity === 'warning').length;
+      const totalIssues = errorsCount + warningsCount;
+      const compliantCount = Math.max(0, pts.length - totalIssues);
+
+      const sbcIssueMap = new Map<string, string>();
+      issues.forEach(iss => {
+        const targetId = iss.elementId || iss.element1Id;
+        if (targetId) {
+          sbcIssueMap.set(String(targetId), lang === 'ar' ? (iss.messageAr || iss.titleAr) : (iss.messageEn || iss.titleEn));
+        }
+      });
+
+      const sbcIssueItems: GeoPoint[] = [];
+      pts.forEach(p => {
+        if (sbcIssueMap.has(String(p.id))) {
+          sbcIssueItems.push({
+            ...p,
+            isIssue: true,
+            color: '#ef4444',
+            issueReason: sbcIssueMap.get(String(p.id)) || (lang === 'ar' ? 'مخالفة اشتراطات كود البناء السعودي' : 'SBC Violation')
+          });
+        }
+      });
+
+      if (sbcIssueItems.length > 0) {
+        setDataId(`sbc-check-${Date.now()}`);
       }
-    });
 
-    const sbcIssueItems: GeoPoint[] = [];
-    pts.forEach(p => {
-      if (sbcIssueMap.has(String(p.id))) {
-        sbcIssueItems.push({
-          ...p,
-          isIssue: true,
-          color: '#ef4444',
-          issueReason: sbcIssueMap.get(String(p.id)) || (lang === 'ar' ? 'مخالفة اشتراطات كود البناء السعودي' : 'SBC Violation')
-        });
-      }
-    });
+      setProgressPercent(100);
 
-    if (sbcIssueItems.length > 0) {
-      setDataId(`sbc-check-${Date.now()}`);
+      setCheckResultModal({
+        type: 'sbc',
+        titleAr: 'نتائج فحص مطابقة كود البناء السعودي (SBC)',
+        titleEn: 'Saudi Building Code (SBC) Audit Results',
+        icon: 'sbc',
+        totalChecked: pts.length,
+        issuesCount: totalIssues,
+        successCount: compliantCount,
+        badgeTextAr: totalIssues > 0 ? `وُجدت ${totalIssues} مخالفة / ملاحظة كود` : 'ممتاز! لا توجد مشاكل - مطبق للكود السعودي',
+        badgeTextEn: totalIssues > 0 ? `${totalIssues} SBC Issues Found` : 'No Issues - Fully SBC Compliant',
+        detailsAr: totalIssues > 0
+          ? `تم إجراء تدقيق كود البناء السعودي (SBC) على ${pts.length} عنصر شبكة. كشف التدقيق عن ${totalIssues} ملاحظة (تتضمن ${errorsCount} مخالفة صريحة في الأعماق أو مسافات الفصل الأفقية، و ${warningsCount} تحذير أقطار). تم إبراز ومواقع كافة المشاكل على الخريطة.`
+          : `تم فحص جميع عناصر الخريطة (${pts.length} عنصر) وفقاً لاشتراطات كود البناء السعودي (SBC)، وتبين أنها مطابقة كلياً بجميع الأعماق والأقطار والمجاورات ولا توجد أي مخالفات.`,
+        detailsEn: totalIssues > 0
+          ? `Audited ${pts.length} network elements against SBC specs. Discovered ${totalIssues} issues (${errorsCount} critical errors in depth/separation, ${warningsCount} diameter warnings). Highlighted on map.`
+          : `Audited ${pts.length} elements against SBC standard specifications. Zero violations found; networks fully comply.`,
+        issueItems: sbcIssueItems,
+        stats: [
+          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Elements Audited', value: pts.length, colorClass: 'text-white' },
+          { labelAr: 'إجمالي المشاكل والملاحظات', labelEn: 'Total SBC Issues', value: totalIssues, colorClass: totalIssues > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
+          { labelAr: 'مخالفات صريحة (Errors)', labelEn: 'Critical Errors', value: errorsCount, colorClass: errorsCount > 0 ? 'text-red-400 font-black' : 'text-emerald-400' },
+          { labelAr: 'تحذيرات (Warnings)', labelEn: 'Warnings', value: warningsCount, colorClass: warningsCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400' }
+        ]
+      });
+    } catch (e: any) {
+      console.error("Error in verifySaudiBuildingCodeSbc:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
     }
-
-    setCheckResultModal({
-      type: 'sbc',
-      titleAr: 'نتائج فحص مطابقة كود البناء السعودي (SBC)',
-      titleEn: 'Saudi Building Code (SBC) Audit Results',
-      icon: 'sbc',
-      totalChecked: pts.length,
-      issuesCount: totalIssues,
-      successCount: compliantCount,
-      badgeTextAr: totalIssues > 0 ? `وُجدت ${totalIssues} مخالفة / ملاحظة كود` : 'ممتاز! لا توجد مشاكل - مطبق للكود السعودي',
-      badgeTextEn: totalIssues > 0 ? `${totalIssues} SBC Issues Found` : 'No Issues - Fully SBC Compliant',
-      detailsAr: totalIssues > 0
-        ? `تم إجراء تدقيق كود البناء السعودي (SBC) على ${pts.length} عنصر شبكة. كشف التدقيق عن ${totalIssues} ملاحظة (تتضمن ${errorsCount} مخالفة صريحة في الأعماق أو مسافات الفصل الأفقية، و ${warningsCount} تحذير أقطار). تم إبراز ومواقع كافة المشاكل على الخريطة.`
-        : `تم فحص جميع عناصر الخريطة (${pts.length} عنصر) وفقاً لاشتراطات كود البناء السعودي (SBC)، وتبين أنها مطابقة كلياً بجميع الأعماق والأقطار والمجاورات ولا توجد أي مخالفات.`,
-      detailsEn: totalIssues > 0
-        ? `Audited ${pts.length} network elements against SBC specs. Discovered ${totalIssues} issues (${errorsCount} critical errors in depth/separation, ${warningsCount} diameter warnings). Highlighted on map.`
-        : `Audited ${pts.length} elements against SBC standard specifications. Zero violations found; networks fully comply.`,
-      issueItems: sbcIssueItems,
-      stats: [
-        { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Elements Audited', value: pts.length, colorClass: 'text-white' },
-        { labelAr: 'إجمالي المشاكل والملاحظات', labelEn: 'Total SBC Issues', value: totalIssues, colorClass: totalIssues > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
-        { labelAr: 'مخالفات صريحة (Errors)', labelEn: 'Critical Errors', value: errorsCount, colorClass: errorsCount > 0 ? 'text-red-400 font-black' : 'text-emerald-400' },
-        { labelAr: 'تحذيرات (Warnings)', labelEn: 'Warnings', value: warningsCount, colorClass: warningsCount > 0 ? 'text-amber-400 font-black' : 'text-emerald-400' }
-      ]
-    });
   };
 
-  const verifyApprovedColors = () => {
+  const verifyApprovedColors = async () => {
+    setActiveIssueItems([]);
     setLoading(true);
-    setProgressPercent(10);
+    setProgressPercent(15);
     setStatusMessage(lang === 'ar' ? 'جاري فحص الألوان المخالفة للألوان المعتمدة...' : 'Auditing non-compliant standard colors...');
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
 
-    setTimeout(() => {
+    try {
+      setProgressPercent(50);
       let totalChecked = 0;
       let nonCompliantCount = 0;
       let compliantCount = 0;
@@ -1426,8 +1458,6 @@ const App: React.FC = () => {
 
       setDataId(`color-check-${Date.now()}`);
       setProgressPercent(100);
-      setLoading(false);
-      setProgressPercent(null);
 
       setCheckResultModal({
         type: 'essential',
@@ -1467,7 +1497,12 @@ const App: React.FC = () => {
         );
       }
       setTimeout(() => setStatusMessage(''), 5000);
-    }, 400);
+    } catch (e: any) {
+      console.error("Error in verifyApprovedColors:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+    }
   };
 
   const clearAuditResults = () => {
@@ -3485,12 +3520,11 @@ const App: React.FC = () => {
     }
     setLoading(true);
     setError(null);
-    setProgressPercent(5);
+    setProgressPercent(10);
     setStatusMessage(lang === 'ar' ? 'جاري بدء جلب الشوارع وتحليل العناوين الجغرافية...' : 'Starting street fetching & reverse geocoding...');
     await new Promise<void>(r => setTimeout(r, 120));
 
     try {
-
         const sitePolygon = globalPoints.find(p => p.type === 'Polygon' && p.path && p.path.length > 2);
         let queryArea: {x: number, y: number}[] = [];
 
@@ -3505,13 +3539,23 @@ const App: React.FC = () => {
             queryArea = calculateBoundingBox(allPoints);
         }
 
-        if (queryArea.length > 0) {
-            setProgressPercent(10);
+        if (queryArea.length > 0 && (!plannedStreets || plannedStreets.length === 0)) {
+            setProgressPercent(18);
             setStatusMessage(lang === 'ar' ? 'جاري جلب شبكة الشوارع للمنطقة المحيطة من الخرائط...' : 'Fetching surrounding street network...');
             const buffered = bufferPolygon(queryArea, plannerBuffer);
             try {
-                const streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
-                setPlannedStreets(streets);
+                const streets = await fetchStreetsInPolygon(
+                  buffered, 
+                  plannerClip, 
+                  streetTypeFilters,
+                  (msg, pct) => {
+                    setStatusMessage(msg);
+                    setProgressPercent(Math.min(25, Math.max(15, Math.round(pct / 4))));
+                  }
+                );
+                if (streets && streets.length > 0) {
+                  setPlannedStreets(streets);
+                }
             } catch (err: any) {
                 console.error("Failed to fetch overpass streets:", err);
             }
@@ -3525,7 +3569,7 @@ const App: React.FC = () => {
 
         for (let i = 0; i < total; i += batchSize) {
             const processed = Math.min(i + batchSize, total);
-            const pct = Math.round((processed / total) * 100);
+            const pct = Math.round(25 + ((processed / total) * 70));
             setProgressPercent(pct);
 
             const chunk = updated.slice(i, i + batchSize);
@@ -3555,7 +3599,7 @@ const App: React.FC = () => {
             }));
 
             const detailMsg = lastResolvedDetail 
-              ? (lang === 'ar' ? `\n📍 الشارع الحالي: ${lastResolvedDetail}` : `\n📍 Current street: ${lastResolvedDetail}`) 
+              ? (lang === 'ar' ? `\n📍 الشارع المكتشف: ${lastResolvedDetail}` : `\n📍 Resolved: ${lastResolvedDetail}`) 
               : '';
 
             setStatusMessage(lang === 'ar'
@@ -3565,16 +3609,16 @@ const App: React.FC = () => {
 
             setGlobalPoints([...updated]);
             if (i + batchSize < total) {
-                await new Promise(r => setTimeout(r, 45));
+                await new Promise(r => setTimeout(r, 40));
             }
         }
 
         setProgressPercent(100);
         setStatusMessage(lang === 'ar'
-          ? `تم جلب وتحديث الشوارع بنجاح! (${successCount} عنوان تم العثور عليه)`
-          : `Fetched & updated streets successfully! (${successCount} addresses resolved)`
+          ? `تم جلب وتحديث الشوارع بنجاح! (${successCount} عنوان تم تحديده 🗺️)`
+          : `Fetched & updated streets successfully! (${successCount} addresses resolved 🗺️)`
         );
-        await new Promise(r => setTimeout(r, 600));
+        await new Promise(r => setTimeout(r, 800));
     } catch (e: any) {
         setError(e.message);
     } finally {
@@ -3589,7 +3633,10 @@ const App: React.FC = () => {
     if (pointsToExport.length === 0) return;
 
     setLoading(true);
-    setProgressPercent(0);
+    setProgressPercent(10);
+    setStatusMessage(lang === 'ar' ? 'جاري تحضير وتنسيق البيانات للتصدير...' : 'Preparing and formatting data for export...');
+    await new Promise<void>(r => setTimeout(r, 120));
+
     const results: any[] = [];
     const total = pointsToExport.length;
     const batchSize = geocodingMode === 'accurate' ? 4 : 10;
@@ -3779,7 +3826,7 @@ const App: React.FC = () => {
       else throw new Error(t.errors.unsupported);
 
       setProgressPercent(85);
-      setStatusMessage(lang === 'ar' ? 'جاري تصنيف النقاط وتحويل الإحداثيات وفحص التداخل...' : 'Categorizing points, transforming coordinates & checking overlaps...');
+      setStatusMessage(lang === 'ar' ? 'جاري تجهيز البيانات وعرضها على الخريطة...' : 'Preparing data and rendering on map...');
       await new Promise<void>(r => setTimeout(r, 80));
 
       setActiveFile(result);
@@ -3830,29 +3877,6 @@ const App: React.FC = () => {
                 transformedPts = transformPoints(displayPts, def);
             }
             setGlobalPoints(transformedPts);
-
-            // Check for overlaps directly in sequence
-            try {
-              const dups = await detectExactDuplicates(transformedPts, duplicateTolerance);
-              const intersections = await detectLineIntersections(transformedPts);
-              const totalOverlaps = dups.length + intersections.length;
-              if (totalOverlaps > 0) {
-                setAutoAlertInfo({
-                  fileId: newFileId,
-                  filename: result.filename,
-                  duplicatesCount: dups.length,
-                  intersectionsCount: intersections.length,
-                  totalCount: totalOverlaps,
-                  dups,
-                  intersections
-                });
-                setShowAutoAlertModal(true);
-                setOverlapResults(dups.length > 0 ? dups : intersections);
-                setOverlapModalType(dups.length > 0 ? 'duplicates' : 'intersections');
-              }
-            } catch (overlapErr) {
-              console.warn("Overlap detection notice:", overlapErr);
-            }
         }
       } catch (e) {
          console.warn("Failed to auto-display points on map", e);
@@ -4257,23 +4281,33 @@ const App: React.FC = () => {
     }
 
     if (!areaToQuery) {
-      setError(lang === 'ar' ? "يرجى رسم منطقة أو رفع ملف هندسي أولاً." : "Please draw an area or upload engineering data first.");
+      setError(lang === 'ar' ? "يرجى رسم مضلع أو رفع حدود منطقة أو رفع ملف هندسي أولاً لتحديد نطاق جلب الشوارع." : "Please draw a polygon, upload boundary, or upload engineering data first.");
       return;
     }
 
     setLoading(true);
     setProgressPercent(15);
-    setStatusMessage(lang === 'ar' ? "جاري الاتصال بخدمات الخرائط وتحديد النطاق..." : "Connecting to map services & setting bounds...");
+    setStatusMessage(lang === 'ar' ? "جاري الاتصال بخدمات الخرائط وتحديد النطاق الجغرافي..." : "Connecting to map services & calculating bounds...");
     await new Promise<void>(r => setTimeout(r, 120));
 
     try {
       const buffered = bufferPolygon(areaToQuery, plannerBuffer);
-      setProgressPercent(45);
-      setStatusMessage(lang === 'ar' ? "جاري جلب شبكة الشوارع للمنطقة..." : "Fetching street network for area...");
-      let streets = await fetchStreetsInPolygon(buffered, plannerClip, streetTypeFilters);
+      setProgressPercent(30);
+      setStatusMessage(lang === 'ar' ? "جاري استرجاع شبكة الشوارع والطرق من خوادم الخرائط..." : "Fetching street network for area from map servers...");
+      
+      let streets = await fetchStreetsInPolygon(
+        buffered, 
+        plannerClip, 
+        streetTypeFilters,
+        (msg, pct) => {
+          setStatusMessage(msg);
+          setProgressPercent(pct);
+        }
+      );
 
-      setProgressPercent(75);
-      setStatusMessage(lang === 'ar' ? "جاري معالجة وتقسيم الشوارع المجلوبة..." : "Processing & splitting fetched street geometries...");
+      setProgressPercent(85);
+      setStatusMessage(lang === 'ar' ? "جاري تقطيع ومعالجة تقاطعات وهندسة الشوارع..." : "Processing & splitting fetched street geometries...");
+      await new Promise(r => setTimeout(r, 60));
 
       if (plannerSplitIntersections) {
         streets = splitLinesAtIntersections(streets);
@@ -4305,9 +4339,9 @@ const App: React.FC = () => {
       if (streets.length > 0) {
         setStatusMessage(lang === 'ar' ? `تم جلب ${streets.length} شارع بنجاح! 🗺️` : `Successfully fetched ${streets.length} streets! 🗺️`);
       } else {
-        setStatusMessage(lang === 'ar' ? 'اكتمل البحث (لم يتم العثور على شوارع رسمية في هذا النطاق، يمكنك توسيع نطاق البحث).' : 'Search complete (no roads detected in this exact zone, you can increase buffer).');
+        setStatusMessage(lang === 'ar' ? 'اكتمل البحث (لم يتم العثور على شوارع رسمية في هذا النطاق، يمكنك توسيع نطاق البحث Buffer).' : 'Search complete (no roads detected in this exact zone, you can increase buffer).');
       }
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 800));
     } catch (e: any) {
       console.warn("Street planning fetch notice:", e);
       setError(lang === 'ar' ? 'تعذر جلب الشوارع من خوادم الخرائط حالياً. يرجى المحاولة مرة أخرى أو توسيع النطاق.' : 'Unable to fetch streets from map servers at this moment. Please retry or expand buffer.');

@@ -191,7 +191,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const [baseMap, setBaseMap] = useState<BaseMapType>('satellite');
   
   // Hydraulic States
-  const [localHydraulicColorMode, setLocalHydraulicColorMode] = useState<HydraulicColorMode>('velocity');
+  const [localHydraulicColorMode, setLocalHydraulicColorMode] = useState<HydraulicColorMode>('default');
   const [isLegendCollapsed, setIsLegendCollapsed] = useState(false);
   
   const activeColorMode = propHydraulicColorMode || localHydraulicColorMode;
@@ -202,6 +202,13 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       onSetHydraulicColorMode(mode);
     }
   };
+
+  // Reset coloring mode to original file colors when a new dataset is loaded
+  useEffect(() => {
+    if (dataId) {
+      setLocalHydraulicColorMode('default');
+    }
+  }, [dataId]);
 
   const activeHydraulicSummary = useMemo(() => {
     if (propHydraulicSummary) return propHydraulicSummary;

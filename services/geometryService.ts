@@ -363,14 +363,16 @@ export const getReverseGeocode = async (
         // Fallback silently
     }
 
-    // 2. Query Overpass only if street name is missing or invalid
+    // 2. Query Overpass (using GET for robust CORS compatibility across browser origins)
     if (!street || street.length <= 2 || street === "غير متوفر") {
         const endpoints = [
+            'https://overpass.kumi.systems/api/interpreter',
             'https://overpass-api.de/api/interpreter',
-            'https://lz4.overpass-api.de/api/interpreter',
-            'https://z.overpass-api.de/api/interpreter',
+            'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
             'https://overpass.private.coffee/api/interpreter',
-            'https://overpass.osm.ch/api/interpreter'
+            'https://overpass.osm.ch/api/interpreter',
+            'https://lz4.overpass-api.de/api/interpreter',
+            'https://z.overpass-api.de/api/interpreter'
         ];
         
         const radius = isAccurate ? 80 : 50;
@@ -378,11 +380,11 @@ export const getReverseGeocode = async (
         
         for (const endpoint of endpoints) {
             try {
-                const res = await fetchWithTimeout(endpoint, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: `data=${encodeURIComponent(query)}`
-                }, 2000);
+                const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
+                const res = await fetchWithTimeout(getUrl, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                }, 2500);
 
                 if (res && res.ok) {
                     const text = await res.text();
@@ -425,7 +427,29 @@ export const getReverseGeocode = async (
         }
     }
 
-    // 3. Fallback: Nominatim if street or district is still incomplete
+    // 3. Fallback: Photon API & Nominatim if street or district is still incomplete
+    if (!street || street.length <= 2 || !district) {
+        try {
+            // Photon reverse geocoding (fast & CORS open)
+            const photonUrl = `https://photon.komoot.io/reverse?lat=${queryLat}&lon=${queryLon}`;
+            const photonRes = await fetchWithTimeout(photonUrl, {}, 2000);
+            if (photonRes && photonRes.ok) {
+                const photonData = await photonRes.json();
+                if (photonData?.features?.[0]?.properties) {
+                    const props = photonData.features[0].properties;
+                    if (!street || street.length <= 2) {
+                        street = props.street || props.name || street;
+                    }
+                    if (!district) {
+                        district = props.district || props.suburb || props.locality || props.city || district;
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignore
+        }
+    }
+
     if (!street || street.length <= 2 || !district) {
         try {
             const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${queryLat}&lon=${queryLon}&zoom=18&addressdetails=1&accept-language=ar`;
@@ -455,14 +479,62 @@ export const getReverseGeocode = async (
     return result;
 };
 
+/**
+ * Fast in-memory spatial matching of a point/coordinate to the nearest street from a pre-fetched street network
+ */
+export const matchNearestStreetName = (
+    lat: number,
+    lon: number,
+    streetLines: GeoPoint[],
+    maxDistanceMeters: number = 85
+): { street: string; district: string } | null => {
+    if (!streetLines || streetLines.length === 0) return null;
+    let minDistance = maxDistanceMeters;
+    let bestStreet: string | null = null;
+    let bestDistrict: string | null = null;
+
+    for (const s of streetLines) {
+        const name = s.street || s.name || (s.attributes && (s.attributes['name:ar'] || s.attributes['name'] || s.attributes['STREETNAME'] || s.attributes['الشارع']));
+        if (!name || name === 'غير متوفر' || name === 'غير معروف' || name.length <= 2) continue;
+
+        const path = s.path;
+        if (path && path.length > 1) {
+            for (let i = 0; i < path.length - 1; i++) {
+                const dist = pointToSegmentDistanceMeters(lat, lon, path[i].y, path[i].x, path[i+1].y, path[i+1].x);
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestStreet = name;
+                    bestDistrict = s.district || (s.attributes && (s.attributes['district'] || s.attributes['الحي'])) || null;
+                }
+            }
+        } else if (s.x && s.y) {
+            const dist = getDistanceMeters(lat, lon, s.y, s.x);
+            if (dist < minDistance) {
+                minDistance = dist;
+                bestStreet = name;
+                bestDistrict = s.district || (s.attributes && (s.attributes['district'] || s.attributes['الحي'])) || null;
+            }
+        }
+    }
+
+    if (bestStreet) {
+        return { street: bestStreet, district: bestDistrict || '' };
+    }
+    return null;
+};
+
+
 export const fetchStreetsInPolygon = async (
     polygon: {x: number, y: number}[], 
     shouldClip: boolean = true, 
-    highwayTypes: string[] = []
+    highwayTypes: string[] = [],
+    onProgress?: (statusMsg: string, pct: number) => void
 ): Promise<GeoPoint[]> => {
     if (!polygon || polygon.length < 3) {
         throw new Error("يرجى تحديد منطقة صالحة على الخريطة أولاً.");
     }
+
+    onProgress?.("جاري تجهيز النطاق الجغرافي للمنطقة...", 25);
     
     // Normalize polygon vertices into WGS84 Lat/Lon (convert UTM if necessary)
     const normalizedPolygon = polygon.map(p => {
@@ -506,24 +578,28 @@ export const fetchStreetsInPolygon = async (
     const queriesToTry = normalizedPolygon.length <= 20 ? [polyQuery, bboxQuery] : [bboxQuery];
 
     const endpoints = [
+        'https://overpass.kumi.systems/api/interpreter',
         'https://overpass-api.de/api/interpreter',
-        'https://lz4.overpass-api.de/api/interpreter',
-        'https://z.overpass-api.de/api/interpreter',
+        'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
         'https://overpass.private.coffee/api/interpreter',
-        'https://overpass.osm.ch/api/interpreter'
+        'https://overpass.osm.ch/api/interpreter',
+        'https://lz4.overpass-api.de/api/interpreter',
+        'https://z.overpass-api.de/api/interpreter'
     ];
 
     let data: any = null;
     let lastError: any = null;
 
+    onProgress?.("جاري الاتصال بخوادم الخرائط واسترجاع شبكة الشوارع...", 45);
+
     for (const endpoint of endpoints) {
         for (const query of queriesToTry) {
             try {
-                const response = await fetchWithTimeout(endpoint, { 
-                    method: 'POST', 
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: `data=${encodeURIComponent(query)}`
-                }, 12000);
+                const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
+                const response = await fetchWithTimeout(getUrl, { 
+                    method: 'GET', 
+                    headers: { 'Accept': 'application/json' }
+                }, 10000);
                 
                 if (response && response.ok) {
                     const text = await response.text();
@@ -549,6 +625,8 @@ export const fetchStreetsInPolygon = async (
         // Fallback: return empty list gracefully rather than breaking app state
         return [];
     }
+
+    onProgress?.(`جاري معالجة وتصفية ${data.elements.length} عنصر شارع مسترجع...`, 75);
 
     const results: GeoPoint[] = [];
     data.elements.forEach((el: any) => {
