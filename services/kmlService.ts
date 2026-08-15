@@ -549,17 +549,44 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
         const isLayerGrouping = options.groupByAttribute === 'layer';
         const shouldRenderHierarchy = isLayerGrouping || (!options.groupByAttribute && !options.groupByColumn && hasExplicitFolders);
 
+        const usedFileNames = new Set<string>();
+        const getUniqueKmzName = (baseName: string): string => {
+            let clean = baseName.replace(/[\\/:*?"<>|]/g, "_").trim() || "Map";
+            let candidate = `${clean}.kmz`;
+            let counter = 1;
+            while (usedFileNames.has(candidate.toLowerCase())) {
+                candidate = `${clean}_(${counter}).kmz`;
+                counter++;
+            }
+            usedFileNames.add(candidate.toLowerCase());
+            return candidate;
+        };
+
         if (shouldRenderHierarchy) {
-            const { rootPoints, rootFolders } = buildFolderTree(points);
+            let { rootPoints, rootFolders } = buildFolderTree(points);
             const zip = new JSZip();
 
+            // Unwrap single parent container if it has multiple subfolders/maps
+            while (rootFolders.size === 1 && rootPoints.length === 0) {
+                const singleNode = Array.from(rootFolders.values())[0];
+                if (singleNode.children.size > 0) {
+                    if (singleNode.points.length > 0) {
+                        rootPoints.push(...singleNode.points);
+                    }
+                    rootFolders = singleNode.children;
+                } else {
+                    break;
+                }
+            }
+
             if (rootPoints.length > 0) {
-                const kmlChunks = generateKMLChunks(rootPoints, docName, { ...options, mode: 'none' }, headers, selectedHeaders);
+                const kmlChunks = generateKMLChunks(rootPoints, `${docName}_General`, { ...options, mode: 'none' }, headers, selectedHeaders);
                 const kmlBlob = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
                 const subZip = new JSZip();
                 subZip.file("doc.kml", kmlBlob);
                 const subKmzBlob = await subZip.generateAsync({ type: "blob", compression: "DEFLATE" });
-                zip.file("Main_Elements.kmz", subKmzBlob);
+                const mainFileName = getUniqueKmzName("Main_Elements");
+                zip.file(mainFileName, subKmzBlob);
             }
 
             for (const [folderName, node] of rootFolders.entries()) {
@@ -571,21 +598,28 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
                     return res;
                 };
                 const folderPoints = collectPoints(node);
+                if (folderPoints.length === 0) continue;
 
                 const stylesXML = generateKMLStyles(folderPoints, options);
                 const kmlHeader = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n  <Document>\n    <name>${escapeXML(folderName)}</name>\n${stylesXML}`;
                 const kmlFooter = `\n  </Document>\n</kml>`;
                 const kmlChunks: string[] = [kmlHeader];
 
-                renderFolderTreeNode(node, kmlChunks, '    ', headers, selectedHeaders, options);
+                if (node.children.size === 0) {
+                    for (const pt of node.points) {
+                        kmlChunks.push(createPlacemarkXML(pt, headers, selectedHeaders, options));
+                    }
+                } else {
+                    renderFolderTreeNode(node, kmlChunks, '    ', headers, selectedHeaders, options);
+                }
                 kmlChunks.push(kmlFooter);
 
                 const kmlBlob = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
                 const subZip = new JSZip();
                 subZip.file("doc.kml", kmlBlob);
                 const subKmzBlob = await subZip.generateAsync({ type: "blob", compression: "DEFLATE" });
-                const safeName = folderName.replace(/[\\/:*?"<>|]/g, "_") || "Folder";
-                zip.file(`${safeName}.kmz`, subKmzBlob);
+                const fileName = getUniqueKmzName(folderName);
+                zip.file(fileName, subKmzBlob);
             }
 
             const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -631,14 +665,15 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
         const zip = new JSZip();
         
         for (const [groupName, data] of Object.entries(groups)) {
+            if (data.pts.length === 0) continue;
             const kmlChunks = generateKMLChunks(data.pts, groupName, { ...options, mode: 'none' }, headers, selectedHeaders);
             const kmlBlob = new Blob(kmlChunks, { type: "application/vnd.google-earth.kml+xml" });
             const subZip = new JSZip();
             subZip.file("doc.kml", kmlBlob);
             const subKmzBlob = await subZip.generateAsync({ type: "blob", compression: "DEFLATE" });
 
-            const safeName = groupName.replace(/[\\/:*?"<>|]/g, "_") || "Default";
-            zip.file(`${safeName}.kmz`, subKmzBlob);
+            const safeName = getUniqueKmzName(groupName);
+            zip.file(safeName, subKmzBlob);
         }
 
         const zipBlob = await zip.generateAsync({ type: "blob" });

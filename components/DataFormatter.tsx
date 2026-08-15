@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { Database, Download, AlertTriangle, AlertOctagon, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map as MapIcon } from 'lucide-react';
+import { Database, Download, AlertTriangle, AlertOctagon, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map as MapIcon, AlertCircle } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { OverlapResult } from '../services/geometryService';
 import { downloadKMZ } from '../services/kmlService';
@@ -114,6 +114,7 @@ interface Props {
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
   geocodingMode?: 'accurate' | 'fast';
   onVerifyMissingAttributes?: () => void;
+  onVerifyDataSyntaxErrors?: () => void;
   onVerifyPermitSegment?: () => void;
   onVerifyPermitNo?: () => void;
   onVerifyYellowMissing?: () => void;
@@ -447,7 +448,7 @@ const ProcessingModal = ({ lang }: { lang: 'ar' | 'en' }) => {
   );
 };
 
-export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyPermitSegment, onVerifyPermitNo, onVerifyYellowMissing, onVerifySbc, runWithLoading, setGlobalLoading, setGlobalStatus, setGlobalProgress }: DataFormatterProps) => {
+export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyDataSyntaxErrors, onVerifyPermitSegment, onVerifyPermitNo, onVerifyYellowMissing, onVerifySbc, runWithLoading, setGlobalLoading, setGlobalStatus, setGlobalProgress }: DataFormatterProps) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -1557,6 +1558,12 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             <button onClick={onVerifyMissingAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group mt-3">
                 <AlertTriangle className="w-5 h-5 group-hover:scale-110 transition-transform" />
                 {lang === 'ar' ? 'فحص رقم المنطقة او القطر' : 'Audit Zone Number or Diameter'}
+            </button>
+          )}
+          {onVerifyDataSyntaxErrors && (
+            <button onClick={onVerifyDataSyntaxErrors} className="w-full bg-[#3d0b28] border-2 border-[#ff0077]/70 text-[#ffb3d9] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-[#ff0077] hover:text-white transition-all text-sm group mt-3 scale-[1.01] hover:scale-[1.02]">
+                <AlertCircle className="w-5 h-5 group-hover:scale-110 transition-transform text-[#ff0077] group-hover:text-white animate-pulse" />
+                {lang === 'ar' ? 'فحص أخطاء إدخال البيانات (Permit No أرقام فقط / Segment ID بدون -)' : 'Audit Data Syntax Errors (Permit No digits only / Segment ID leading -)'}
             </button>
           )}
           {onVerifyPermitSegment && (

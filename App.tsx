@@ -14,7 +14,7 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, AlertOctagon, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves, AlertCircle
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -1439,6 +1439,276 @@ const App: React.FC = () => {
       setTimeout(() => setStatusMessage(''), 5000);
     } catch (e: any) {
       console.error("Error in verifyPermitNo:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+    }
+  };
+
+  const verifyDataSyntaxErrors = async () => {
+    setActiveIssueItems([]);
+    setLoading(true);
+    setProgressPercent(15);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري فحص أخطاء إدخال البيانات (Permit No أرقام فقط / Segment ID بدون -)...'
+        : 'Auditing data syntax errors (Permit No digits only / Segment ID leading dash)...'
+    );
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
+
+    try {
+      setProgressPercent(50);
+      let totalChecked = 0;
+      let totalIssues = 0;
+      let permitNonNumericCount = 0;
+      let segmentLeadingDashCount = 0;
+      let fullyCompliantCount = 0;
+      const flaggedIssuesList: GeoPoint[] = [];
+
+      const stripHtmlStr = (html: any): string => {
+        if (!html) return '';
+        return String(html)
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&#160;/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[\s\u00A0]+/g, ' ')
+          .trim();
+      };
+
+      const normalizeKeyStr = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
+
+      const isPermitKey = (key: string): boolean => {
+        if (!key) return false;
+        const norm = normalizeKeyStr(key);
+        if (!norm) return false;
+        const permitKeys = new Set([
+          'permitno', 'permitid', 'permit_no', 'permit_id', 'permit', 'permitnumber', 'permitnum', 'permitcode', 'permitref',
+          'licenseno', 'licenceno', 'license', 'licence', 'licenseid', 'licenceid',
+          'رقمالترخيص', 'رقمترخيص', 'الترخيص', 'رقمالرخصة', 'رقمرخصة', 'كودالترخيص', 'معرفالترخيص',
+          'رقمالتصريح', 'رقمتصريح', 'التصريح', 'تصريح', 'ترخيص', 'رخصة'
+        ]);
+        if (permitKeys.has(norm)) return true;
+        return (
+          norm.includes('permit') ||
+          norm.includes('license') ||
+          norm.includes('licence') ||
+          norm.includes('ترخيص') ||
+          norm.includes('رخصة') ||
+          norm.includes('تصريح')
+        );
+      };
+
+      const isSegmentKey = (key: string): boolean => {
+        if (!key) return false;
+        const norm = normalizeKeyStr(key);
+        if (!norm) return false;
+        const segmentKeys = new Set([
+          'segment', 'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno', 'seg',
+          'شريحة', 'شريحه', 'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+          'رقمالقطع', 'كودالقطع', 'معرفالقطع', 'قطاع', 'رقمالقطاع', 'كودالقطاع', 'معرفالقطاع'
+        ]);
+        return (
+          segmentKeys.has(norm) ||
+          norm.startsWith('segment') ||
+          norm.startsWith('segid') ||
+          norm.includes('segmentid') ||
+          norm.includes('segment_id') ||
+          norm.includes('رقمالشريحة') ||
+          norm.includes('كودالشريحة')
+        );
+      };
+
+      const extractRawPermitVal = (pt: GeoPoint): string | null => {
+        if (pt.attributes) {
+          for (const [key, val] of Object.entries(pt.attributes)) {
+            if (isPermitKey(key) && val !== undefined && val !== null && String(val).trim() !== '') {
+              const s = stripHtmlStr(val);
+              if (s) return s;
+            }
+          }
+        }
+        if (pt.attr1 && isPermitKey('attr1') && String(pt.attr1).trim() !== '') {
+          const s = stripHtmlStr(pt.attr1);
+          if (s) return s;
+        }
+        if (pt.attr2 && isPermitKey('attr2') && String(pt.attr2).trim() !== '') {
+          const s = stripHtmlStr(pt.attr2);
+          if (s) return s;
+        }
+        if (pt.description) {
+          const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+          const match = pt.description.match(tableCellRegex);
+          if (match && match[1] && stripHtmlStr(match[1])) {
+            return stripHtmlStr(match[1]);
+          }
+          const textRegex = /(?:permit\s*no|permit_no|permit\s*id|permit\s*num|permit\s*number|permit\s*code|permit\s*ref|permit|license\s*no|licence\s*no|license|licence|رقم\s*الترخيص|كود\s*الترخيص|رقم\s*الرخصة|رقم\s*التصريح|الترخيص|التصريح|تصريح)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+          const match2 = pt.description.match(textRegex);
+          if (match2 && match2[1] && stripHtmlStr(match2[1])) {
+            return stripHtmlStr(match2[1]);
+          }
+        }
+        return null;
+      };
+
+      const extractRawSegmentVal = (pt: GeoPoint): string | null => {
+        if (pt.attributes) {
+          for (const [key, val] of Object.entries(pt.attributes)) {
+            if (isSegmentKey(key) && val !== undefined && val !== null && String(val).trim() !== '') {
+              const s = stripHtmlStr(val);
+              if (s) return s;
+            }
+          }
+        }
+        if (pt.attr1 && isSegmentKey('attr1') && String(pt.attr1).trim() !== '') {
+          const s = stripHtmlStr(pt.attr1);
+          if (s) return s;
+        }
+        if (pt.attr2 && isSegmentKey('attr2') && String(pt.attr2).trim() !== '') {
+          const s = stripHtmlStr(pt.attr2);
+          if (s) return s;
+        }
+        if (pt.description) {
+          const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+          const match = pt.description.match(tableCellRegex);
+          if (match && match[1] && stripHtmlStr(match[1])) {
+            return stripHtmlStr(match[1]);
+          }
+          const textRegex = /(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+          const match2 = pt.description.match(textRegex);
+          if (match2 && match2[1] && stripHtmlStr(match2[1])) {
+            return stripHtmlStr(match2[1]);
+          }
+        }
+        return null;
+      };
+
+      const processPoints = (pts: GeoPoint[]) => {
+        return pts.map(pt => {
+          if (!pt || pt.isDuplicateOverlay) return pt;
+          if (!isLineElement(pt)) return pt;
+
+          totalChecked++;
+          const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+          const origLayer = (pt as any).originalLayer || pt.layer;
+
+          const rawPermit = extractRawPermitVal(pt);
+          const rawSegment = extractRawSegmentVal(pt);
+
+          const issues: string[] = [];
+
+          // 1. Permit No Check: If present, must contain ONLY digits (e.g. 123456)
+          if (rawPermit) {
+            const cleanPermit = rawPermit.trim();
+            // Check if contains only digits (0-9)
+            const isDigitsOnly = /^\d+$/.test(cleanPermit);
+            if (!isDigitsOnly) {
+              permitNonNumericCount++;
+              issues.push(
+                lang === 'ar'
+                  ? `Permit No ("${cleanPermit}"): يحتوي على حروف أو رموز ويجب أن يحتوي على أرقام فقط`
+                  : `Permit No ("${cleanPermit}"): contains non-digits, must be numbers only`
+              );
+            }
+          }
+
+          // 2. Segment ID Check: If present, must NOT start with '-' (leading dash before content)
+          if (rawSegment) {
+            const cleanSegment = rawSegment.trim();
+            const startsWithDash = /^[-–—_]/.test(cleanSegment);
+            if (startsWithDash) {
+              segmentLeadingDashCount++;
+              issues.push(
+                lang === 'ar'
+                  ? `Segment ID ("${cleanSegment}"): يحتوي على شرطة (-) في بداية المحتوى`
+                  : `Segment ID ("${cleanSegment}"): starts with leading dash (-)`
+              );
+            }
+          }
+
+          if (issues.length > 0) {
+            totalIssues++;
+            const issueReason = lang === 'ar'
+              ? `⚠️ خطأ في إدخال البيانات: ${issues.join(' | ')}`
+              : `⚠️ Data Syntax Error: ${issues.join(' | ')}`;
+
+            const flaggedPt: GeoPoint = {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#FF0055',
+              isIssue: true,
+              issueReason
+            };
+            flaggedIssuesList.push(flaggedPt);
+            return flaggedPt;
+          }
+
+          fullyCompliantCount++;
+          return {
+            ...pt,
+            originalColor: origColor,
+            originalLayer: origLayer,
+            color: origColor,
+            isIssue: false,
+            issueReason: undefined
+          };
+        });
+      };
+
+      if (globalPoints.length > 0) {
+        setGlobalPoints(processPoints(globalPoints));
+      }
+      if (plannedStreets.length > 0) {
+        setPlannedStreets(processPoints(plannedStreets));
+      }
+
+      setDataId(`syntax-audit-${Date.now()}`);
+      setProgressPercent(100);
+
+      setActiveIssueItems(flaggedIssuesList);
+
+      setCheckResultModal({
+        type: 'general',
+        titleAr: 'نتائج فحص أخطاء إدخال البيانات (Permit No أرقام فقط / Segment ID بدون -)',
+        titleEn: 'Data Syntax Audit (Permit No Digits Only & Segment ID Leading Dash)',
+        icon: 'general',
+        totalChecked,
+        issuesCount: totalIssues,
+        successCount: fullyCompliantCount,
+        badgeTextAr: totalIssues > 0 ? `وُجدت ${totalIssues} مشكلة في تنسيق البيانات` : 'جميع البيانات مدخلة بتنسيق سليم 100%',
+        badgeTextEn: totalIssues > 0 ? `${totalIssues} Syntax Issues Found` : 'All Data 100% Valid Format',
+        detailsAr: totalIssues > 0
+          ? `تم فحص ${totalChecked} عنصر خطي للتأكد من سلامة تنسيق البيانات المدخلة. وُجد ${totalIssues} عنصر يحتوي على أخطاء إدخال (${permitNonNumericCount} خطأ في Permit No لاحتوائه على غير الأرقام، و ${segmentLeadingDashCount} خطأ في Segment ID يبدأ بشرطة -). تم تظليل هذه العناصر على الخريطة باللون الفوشي/الأحمر (#FF0055) لتسهيل مراجعتها وتصحيحها.`
+          : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر). جميع أرقام التراخيص (Permit No) تحتوي على أرقام فقط، وجميع معرّفات الشرائح (Segment ID) لا تحتوي على شرطة (-) في بدايتها. البيانات سليمة 100%.`,
+        detailsEn: totalIssues > 0
+          ? `Audited ${totalChecked} line elements. Found ${totalIssues} syntax issues (${permitNonNumericCount} non-digit Permit No errors, ${segmentLeadingDashCount} Segment IDs starting with leading dash -). Highlighted on map in vivid red (#FF0055).`
+          : `Audited ${totalChecked} line elements. All Permit No values consist of digits only, and all Segment IDs are free of leading dashes with 0 formatting errors.`,
+        issueItems: flaggedIssuesList,
+        stats: [
+          { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
+          { labelAr: 'إجمالي أخطاء الإدخال', labelEn: 'Total Syntax Errors', value: totalIssues, colorClass: totalIssues > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
+          { labelAr: 'Permit No يحتوي غير الأرقام', labelEn: 'Permit No Non-Numeric', value: permitNonNumericCount, colorClass: permitNonNumericCount > 0 ? 'text-amber-400 font-bold' : 'text-emerald-400' },
+          { labelAr: 'Segment ID يبدأ بشرطة (-)', labelEn: 'Segment ID Leading Dash (-)', value: segmentLeadingDashCount, colorClass: segmentLeadingDashCount > 0 ? 'text-amber-400 font-bold' : 'text-emerald-400' },
+          { labelAr: 'عناصر سليمة التنسيق', labelEn: 'Valid Compliant Elements', value: fullyCompliantCount, colorClass: 'text-emerald-400 font-bold' }
+        ]
+      });
+
+      if (totalIssues > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `⚠️ تم اكتشاف ${totalIssues} خطأ في تنسيق البيانات (${permitNonNumericCount} في Permit No، و ${segmentLeadingDashCount} في Segment ID) وتم إبرازها على الخريطة.`
+            : `⚠️ Found ${totalIssues} syntax errors (${permitNonNumericCount} Permit No, ${segmentLeadingDashCount} Segment ID) highlighted on map.`
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? '✨ ممتاز! جميع بيانات Permit No أرقام فقط وجميع Segment ID خالية من الشرطات البادئة.'
+            : '✨ Perfect! All Permit No values are numeric-only and Segment IDs free of leading dashes.'
+        );
+      }
+      setTimeout(() => setStatusMessage(''), 5000);
+    } catch (e: any) {
+      console.error("Error in verifyDataSyntaxErrors:", e);
     } finally {
       setLoading(false);
       setProgressPercent(null);
@@ -6622,6 +6892,10 @@ const App: React.FC = () => {
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'فحص رقم المنطقة او القطر' : 'Audit Zone Number or Diameter'}
                             </button>
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص أخطاء إدخال البيانات (Permit No أرقام فقط / Segment ID بدون -)...' : 'Auditing data syntax errors (Permit No digits only / Segment ID leading dash)...', verifyDataSyntaxErrors)} className="w-full bg-[#3d0b28] border-2 border-[#ff0077]/70 text-[#ffb3d9] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-[#ff0077] hover:text-white transition-all text-sm group scale-[1.01] hover:scale-[1.02]">
+                                <AlertCircle className="w-6 h-6 group-hover:scale-110 transition-transform text-[#ff0077] group-hover:text-white animate-pulse" />
+                                {lang === 'ar' ? 'فحص أخطاء إدخال البيانات (Permit No أرقام فقط / Segment ID بدون -)' : 'Audit Data Syntax Errors (Permit No digits only / Segment ID leading -)'}
+                            </button>
                             <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص عناصر Segment ID...' : 'Auditing Segment ID...', verifyPermitAndSegmentId)} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group">
                                 <Layers2 className="w-6 h-6 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
                                 {lang === 'ar' ? 'فحص عناصر (segment id) بنفسجي' : 'Highlight segment id (Vivid Purple)'}
@@ -7348,6 +7622,7 @@ const App: React.FC = () => {
                     <FileUploadZone id="attr-fmt-up" label={lang === 'ar' ? '1. رفع الملف لتنسيق البيانات والشفرات' : '1. Upload File for Data Formatting'} />
                     <DataFormatter
                       onVerifyMissingAttributes={verifyEssentialAttributes}
+                      onVerifyDataSyntaxErrors={verifyDataSyntaxErrors}
                       onVerifyPermitSegment={verifyPermitAndSegmentId}
                       onVerifyPermitNo={verifyPermitNo}
                       onVerifyYellowMissing={verifyYellowLinesMissingPermitAndSegmentId}
