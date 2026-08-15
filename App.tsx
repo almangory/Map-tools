@@ -1596,8 +1596,15 @@ const App: React.FC = () => {
 
           const issues: string[] = [];
 
-          // 1. Permit No Check: If present, must contain ONLY digits (e.g. 123456)
-          if (rawPermit) {
+          // Helper to check if a value is empty or just a standalone dash/whitespace
+          const isEmptyOrStandaloneDash = (val: string | null | undefined): boolean => {
+            if (val === null || val === undefined) return true;
+            const s = String(val).trim();
+            return s === '' || s === '-' || s === '–' || s === '—' || s === '_' || s === 'null' || s === 'undefined' || s === 'N/A' || s === 'n/a';
+          };
+
+          // 1. Permit No Check: If present (and not empty or standalone '-'), must contain ONLY digits (e.g. 123456)
+          if (rawPermit && !isEmptyOrStandaloneDash(rawPermit)) {
             const cleanPermit = rawPermit.trim();
             // Check if contains only digits (0-9)
             const isDigitsOnly = /^\d+$/.test(cleanPermit);
@@ -1611,16 +1618,20 @@ const App: React.FC = () => {
             }
           }
 
-          // 2. Segment ID Check: If present, must NOT start with '-' (leading dash before content)
-          if (rawSegment) {
+          // 2. Segment ID Check:
+          // Valid: "SEG-123", "P-45-A", "10-20-30", "-", "" (hyphens in the middle or standalone are 100% valid)
+          // Error ONLY if it starts with a leading dash/underscore before the text (e.g. "-SEG123", "-1045", "--40")
+          if (rawSegment && !isEmptyOrStandaloneDash(rawSegment)) {
             const cleanSegment = rawSegment.trim();
-            const startsWithDash = /^[-–—_]/.test(cleanSegment);
-            if (startsWithDash) {
+            // Only flags when the FIRST character is a dash/hyphen followed by content (e.g. "-ABC" or "-123")
+            // Middle hyphens like "A-B-C" or "12-34" will NOT match because they start with letters/digits.
+            const startsWithLeadingDash = /^[-–—_]+[^-–—_\s]/.test(cleanSegment);
+            if (startsWithLeadingDash) {
               segmentLeadingDashCount++;
               issues.push(
                 lang === 'ar'
-                  ? `Segment ID ("${cleanSegment}"): يحتوي على شرطة (-) في بداية المحتوى`
-                  : `Segment ID ("${cleanSegment}"): starts with leading dash (-)`
+                  ? `Segment ID ("${cleanSegment}"): يحتوي على شرطة (-) في بداية المحتوى فقط (الشرطات في منتصف النص مسموحة وسليمة)`
+                  : `Segment ID ("${cleanSegment}"): starts with leading dash (-) (hyphens inside text are allowed)`
               );
             }
           }
