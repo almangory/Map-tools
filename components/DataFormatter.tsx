@@ -1556,7 +1556,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
           {onVerifyMissingAttributes && (
             <button onClick={onVerifyMissingAttributes} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-4 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group mt-3">
                 <AlertTriangle className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
+                {lang === 'ar' ? 'فحص رقم المنطقة او القطر' : 'Audit Zone Number or Diameter'}
             </button>
           )}
           {onVerifyPermitSegment && (

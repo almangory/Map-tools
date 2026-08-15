@@ -584,6 +584,61 @@ const App: React.FC = () => {
   const [plannedStreets, setPlannedStreets] = useState<GeoPoint[]>([]);
   const [boundaryPolygon, setBoundaryPolygon] = useState<GeoPoint | null>(null);
 
+  // Interactive Direct Line Drawer States
+  const [lineDrawerDrawnLines, setLineDrawerDrawnLines] = useState<GeoPoint[]>([]);
+  const [isLineDrawingOnMainMap, setIsLineDrawingOnMainMap] = useState<boolean>(false);
+  const [lineDrawerVertices, setLineDrawerVertices] = useState<{ x: number; y: number }[]>([]);
+  const [lineDrawerConfig, setLineDrawerConfig] = useState<import('./components/LineDrawerTab').LineConfig>({
+    name: 'LINE_1',
+    layer: 'شبكة المياه',
+    color: '#3b82f6',
+    width: 4,
+    diameter: '160',
+    material: 'HDPE',
+    permitNo: '',
+    segmentId: '',
+    notes: ''
+  });
+  const [lineDrawerPickingTarget, setLineDrawerPickingTarget] = useState<'start' | 'end' | null>(null);
+
+  const handleFinishLineDrawerLine = () => {
+    if (lineDrawerVertices.length < 2) return;
+    const newLine: GeoPoint = {
+      id: lineDrawerConfig.name || `LINE_${lineDrawerDrawnLines.length + 1}`,
+      x: lineDrawerVertices[0].x,
+      y: lineDrawerVertices[0].y,
+      type: 'LineString',
+      path: [...lineDrawerVertices],
+      color: lineDrawerConfig.color || '#3b82f6',
+      layer: lineDrawerConfig.layer || 'شبكة المياه',
+      attributes: {
+        StartX: lineDrawerVertices[0].x,
+        StartY: lineDrawerVertices[0].y,
+        EndX: lineDrawerVertices[lineDrawerVertices.length - 1].x,
+        EndY: lineDrawerVertices[lineDrawerVertices.length - 1].y,
+        Length_m: calculatePathLength(lineDrawerVertices),
+        ...(lineDrawerConfig.diameter ? { Diameter: lineDrawerConfig.diameter, 'القطر': lineDrawerConfig.diameter } : {}),
+        ...(lineDrawerConfig.material ? { Material: lineDrawerConfig.material, 'المادة': lineDrawerConfig.material } : {}),
+        ...(lineDrawerConfig.permitNo ? { 'Permit No': lineDrawerConfig.permitNo, 'رقم التصريح': lineDrawerConfig.permitNo } : {}),
+        ...(lineDrawerConfig.segmentId ? { 'segment id': lineDrawerConfig.segmentId, 'معرف الشريحة': lineDrawerConfig.segmentId } : {}),
+        ...(lineDrawerConfig.notes ? { Notes: lineDrawerConfig.notes, 'ملاحظات': lineDrawerConfig.notes } : {})
+      }
+    };
+    setLineDrawerDrawnLines(prev => [newLine, ...prev]);
+    setGlobalPoints(prev => [newLine, ...prev]);
+    setDataId(`draw-line-${Date.now()}`);
+    setLineDrawerVertices([]);
+    setIsLineDrawingOnMainMap(false);
+
+    const match = lineDrawerConfig.name.match(/\d+$/);
+    if (match) {
+      const nextNum = parseInt(match[0], 10) + 1;
+      setLineDrawerConfig(prev => ({ ...prev, name: prev.name.replace(/\d+$/, nextNum.toString()) }));
+    } else {
+      setLineDrawerConfig(prev => ({ ...prev, name: `LINE_${lineDrawerDrawnLines.length + 2}` }));
+    }
+  };
+
   const displayPoints = useMemo(() => {
     if (activeTab === 'street-planner') {
       const pts = [...globalPoints, ...plannedStreets];
@@ -611,9 +666,12 @@ const App: React.FC = () => {
     if (activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')) {
       return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
     }
+    if (activeTab === 'line-drawer') {
+      return [...globalPoints, ...lineDrawerDrawnLines];
+    }
 
     return globalPoints;
-  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones]);
+  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones, lineDrawerDrawnLines]);
 
   useEffect(() => {
     if (!showFlowDirection || !displayPoints || displayPoints.length === 0) {
@@ -717,15 +775,17 @@ const App: React.FC = () => {
     setActiveIssueItems([]);
     setLoading(true);
     setProgressPercent(15);
-    setStatusMessage(lang === 'ar' ? 'جاري فحص العناصر الناقصة (قطر/منطقة)...' : 'Verifying missing diameter/zone attributes...');
+    setStatusMessage(lang === 'ar' ? 'جاري فحص البيانات الإلزامية (ZONE / INNERDIAMETER / OUTERDIAMETER / DIAMETER)...' : 'Verifying mandatory line attributes (ZONE / INNERDIAMETER / OUTERDIAMETER / DIAMETER)...');
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
     
     try {
         setProgressPercent(50);
         let totalChecked = 0;
         let missingCount = 0;
-        let missingDiameterCount = 0;
         let missingZoneCount = 0;
+        let missingInnerDiameterCount = 0;
+        let missingOuterDiameterCount = 0;
+        let missingDiameterCount = 0;
         
         const isInvalidVal = (val: any): boolean => {
             if (val === undefined || val === null) return true;
@@ -741,31 +801,68 @@ const App: React.FC = () => {
             return false;
         };
 
+        const extractExplicitNumber = (val: any): number | null => {
+            if (isInvalidVal(val)) return null;
+            const str = String(val).trim();
+            const numMatch = str.match(/(\d+(\.\d+)?)/);
+            if (!numMatch) return null;
+            const num = parseFloat(numMatch[1]);
+            if (isNaN(num) || num <= 0) return null;
+            return num;
+        };
+
+        const extractZoneNumber = (val: any): number | null => {
+            if (isInvalidVal(val)) return null;
+            const str = String(val).trim();
+            const numMatch = str.match(/(\d+)/);
+            if (!numMatch) return null;
+            const num = parseInt(numMatch[1], 10);
+            if (isNaN(num)) return null;
+            return num;
+        };
+
         const isDiameterKey = (key: string): boolean => {
             const k = key.toLowerCase().trim().replace(/[\s_#-]/g, '');
             return (
-                k === 'dn' ||
-                k === 'd' ||
-                k === 'dia' ||
                 k === 'diameter' ||
                 k === 'innerdiameter' ||
                 k === 'outerdiameter' ||
+                k === 'innerdia' ||
+                k === 'outerdia' ||
+                k === 'innerd' ||
+                k === 'outerd' ||
+                k === 'id' ||
+                k === 'od' ||
+                k === 'dn' ||
+                k === 'd' ||
+                k === 'dia' ||
+                k === 'nominaldiameter' ||
+                k === 'nominaldia' ||
                 k === 'pipesize' ||
                 k === 'size' ||
                 k === 'width' ||
                 k === 'قطر' ||
                 k === 'القطر' ||
+                k === 'القطرالداخلي' ||
+                k === 'القطرالخارجي' ||
+                k === 'قطرداخلي' ||
+                k === 'قطرخارجي' ||
+                k === 'الداخلي' ||
+                k === 'الخارجي' ||
+                k === 'القطرالاسمي' ||
+                k === 'قطراسمي' ||
                 k === 'قطرالخط' ||
                 k === 'قطرالانبوب' ||
                 k === 'قطرالشبكة' ||
-                k === 'القطرالداخلي' ||
-                k === 'القطرالخارجي' ||
                 k === 'مقاس' ||
                 k === 'سمك' ||
                 k.includes('diameter') ||
-                k.includes('innerdiameter') ||
-                k.includes('outerdiameter') ||
-                k.includes('قطر')
+                k.includes('innerdia') ||
+                k.includes('outerdia') ||
+                k.includes('pipesize') ||
+                k.includes('قطر') ||
+                (k.includes('داخلي') && (k.includes('قطر') || k.includes('dia') || k.includes('d'))) ||
+                (k.includes('خارجي') && (k.includes('قطر') || k.includes('dia') || k.includes('d')))
             );
         };
 
@@ -773,11 +870,13 @@ const App: React.FC = () => {
             const k = key.toLowerCase().trim().replace(/[\s_#-]/g, '');
             return (
                 k === 'zone' ||
+                k === 'zoneno' ||
                 k === 'zonenu' ||
                 k === 'zonenumber' ||
                 k === 'zoneid' ||
                 k === 'district' ||
                 k === 'districtname' ||
+                k === 'districtno' ||
                 k === 'منطقة' ||
                 k === 'المنطقة' ||
                 k === 'رقمالمنطقة' ||
@@ -815,68 +914,62 @@ const App: React.FC = () => {
                     parseDescriptionToAttributes(pt.description, mergedAttrs);
                 }
 
-                let hasDiameter = false;
-
-                for (const [key, val] of Object.entries(mergedAttrs)) {
-                    if (isDiameterKey(key)) {
-                        if (!isInvalidVal(val)) {
-                            const numMatch = String(val).trim().match(/(\d+(\.\d+)?)/);
-                            if (numMatch && parseFloat(numMatch[1]) > 0) {
-                                hasDiameter = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!hasDiameter) {
-                    const diaUnitRegex = /\b(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة|بوصه)\b/i;
-                    const diaPrefixRegex = /(?:dn|ø|dia|diameter|innerdiameter|outerdiameter|size|pipe_size|قطر|القطر|مقاس|سمك)[ \t:=_#-]*(\d+(\.\d+)?)\b/i;
-                    const diaPostfixRegex = /(\d+(\.\d+)?)\s*(?:dn|ø|dia|diameter|innerdiameter|outerdiameter|size|pipe_size|قطر|القطر|مقاس|سمك)\b/i;
-
-                    const fullText = `${pt.layer || ''} ${pt.name || ''} ${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
-                    let m = fullText.match(diaUnitRegex) || fullText.match(diaPrefixRegex) || fullText.match(diaPostfixRegex);
-                    if (m && parseFloat(m[1]) > 0) {
-                        hasDiameter = true;
-                    }
-                }
-
+                // 1. Check ZONE (must contain explicit number)
                 let hasZone = false;
-
-                if (!isInvalidVal(pt.district)) {
+                if (!isInvalidVal(pt.district) && extractZoneNumber(pt.district) !== null) {
                     hasZone = true;
-                } else if (!isInvalidVal((pt as any).zone)) {
+                } else if (!isInvalidVal((pt as any).zone) && extractZoneNumber((pt as any).zone) !== null) {
                     hasZone = true;
                 }
-
                 if (!hasZone) {
                     for (const [key, val] of Object.entries(mergedAttrs)) {
                         if (isZoneKey(key)) {
-                            if (!isInvalidVal(val)) {
+                            if (extractZoneNumber(val) !== null) {
                                 hasZone = true;
                                 break;
                             }
                         }
                     }
                 }
-
                 if (!hasZone) {
-                    const zonePrefixRegex = /(?:zone|district|neighborhood|suburb|sector|area|block|منطقة|منطقه|المنطقة|حي|الحي|قطاع|مخطط|عقد|مجاور|مجاورة|النطاق)[ \t:=_#-]*([a-zA-Z0-9\u0600-\u06FF]+)/i;
-                    const zonePostfixRegex = /([a-zA-Z0-9\u0600-\u06FF]+)\s*(?:zone|district|neighborhood|suburb|sector|area|block|منطقة|منطقه|المنطقة|حي|الحي|قطاع|مخطط|عقد|مجاور|مجاورة|النطاق)/i;
+                    const zoneRegex = /(?:zone|zoneno|district|منطقة|منطقه|المنطقة|حي|الحي|قطاع|النطاق)[ \t:=_#-]*([0-9]+)/i;
                     const fullText = `${pt.layer || ''} ${pt.name || ''} ${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
-                    let m = fullText.match(zonePrefixRegex) || fullText.match(zonePostfixRegex);
-                    if (m && !isInvalidVal(m[1])) {
+                    const m = fullText.match(zoneRegex);
+                    if (m && extractZoneNumber(m[1]) !== null) {
                         hasZone = true;
                     }
                 }
 
-                if (!hasDiameter || !hasZone) {
+                // 2. Check DIAMETER (Unified: INNERDIAMETER, OUTERDIAMETER, DIAMETER, DN, SIZE - any one with valid explicit number)
+                let hasDiameter = false;
+                for (const [key, val] of Object.entries(mergedAttrs)) {
+                    if (isDiameterKey(key)) {
+                        if (extractExplicitNumber(val) !== null) {
+                            hasDiameter = true;
+                            break;
+                        }
+                    }
+                }
+                if (!hasDiameter) {
+                    const diaUnitRegex = /\b(\d+(\.\d+)?)\s*(mm|inch|مم|انش|بوصة|بوصه)\b/i;
+                    const diaPrefixRegex = /(?:dn|ø|dia(?:meter)?|inner[_\s-]?dia(?:meter)?|outer[_\s-]?dia(?:meter)?|nominal[_\s-]?dia|pipe[_\s-]?size|القطر[_\s-]?الداخلي|القطر[_\s-]?الخارجي|القطر|قطر|الاسمي|مقاس|سمك)[ \t:=_#-]*(\d+(\.\d+)?)\b/i;
+                    const diaPostfixRegex = /(\d+(\.\d+)?)\s*(?:dn|ø|dia(?:meter)?|inner[_\s-]?dia(?:meter)?|outer[_\s-]?dia(?:meter)?|nominal[_\s-]?dia|pipe[_\s-]?size|القطر|قطر|مقاس|سمك)\b/i;
+
+                    const fullText = `${pt.layer || ''} ${pt.name || ''} ${pt.description || ''} ${pt.attr1 || ''} ${pt.attr2 || ''}`;
+                    let m = fullText.match(diaUnitRegex) || fullText.match(diaPrefixRegex) || fullText.match(diaPostfixRegex);
+                    if (m && extractExplicitNumber(m[1]) !== null) {
+                        hasDiameter = true;
+                    }
+                }
+
+                if (!hasZone || !hasDiameter) {
                     missingCount++;
-                    if (!hasDiameter) missingDiameterCount++;
                     if (!hasZone) missingZoneCount++;
-                    const missingParts = [];
-                    if (!hasDiameter) missingParts.push(lang === 'ar' ? 'القطر' : 'Diameter');
-                    if (!hasZone) missingParts.push(lang === 'ar' ? 'المنطقة' : 'Zone');
+                    if (!hasDiameter) missingDiameterCount++;
+
+                    const missingParts: string[] = [];
+                    if (!hasZone) missingParts.push(lang === 'ar' ? 'رقم المنطقة (ZONE)' : 'Zone Number (ZONE)');
+                    if (!hasDiameter) missingParts.push(lang === 'ar' ? 'القطر (DIAMETER)' : 'Diameter');
                     
                     const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
                     const origLayer = (pt as any).originalLayer || pt.layer;
@@ -884,9 +977,9 @@ const App: React.FC = () => {
                         ...pt,
                         originalColor: origColor,
                         originalLayer: origLayer,
-                        color: '#ef4444',
+                        color: '#ff0055',
                         isIssue: true,
-                        issueReason: lang === 'ar' ? `عنصر ينقصه (${missingParts.join('، ')})` : `Missing (${missingParts.join(', ')})`,
+                        issueReason: lang === 'ar' ? `عنصر ينقصه رقم صريح في: (${missingParts.join('، ')})` : `Missing explicit number in: (${missingParts.join(', ')})`,
                         description: `${pt.description || ''}\n[MISSING: ${missingParts.join(', ')}]`.trim(),
                         layer: `${pt.layer || 'Unknown'}_MISSING_ATTRS`
                     };
@@ -924,30 +1017,30 @@ const App: React.FC = () => {
 
         setCheckResultModal({
           type: 'essential',
-          titleAr: 'نتائج فحص العناصر الناقصة (قطر / منطقة)',
-          titleEn: 'Missing Attributes Audit (Diameter / Zone)',
+          titleAr: 'نتائج فحص رقم المنطقة أو القطر',
+          titleEn: 'Zone Number & Diameter Audit Report',
           icon: 'essential',
           totalChecked,
           issuesCount: missingCount,
           successCount: completeCount,
-          badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة` : 'جميع العناصر مكتملة البيانات (لا توجد مشاكل)',
-          badgeTextEn: missingCount > 0 ? `${missingCount} Issues Found` : 'All Elements Complete (No Issues)',
+          badgeTextAr: missingCount > 0 ? `وُجدت ${missingCount} مشكلة في رقم المنطقة أو القطر` : 'جميع العناصر مكتملة البيانات (أرقام صريحة للمنطقة والقطر 100%)',
+          badgeTextEn: missingCount > 0 ? `${missingCount} Issues Found (Missing Zone or Diameter)` : 'All Elements Complete (100% Valid Numbers)',
           detailsAr: missingCount > 0
-            ? `تم فحص ${totalChecked} عنصر، وتبين وجود ${missingCount} عنصر ينقصه بيانات أساسية (قطر أو منطقة). تم تمييز هذه العناصر وتحديد أماكنها بدقة مع تنبيهات نابضة على الخريطة.`
-            : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وتبين أنها جميعاً تحتوي على بيانات القطر والمنطقة مكتملة بدون أي مشاكل.`,
+            ? `تم فحص ${totalChecked} عنصر خطي، وتبين وجود ${missingCount} عنصر ينقصه رقم صريح إما في المنطقة (ZONE) أو القطر (سواء كان معرّفاً كـ INNERDIAMETER أو OUTERDIAMETER أو DIAMETER). تم تمييز هذه العناصر وتحديد أماكنها بدقة باللون الفوشي/الأحمر (#ff0055) على الخريطة لتسهيل مراجعتها وتصحيحها.`
+            : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وتبين أنها جميعاً تحتوي على أرقام صريحة وصحيحة لرقم المنطقة والقطر (سواء INNERDIAMETER أو OUTERDIAMETER أو DIAMETER) بدون أي نقص.`,
           detailsEn: missingCount > 0
-            ? `Audited ${totalChecked} elements. Found ${missingCount} elements missing essential attributes (diameter or zone). Highlighted with map markers.`
-            : `Audited ${totalChecked} elements. All elements contain complete diameter and zone data with zero issues.`,
+            ? `Audited ${totalChecked} line elements. Found ${missingCount} elements missing explicit numbers for either Zone Number or Diameter (matching INNERDIAMETER, OUTERDIAMETER, or DIAMETER). Highlighted in vivid magenta (#ff0055) on map.`
+            : `Audited ${totalChecked} line elements. All elements contain explicit valid numeric values for Zone Number and Diameter (INNERDIAMETER / OUTERDIAMETER / DIAMETER).`,
           issueItems: missingItemsList,
           stats: [
-            { labelAr: 'إجمالي العناصر المفحوصة', labelEn: 'Total Audited Elements', value: totalChecked, colorClass: 'text-white' },
-            { labelAr: 'عدد المشاكل (عناصر ناقصة)', labelEn: 'Issues Count (Missing)', value: missingCount, colorClass: missingCount > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
-            { labelAr: 'عناصر ينقصها القطر', labelEn: 'Missing Diameter', value: missingDiameterCount, colorClass: missingDiameterCount > 0 ? 'text-amber-400' : 'text-emerald-400' },
-            { labelAr: 'عناصر ينقصها المنطقة', labelEn: 'Missing Zone', value: missingZoneCount, colorClass: missingZoneCount > 0 ? 'text-amber-400' : 'text-emerald-400' }
+            { labelAr: 'إجمالي العناصر الخطية المفحوصة', labelEn: 'Total Audited Line Elements', value: totalChecked, colorClass: 'text-white' },
+            { labelAr: 'إجمالي العناصر الناقصة', labelEn: 'Total Issues (Missing)', value: missingCount, colorClass: missingCount > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' },
+            { labelAr: 'عناصر ينقصها رقم المنطقة (ZONE)', labelEn: 'Missing Zone Number', value: missingZoneCount, colorClass: missingZoneCount > 0 ? 'text-amber-400 font-bold' : 'text-emerald-400' },
+            { labelAr: 'عناصر ينقصها بيان القطر (DIAMETER)', labelEn: 'Missing Diameter', value: missingDiameterCount, colorClass: missingDiameterCount > 0 ? 'text-amber-400 font-bold' : 'text-emerald-400' }
           ]
         });
 
-        setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه بيانات أساسية (قطر/منطقة) باللون الأسود.` : `Highlighted ${missingCount} segments missing essential attributes in black.`);
+        setStatusMessage(lang === 'ar' ? `تم إبراز ${missingCount} عنصراً ينقصه رقم المنطقة أو القطر باللون الفوشي المميز.` : `Highlighted ${missingCount} segments missing Zone or Diameter in magenta.`);
         setTimeout(() => setStatusMessage(''), 4000);
     } catch (e: any) {
         console.error("Error in verifyEssentialAttributes:", e);
@@ -6525,9 +6618,9 @@ const App: React.FC = () => {
                                 <AlertOctagon className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FFE600] group-hover:text-black animate-pulse" />
                                 {lang === 'ar' ? 'فحص الخطوط الصفراء فقط بدون (Permit No / segment id)' : 'Audit Yellow Lines Only (Missing Permit / Segment ID)'}
                             </button>
-                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص العناصر الناقصة (قطر/منطقة)...' : 'Auditing missing attributes...', verifyEssentialAttributes)} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص البيانات الإلزامية (ZONE / INNERDIAMETER / OUTERDIAMETER / DIAMETER)...' : 'Auditing mandatory line attributes...', verifyEssentialAttributes)} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                                {lang === 'ar' ? 'فحص وإبراز العناصر الناقصة (قطر/منطقة)' : 'Highlight Segments Missing Diameter/Zone'}
+                                {lang === 'ar' ? 'فحص رقم المنطقة او القطر' : 'Audit Zone Number or Diameter'}
                             </button>
                             <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص عناصر Segment ID...' : 'Auditing Segment ID...', verifyPermitAndSegmentId)} className="w-full bg-[#2a0b3d] border border-[#9000FF]/50 text-[#d8b4fe] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#9000FF] hover:text-white transition-all text-sm group">
                                 <Layers2 className="w-6 h-6 group-hover:scale-110 transition-transform text-[#9000FF] group-hover:text-white" />
@@ -7293,6 +7386,20 @@ const App: React.FC = () => {
                     setGlobalLoading={setLoading}
                     setGlobalProgress={setProgressPercent}
                     setGlobalStatus={setStatusMessage}
+                    drawnLines={lineDrawerDrawnLines}
+                    setDrawnLines={setLineDrawerDrawnLines}
+                    isDrawingOnMainMap={isLineDrawingOnMainMap}
+                    setIsDrawingOnMainMap={setIsLineDrawingOnMainMap}
+                    currentVertices={lineDrawerVertices}
+                    setCurrentVertices={setLineDrawerVertices}
+                    lineConfig={lineDrawerConfig}
+                    setLineConfig={setLineDrawerConfig}
+                    manualPickingTarget={lineDrawerPickingTarget}
+                    setManualPickingTarget={setLineDrawerPickingTarget}
+                    onFinishCurrentLine={handleFinishLineDrawerLine}
+                    onFocusPoint={(pt) => {
+                      setFocusedPoint(pt);
+                    }}
                   />
                 )}
                 {activeTab === 'segment-vault' && (
@@ -7373,6 +7480,32 @@ const App: React.FC = () => {
             onToggleFlowDirection={setShowFlowDirection}
             flowAnalysis={flowAnalysis}
             isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
+            isLineDrawingMode={activeTab === 'line-drawer' && isLineDrawingOnMainMap}
+            activeLineVertices={lineDrawerVertices}
+            activeLineColor={lineDrawerConfig.color}
+            activeLineWidth={lineDrawerConfig.width}
+            activeLineName={lineDrawerConfig.name}
+            activeLineLayer={lineDrawerConfig.layer}
+            onAddLineVertex={(pt) => {
+              setLineDrawerVertices(prev => [...prev, pt]);
+            }}
+            onUndoLineVertex={() => {
+              setLineDrawerVertices(prev => prev.slice(0, -1));
+            }}
+            onFinishLine={handleFinishLineDrawerLine}
+            onCancelLineDraw={() => {
+              setIsLineDrawingOnMainMap(false);
+              setLineDrawerVertices([]);
+            }}
+            isPickingCoordinate={activeTab === 'line-drawer' ? lineDrawerPickingTarget : null}
+            onPickMapCoordinate={(coord) => {
+              if (lineDrawerPickingTarget) {
+                window.dispatchEvent(new CustomEvent('map-coord-picked', {
+                  detail: { target: lineDrawerPickingTarget, coord }
+                }));
+                setLineDrawerPickingTarget(null);
+              }
+            }}
             onPolygonComplete={(poly) => {
               if (activeTab === 'splitter' && splitMode === 'spatial') {
                 const newPoly: SplitPolygon = {

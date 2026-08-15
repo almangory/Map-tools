@@ -34,26 +34,26 @@ export interface LineConfig {
 
 interface Props {
   lang: 'ar' | 'en';
-  globalPoints: GeoPoint[];
-  setGlobalPoints: (points: GeoPoint[] | ((prev: GeoPoint[]) => GeoPoint[])) => void;
-  setDataId: (id: string) => void;
+  globalPoints?: GeoPoint[];
+  setGlobalPoints?: (points: GeoPoint[] | ((prev: GeoPoint[]) => GeoPoint[])) => void;
+  setDataId?: (id: string) => void;
   runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
   setGlobalLoading?: (loading: boolean) => void;
   setGlobalProgress?: (percent: number | null) => void;
   setGlobalStatus?: (status: string) => void;
 
-  // Main Map Drawing synchronization
-  drawnLines: GeoPoint[];
-  setDrawnLines: React.Dispatch<React.SetStateAction<GeoPoint[]>>;
-  isDrawingOnMainMap: boolean;
-  setIsDrawingOnMainMap: (val: boolean) => void;
-  currentVertices: { x: number; y: number }[];
-  setCurrentVertices: React.Dispatch<React.SetStateAction<{ x: number; y: number }[]>>;
-  lineConfig: LineConfig;
-  setLineConfig: React.Dispatch<React.SetStateAction<LineConfig>>;
-  manualPickingTarget: 'start' | 'end' | null;
-  setManualPickingTarget: (target: 'start' | 'end' | null) => void;
-  onFinishCurrentLine: () => void;
+  // Main Map Drawing synchronization (optional with safe local fallback)
+  drawnLines?: GeoPoint[];
+  setDrawnLines?: React.Dispatch<React.SetStateAction<GeoPoint[]>>;
+  isDrawingOnMainMap?: boolean;
+  setIsDrawingOnMainMap?: (val: boolean) => void;
+  currentVertices?: { x: number; y: number }[];
+  setCurrentVertices?: React.Dispatch<React.SetStateAction<{ x: number; y: number }[]>>;
+  lineConfig?: LineConfig;
+  setLineConfig?: React.Dispatch<React.SetStateAction<LineConfig>>;
+  manualPickingTarget?: 'start' | 'end' | null;
+  setManualPickingTarget?: (target: 'start' | 'end' | null) => void;
+  onFinishCurrentLine?: () => void;
   onFocusPoint?: (pt: GeoPoint) => void;
 }
 
@@ -88,26 +88,55 @@ const MATERIAL_CHIPS = ['HDPE', 'uPVC', 'Ductile Iron (DI)', 'GRP', 'Carbon Stee
 
 export const LineDrawerTab: React.FC<Props> = ({ 
   lang, 
-  globalPoints, 
+  globalPoints = [], 
   setGlobalPoints, 
   setDataId, 
   runWithLoading, 
   setGlobalLoading, 
   setGlobalProgress, 
   setGlobalStatus,
-  drawnLines,
-  setDrawnLines,
-  isDrawingOnMainMap,
-  setIsDrawingOnMainMap,
-  currentVertices,
-  setCurrentVertices,
-  lineConfig,
-  setLineConfig,
-  manualPickingTarget,
-  setManualPickingTarget,
+  drawnLines: propDrawnLines,
+  setDrawnLines: propSetDrawnLines,
+  isDrawingOnMainMap: propIsDrawingOnMainMap,
+  setIsDrawingOnMainMap: propSetIsDrawingOnMainMap,
+  currentVertices: propCurrentVertices,
+  setCurrentVertices: propSetCurrentVertices,
+  lineConfig: propLineConfig,
+  setLineConfig: propSetLineConfig,
+  manualPickingTarget: propManualPickingTarget,
+  setManualPickingTarget: propSetManualPickingTarget,
   onFinishCurrentLine,
   onFocusPoint
 }) => {
+  // Local fallback states if not provided as props
+  const [localDrawnLines, setLocalDrawnLines] = useState<GeoPoint[]>([]);
+  const [localIsDrawing, setLocalIsDrawing] = useState(false);
+  const [localVertices, setLocalVertices] = useState<{ x: number; y: number }[]>([]);
+  const [localLineConfig, setLocalLineConfig] = useState<LineConfig>({
+    name: 'LINE_1',
+    layer: 'شبكة المياه',
+    color: '#3b82f6',
+    width: 4,
+    diameter: '160',
+    material: 'HDPE',
+    permitNo: '',
+    segmentId: '',
+    notes: ''
+  });
+  const [localPickingTarget, setLocalPickingTarget] = useState<'start' | 'end' | null>(null);
+
+  // Effective state bindings
+  const drawnLines = propDrawnLines !== undefined ? propDrawnLines : localDrawnLines;
+  const setDrawnLines = propSetDrawnLines || setLocalDrawnLines;
+  const isDrawingOnMainMap = propIsDrawingOnMainMap !== undefined ? propIsDrawingOnMainMap : localIsDrawing;
+  const setIsDrawingOnMainMap = propSetIsDrawingOnMainMap || setLocalIsDrawing;
+  const currentVertices = propCurrentVertices !== undefined ? propCurrentVertices : localVertices;
+  const setCurrentVertices = propSetCurrentVertices || setLocalVertices;
+  const lineConfig = propLineConfig !== undefined ? propLineConfig : localLineConfig;
+  const setLineConfig = propSetLineConfig || setLocalLineConfig;
+  const manualPickingTarget = propManualPickingTarget !== undefined ? propManualPickingTarget : localPickingTarget;
+  const setManualPickingTarget = propSetManualPickingTarget || setLocalPickingTarget;
+
   // Active sub-tab
   const [activeMode, setActiveMode] = useState<DrawMode>('map-interactive');
 
@@ -158,15 +187,15 @@ export const LineDrawerTab: React.FC<Props> = ({
 
   // Metrics
   const totalLengthM = useMemo(() => {
-    return drawnLines.reduce((acc, p) => acc + (p.path ? calculatePathLength(p.path) : 0), 0);
+    return (drawnLines || []).reduce((acc, p) => acc + (p.path ? calculatePathLength(p.path) : 0), 0);
   }, [drawnLines]);
 
   const totalLayersCount = useMemo(() => {
-    return new Set(drawnLines.map(p => p.layer || 'Default')).size;
+    return new Set((drawnLines || []).map(p => p.layer || 'Default')).size;
   }, [drawnLines]);
 
   const activeLineLengthMeters = useMemo(() => {
-    if (currentVertices.length < 2) return 0;
+    if (!currentVertices || currentVertices.length < 2) return 0;
     return calculatePathLength(currentVertices);
   }, [currentVertices]);
 
@@ -505,26 +534,74 @@ export const LineDrawerTab: React.FC<Props> = ({
     URL.revokeObjectURL(url);
   };
 
+  const handleFinishLineAction = () => {
+    if (onFinishCurrentLine) {
+      onFinishCurrentLine();
+      return;
+    }
+    if (!currentVertices || currentVertices.length < 2) return;
+    const newLine: GeoPoint = {
+      id: lineConfig.name || `LINE_${(drawnLines?.length || 0) + 1}`,
+      x: currentVertices[0].x,
+      y: currentVertices[0].y,
+      type: 'LineString',
+      path: [...currentVertices],
+      color: lineConfig.color || '#3b82f6',
+      layer: lineConfig.layer || 'شبكة المياه',
+      attributes: {
+        StartX: currentVertices[0].x,
+        StartY: currentVertices[0].y,
+        EndX: currentVertices[currentVertices.length - 1].x,
+        EndY: currentVertices[currentVertices.length - 1].y,
+        Length_m: calculatePathLength(currentVertices),
+        ...(lineConfig.diameter ? { Diameter: lineConfig.diameter, 'القطر': lineConfig.diameter } : {}),
+        ...(lineConfig.material ? { Material: lineConfig.material, 'المادة': lineConfig.material } : {}),
+        ...(lineConfig.permitNo ? { 'Permit No': lineConfig.permitNo, 'رقم التصريح': lineConfig.permitNo } : {}),
+        ...(lineConfig.segmentId ? { 'segment id': lineConfig.segmentId, 'معرف الشريحة': lineConfig.segmentId } : {}),
+        ...(lineConfig.notes ? { Notes: lineConfig.notes, 'ملاحظات': lineConfig.notes } : {})
+      }
+    };
+    setDrawnLines(prev => [newLine, ...(prev || [])]);
+    if (setGlobalPoints) {
+      setGlobalPoints(prev => [newLine, ...(prev || [])]);
+    }
+    if (setDataId) {
+      setDataId(`draw-line-${Date.now()}`);
+    }
+    setCurrentVertices([]);
+    setIsDrawingOnMainMap(false);
+    const match = lineConfig.name.match(/\d+$/);
+    if (match) {
+      const nextNum = parseInt(match[0], 10) + 1;
+      setLineConfig(prev => ({ ...prev, name: prev.name.replace(/\d+$/, nextNum.toString()) }));
+    } else {
+      setLineConfig(prev => ({ ...prev, name: `LINE_${(drawnLines?.length || 0) + 2}` }));
+    }
+    setSuccess(lang === 'ar' ? `تم حفظ الخط (${newLine.id}) بنجاح!` : `Line ${newLine.id} saved!`);
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
       {/* Main Container */}
-      <div className="bg-[#0f3b4c] rounded-[2rem] sm:rounded-[2.5rem] p-5 sm:p-7 border border-white/5 shadow-2xl relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent pointer-events-none" />
+      <div className="bg-[#0f3b4c] rounded-[2rem] sm:rounded-[2.5rem] p-4 sm:p-6 lg:p-7 border border-white/10 shadow-2xl relative overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent pointer-events-none" />
 
         {/* Top Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 relative z-10">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 relative z-10">
           <div className="flex items-center gap-3.5">
-            <div className="p-3.5 bg-accent/20 border border-accent/40 rounded-2xl text-accent shadow-lg">
-              <PenTool className="w-7 h-7" />
+            <div className="p-3 bg-accent/20 border border-accent/40 rounded-2xl text-accent shadow-lg shrink-0">
+              <PenTool className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
-                <span>{lang === 'ar' ? 'تصميم ورسم الخطوط الهندسية' : 'Engineering Line Design & Drawing'}</span>
-                <span className="text-[10px] uppercase font-black bg-accent/20 text-accent px-2.5 py-0.5 rounded-full border border-accent/30">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-lg sm:text-xl lg:text-2xl font-black text-white">
+                  {lang === 'ar' ? 'تصميم ورسم الخطوط الهندسية' : 'Engineering Line Design & Drawing'}
+                </h2>
+                <span className="text-[10px] uppercase font-black bg-accent/20 text-accent px-2.5 py-0.5 rounded-full border border-accent/30 tracking-wider">
                   {lang === 'ar' ? 'مباشر على الخريطة' : 'Direct on Map'}
                 </span>
-              </h2>
-              <p className="text-xs sm:text-sm text-white/60">
+              </div>
+              <p className="text-xs sm:text-sm text-white/70 mt-1 max-w-2xl leading-relaxed">
                 {lang === 'ar' 
                   ? 'ارسم الخطوط مباشرة بالنقر على الخريطة الرئيسية المجاورة، أو استوردها من ملف إكسل بكامل الخصائص والبيانات.' 
                   : 'Draw lines directly by clicking on the main map, or import from Excel with complete attributes and properties.'}
@@ -533,14 +610,14 @@ export const LineDrawerTab: React.FC<Props> = ({
           </div>
 
           {/* Mode Switcher Navigation Tabs */}
-          <div className="flex flex-wrap items-center bg-[#071c27] p-1.5 rounded-2xl border border-white/10 shrink-0 self-start md:self-auto gap-1">
+          <div className="flex items-center bg-[#071c27] p-1.5 rounded-2xl border border-white/10 shrink-0 self-start lg:self-auto gap-1 overflow-x-auto max-w-full">
             <button
               onClick={() => { setActiveMode('map-interactive'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2",
+                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
                 activeMode === 'map-interactive' 
                   ? "bg-accent text-primary shadow-md" 
-                  : "text-white/60 hover:text-white hover:bg-white/5"
+                  : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
               <PenTool className="w-3.5 h-3.5" />
@@ -550,10 +627,10 @@ export const LineDrawerTab: React.FC<Props> = ({
             <button
               onClick={() => { setActiveMode('file-import'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2",
+                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
                 activeMode === 'file-import' 
                   ? "bg-accent text-primary shadow-md" 
-                  : "text-white/60 hover:text-white hover:bg-white/5"
+                  : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
               <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -563,10 +640,10 @@ export const LineDrawerTab: React.FC<Props> = ({
             <button
               onClick={() => { setActiveMode('manual-coords'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2",
+                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
                 activeMode === 'manual-coords' 
                   ? "bg-accent text-primary shadow-md" 
-                  : "text-white/60 hover:text-white hover:bg-white/5"
+                  : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
               <Navigation className="w-3.5 h-3.5" />
@@ -576,16 +653,16 @@ export const LineDrawerTab: React.FC<Props> = ({
             <button
               onClick={() => { setActiveMode('lines-inventory'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2",
+                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
                 activeMode === 'lines-inventory' 
                   ? "bg-accent text-primary shadow-md" 
-                  : "text-white/60 hover:text-white hover:bg-white/5"
+                  : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
               <Layers className="w-3.5 h-3.5" />
               <span>{lang === 'ar' ? 'السجل والتصدير' : 'Inventory & Export'}</span>
               {drawnLines.length > 0 && (
-                <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.2 rounded-full font-mono">
+                <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold">
                   {drawnLines.length}
                 </span>
               )}
@@ -595,14 +672,14 @@ export const LineDrawerTab: React.FC<Props> = ({
 
         {/* Status Alerts */}
         {error && (
-          <div className="bg-red-500/10 border-l-4 border-red-500 p-3.5 mb-5 rounded-xl flex items-start gap-3 animate-in fade-in">
+          <div className="bg-red-500/10 border-s-4 border-red-500 p-3.5 mb-5 rounded-xl flex items-start gap-3 animate-in fade-in">
             <XCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
             <p className="text-xs sm:text-sm text-red-200">{error}</p>
           </div>
         )}
 
         {success && (
-          <div className="bg-emerald-500/10 border-l-4 border-emerald-500 p-3.5 mb-5 rounded-xl flex items-start gap-3 animate-in fade-in">
+          <div className="bg-emerald-500/10 border-s-4 border-emerald-500 p-3.5 mb-5 rounded-xl flex items-start gap-3 animate-in fade-in">
             <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
             <p className="text-xs sm:text-sm text-emerald-200">{success}</p>
           </div>
@@ -612,12 +689,12 @@ export const LineDrawerTab: React.FC<Props> = ({
         {/* MODE 1: INTERACTIVE DIRECT MAP DRAWING */}
         {/* ======================================================== */}
         {activeMode === 'map-interactive' && (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {/* Primary Action Button & Status Hero */}
             <div className="bg-gradient-to-r from-[#0b2d3d] to-[#071c27] p-5 sm:p-6 rounded-3xl border border-accent/30 shadow-xl space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                  <div className="flex items-center gap-2 mb-1">
+                  <div className="flex items-center gap-2 mb-1.5">
                     <div className={cn("w-3 h-3 rounded-full", isDrawingOnMainMap ? "bg-emerald-400 animate-ping" : "bg-white/30")} />
                     <span className="text-xs font-black uppercase tracking-wider text-accent">
                       {isDrawingOnMainMap 
@@ -625,15 +702,15 @@ export const LineDrawerTab: React.FC<Props> = ({
                         : (lang === 'ar' ? 'جاهز للرسم على الخريطة' : 'Ready to Draw on Map')}
                     </span>
                   </div>
-                  <h3 className="text-lg font-black text-white">
+                  <h3 className="text-base sm:text-lg font-black text-white">
                     {isDrawingOnMainMap 
                       ? (lang === 'ar' ? 'انقر على الخريطة الرئيسية المجاورة لإضافة نقاط المسار' : 'Click on the main map to add line points')
                       : (lang === 'ar' ? 'اضغط الزر لبدء الرسم مباشرة على الخريطة' : 'Activate drawing to add lines directly')}
                   </h3>
-                  <p className="text-xs text-white/60 mt-0.5">
+                  <p className="text-xs text-white/70 mt-1">
                     {lang === 'ar'
-                      ? 'يمكنك النقر المزدوج (Double Click) على الخريطة لإنهاء وحفظ الخط تلقائياً.'
-                      : 'You can double-click on the map to finish and save the line automatically.'}
+                      ? 'يمكنك النقر المزدوج (Double Click) على الخريطة لإنهاء وحفظ الخط تلقائياً، أو استخدام زر الإنهاء من الشريط العائم على الخريطة.'
+                      : 'You can double-click on the map to finish and save the line automatically, or use the finish button in the map floating bar.'}
                   </p>
                 </div>
 
@@ -645,13 +722,13 @@ export const LineDrawerTab: React.FC<Props> = ({
                         setCurrentVertices([]);
                         setSuccess(lang === 'ar' ? 'تم تفعيل وضع الرسم! انقر على الخريطة المجاورة للبدء.' : 'Drawing mode activated! Click on the map.');
                       }}
-                      className="px-6 py-3.5 bg-accent hover:bg-accent/90 text-primary font-black text-xs sm:text-sm rounded-2xl shadow-xl flex items-center gap-2.5 active:scale-95 transition-all shadow-accent/20"
+                      className="px-6 py-3 bg-accent hover:bg-accent/90 text-primary font-black text-xs sm:text-sm rounded-2xl shadow-xl flex items-center gap-2.5 active:scale-95 transition-all shadow-accent/20"
                     >
                       <PenTool className="w-4 h-4" />
                       <span>{lang === 'ar' ? 'بدء الرسم على الخريطة' : 'Start Drawing on Map'}</span>
                     </button>
                   ) : (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <button
                         onClick={() => setCurrentVertices(prev => prev.slice(0, -1))}
                         disabled={currentVertices.length === 0}
@@ -674,7 +751,7 @@ export const LineDrawerTab: React.FC<Props> = ({
                       </button>
 
                       <button
-                        onClick={onFinishCurrentLine}
+                        onClick={handleFinishLineAction}
                         disabled={currentVertices.length < 2}
                         className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs sm:text-sm rounded-xl shadow-lg flex items-center gap-2 active:scale-95 transition-all disabled:opacity-40"
                       >
@@ -690,14 +767,14 @@ export const LineDrawerTab: React.FC<Props> = ({
               {isDrawingOnMainMap && (
                 <div className="pt-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-3 text-xs">
                   <div className="flex items-center gap-3">
-                    <span className="text-white/60">{lang === 'ar' ? 'النقاط المسجلة:' : 'Points:'}</span>
+                    <span className="text-white/70">{lang === 'ar' ? 'النقاط المسجلة:' : 'Points:'}</span>
                     <span className="bg-accent/20 text-accent font-black font-mono px-2.5 py-0.5 rounded-lg border border-accent/30">
                       {currentVertices.length} {lang === 'ar' ? 'نقاط' : 'pts'}
                     </span>
                     {activeLineLengthMeters > 0 && (
                       <>
                         <span className="text-white/40">|</span>
-                        <span className="text-white/60">{lang === 'ar' ? 'الطول الحالي:' : 'Current Length:'}</span>
+                        <span className="text-white/70">{lang === 'ar' ? 'الطول الحالي:' : 'Current Length:'}</span>
                         <span className="bg-emerald-500/20 text-emerald-300 font-black font-mono px-2.5 py-0.5 rounded-lg border border-emerald-500/30">
                           {activeLineLengthMeters >= 1000 
                             ? `${(activeLineLengthMeters / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` 
@@ -707,9 +784,9 @@ export const LineDrawerTab: React.FC<Props> = ({
                     )}
                   </div>
 
-                  <span className="text-[11px] text-accent/80 font-bold flex items-center gap-1">
+                  <span className="text-[11px] text-accent font-bold flex items-center gap-1">
                     <Info className="w-3.5 h-3.5" />
-                    {lang === 'ar' ? 'الرسم يظهر مباشرة على الخريطة باللون والسمك المحددين أدناه' : 'Live preview on the main map'}
+                    {lang === 'ar' ? 'الرسم يظهر مباشرة على الخريطة مع شريط تحكم عائم في الأعلى' : 'Live preview on the main map with floating controls on top'}
                   </span>
                 </div>
               )}
