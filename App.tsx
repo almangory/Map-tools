@@ -14,7 +14,8 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, AlertOctagon, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves, AlertCircle
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves, AlertCircle,
+  TrendingUp, Pickaxe, ShieldAlert, Mountain
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -49,6 +50,12 @@ import { SegmentVaultManager } from './components/SegmentVaultManager';
 import { SbcValidator, performSbcAuditEngine } from './components/SbcValidator';
 import { InstallPwaModal } from './components/InstallPwaModal';
 import { ToolHoverTooltip } from './components/ToolHoverTooltip';
+import { LongitudinalProfileModal } from './components/LongitudinalProfileModal';
+import { EarthworkBoqModal } from './components/EarthworkBoqModal';
+import { ClashDetectionModal } from './components/ClashDetectionModal';
+import { OverflowSimulationModal } from './components/OverflowSimulationModal';
+import { EngineeringSuiteCard } from './components/EngineeringSuiteCard';
+import { UserManualModal } from './components/UserManualModal';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
 
@@ -522,7 +529,7 @@ const App: React.FC = () => {
   }, [isDarkMode]);
 
   const [hoveredTabTooltip, setHoveredTabTooltip] = useState<{ id: string; top: number; left: number; side: 'left' | 'right' | 'bottom' } | null>(null);
-  const [activeTab, setActiveTab] = useState<'map-viewer' | 'converter' | 'splitter' | 'analyzer' | 'street-planner' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'classifier' | 'segment-vault' | 'sbc-checker' | 'line-drawer'>('map-viewer');
+  const [activeTab, setActiveTab] = useState<'map-viewer' | 'converter' | 'street-planner' | 'analyzer' | 'engineering-suite' | 'sbc-checker' | 'segment-vault' | 'classifier' | 'splitter' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'line-drawer'>('map-viewer');
   const [showManual, setShowManual] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
@@ -551,6 +558,10 @@ const App: React.FC = () => {
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [overlapModalType, setOverlapModalType] = useState<'duplicates' | 'intersections'>('duplicates');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showEarthworkModal, setShowEarthworkModal] = useState(false);
+  const [showClashModal, setShowClashModal] = useState(false);
+  const [showOverflowModal, setShowOverflowModal] = useState(false);
 
   // Auto-Alert states for Spatial Overlaps upon import
   const [autoAlertInfo, setAutoAlertInfo] = useState<{
@@ -679,25 +690,57 @@ const App: React.FC = () => {
       setDataId(`orient-outfall-${Date.now()}`);
 
       // If auto-detected outfalls returned and no targets were explicitly set, update outfallTargets
-      if (result.outfallNodes && result.outfallNodes.length > 0 && targetsToUse.length === 0) {
-        setOutfallTargets(result.outfallNodes);
+      if (result.outfallNodes && result.outfallNodes.length > 0) {
+        if (targetsToUse.length === 0) {
+          setOutfallTargets(result.outfallNodes);
+        } else {
+          // Merge summary data (furthest pipe info, exceeded flags) into existing targets
+          setOutfallTargets(prev => prev.map(t => {
+            const match = result.outfallNodes.find(o => o.id === t.id || (Math.abs(o.x - t.x) < 0.0001 && Math.abs(o.y - t.y) < 0.0001));
+            if (match) {
+              return {
+                ...t,
+                furthestPipe: match.furthestPipe,
+                isDistanceExceeded: match.isDistanceExceeded,
+                inflowCount: match.totalConnectedPipes
+              };
+            }
+            return t;
+          }));
+        }
       }
 
       // Re-run flow direction analysis
       import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
         analyzeNetworkFlowDirections(result.orientedPoints).then(res => {
-          setFlowAnalysis(res);
+          // Attach outfall summaries with furthest pipe info to flowAnalysis
+          const enrichedFlowRes = {
+            ...res,
+            outfallNodes: result.outfallNodes
+          };
+          setFlowAnalysis(enrichedFlowRes);
         });
       });
 
       setShowFlowDirection(true);
 
       const outfallsCount = result.outfallNodes?.length || 1;
-      setStatusMessage(
-        lang === 'ar'
-          ? `🌊 تم بنجاح توزيع وتوجيه فلو ${result.totalPipesOriented} خط شبكة على (${outfallsCount}) مصبات وتحديث أحواض التجميع وميلان التصرف!`
-          : `🌊 Successfully partitioned and oriented ${result.totalPipesOriented} pipes across (${outfallsCount}) outfalls and updated catchment basins & slopes!`
-      );
+      const exceededList = result.outfallNodes?.filter(o => o.isDistanceExceeded) || [];
+      if (exceededList.length > 0) {
+        const firstEx = exceededList[0];
+        const distStr = firstEx.furthestPipe ? (firstEx.furthestPipe.distanceMeters >= 1000 ? `${(firstEx.furthestPipe.distanceMeters / 1000).toFixed(2)} كم` : `${firstEx.furthestPipe.distanceMeters.toFixed(0)} م`) : '';
+        setStatusMessage(
+          lang === 'ar'
+            ? `⚠️ تنبيه هيدروليكي: تم توجيه الشبكة، ولكن المسافة للمصب (${firstEx.name}) لأبعد خط (${distStr}) تتجاوز المعايير المعتمدة (1500م). يُنصح بإضافة مصب وسيط أو محطة رفع.`
+            : `⚠️ Hydraulic Alert: Network oriented, but distance to outfall (${firstEx.name}) from furthest pipe (${distStr}) exceeds gravity standard (1500m). Intermediate outfall recommended.`
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? `🌊 تم بنجاح توزيع وتوجيه فلو ${result.totalPipesOriented} خط شبكة على (${outfallsCount}) مصبات ومطابقة كافة المسافات مع المعايير الهيدروليكية المعتمدة!`
+            : `🌊 Successfully partitioned and oriented ${result.totalPipesOriented} pipes across (${outfallsCount}) outfalls and verified all hydraulic distance standards!`
+        );
+      }
     } catch (err: any) {
       console.error('Orient network error:', err);
       setErrorMessage(err.message || 'Error orienting network to outfall');
@@ -5462,6 +5505,7 @@ const App: React.FC = () => {
           { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
           { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
           { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+          { id: 'engineering-suite', icon: <Mountain />, label: lang === 'ar' ? 'الأدوات الهندسية' : 'Engineering' },
           { id: 'sbc-checker', icon: <ShieldCheck />, label: lang === 'ar' ? 'الكود السعودي (تحت التطوير)' : 'SBC Code (In Dev)' },
           { id: 'segment-vault', icon: <HardDrive />, label: lang === 'ar' ? 'حافظة Segment' : 'Vault' },
           { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف' : 'Classifier' },
@@ -5498,6 +5542,7 @@ const App: React.FC = () => {
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
                { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
                { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
+               { id: 'engineering-suite', icon: <Mountain />, label: lang === 'ar' ? 'الأدوات الهندسية' : 'Engineering' },
                { id: 'sbc-checker', icon: <ShieldCheck />, label: lang === 'ar' ? 'الكود السعودي (تحت التطوير)' : 'SBC Code (In Dev)' },
                { id: 'segment-vault', icon: <HardDrive />, label: lang === 'ar' ? 'حافظة Segment' : 'Segment Vault' },
                { id: 'classifier', icon: <Layers />, label: lang === 'ar' ? 'مصنف الخرائط' : 'Map Classifier' },
@@ -7427,6 +7472,19 @@ const App: React.FC = () => {
                         </div>
                       )}
 
+                {activeTab === 'analyzer' && (
+                  <div className="my-4">
+                    <EngineeringSuiteCard
+                      lang={lang}
+                      pointsCount={(globalPoints.length > 0 ? globalPoints : plannedStreets).length}
+                      onOpenProfile={() => setShowProfileModal(true)}
+                      onOpenEarthwork={() => setShowEarthworkModal(true)}
+                      onOpenClash={() => setShowClashModal(true)}
+                      onOpenOverflow={() => setShowOverflowModal(true)}
+                    />
+                  </div>
+                )}
+
                 {activeTab === 'analyzer' && !activeFile && plannedStreets.length === 0 && (
                   <div className="space-y-6 animate-in fade-in duration-500">
                     <div className="flex bg-[#0b2d3d]/80 p-1.5 rounded-2xl border border-white/10 shadow-xl">
@@ -7835,6 +7893,54 @@ const App: React.FC = () => {
                       setGlobalLoading={setLoading}
                       setGlobalStatus={setStatusMessage}
                       setGlobalProgress={setProgressPercent}
+                    />
+                  </div>
+                )}
+                {activeTab === 'engineering-suite' && (
+                  <div className="space-y-6 animate-in fade-in duration-500 pb-10">
+                    <div className="p-8 bg-[#0b2d3d]/70 rounded-[3rem] border border-cyan-500/30 shadow-2xl text-center space-y-3 relative overflow-hidden">
+                      <div className="w-16 h-16 bg-cyan-500/10 rounded-2xl border border-cyan-400/30 flex items-center justify-center mx-auto text-cyan-300 shadow-inner">
+                        <Mountain className="w-8 h-8 animate-pulse" />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-black text-white">
+                          {lang === 'ar' ? 'الأدوات والتحليلات الهندسية المتقدمة' : 'Advanced Engineering & Hydraulic Suite'}
+                        </h2>
+                        <p className="text-[11px] text-cyan-200/70 font-medium max-w-sm mx-auto mt-1">
+                          {lang === 'ar'
+                            ? 'محركات متخصصة للمخططات الطولية، حساب كميات الحفر والردم BOQ، كشف تعارض المرافق، ومحاكاة الطفح الهيدروليكي.'
+                            : 'Hydraulic longitudinal profiles, earthwork BOQ calculation, 3D utility clash audits & pump trip overflow simulations.'}
+                        </p>
+                      </div>
+                      
+                      {/* Active points status & sample loader */}
+                      <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+                        <span className="text-[10px] font-black px-3 py-1 rounded-full bg-white/5 border border-white/10 text-white/70">
+                          {lang === 'ar' ? `العناصر المحملة: ${(globalPoints.length > 0 ? globalPoints : plannedStreets).length} عنصر` : `Loaded Features: ${(globalPoints.length > 0 ? globalPoints : plannedStreets).length}`}
+                        </span>
+                        {(globalPoints.length === 0 && plannedStreets.length === 0) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGlobalPoints(SAMPLE_GDB_POINTS);
+                              setStatusMessage(lang === 'ar' ? 'تم تحميل شبكة هيدروليكية تجريبية لفحص الأدوات الهندسية' : 'Loaded sample hydraulic network for engineering audit');
+                            }}
+                            className="text-[10px] font-black px-3 py-1 rounded-full bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-300 transition-all flex items-center gap-1 cursor-pointer active:scale-95"
+                          >
+                            <Sparkles className="w-3 h-3 text-cyan-400" />
+                            <span>{lang === 'ar' ? 'تحميل بيانات تجريبية' : 'Load Sample Data'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <EngineeringSuiteCard
+                      lang={lang}
+                      pointsCount={(globalPoints.length > 0 ? globalPoints : plannedStreets).length}
+                      onOpenProfile={() => setShowProfileModal(true)}
+                      onOpenEarthwork={() => setShowEarthworkModal(true)}
+                      onOpenClash={() => setShowClashModal(true)}
+                      onOpenOverflow={() => setShowOverflowModal(true)}
                     />
                   </div>
                 )}
@@ -8632,409 +8738,52 @@ const App: React.FC = () => {
              </div>
          )}
 
-         {showManual && (
-             <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12 overflow-y-auto print:absolute print:inset-0 print:z-[2000] print:bg-white print:p-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-                 {/* Print-friendly container */}
-                 <div className="bg-gradient-to-br from-[#0c2b3a] to-[#041620] border border-accent/40 rounded-[3rem] w-full max-w-4xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden print:w-full print:max-w-none print:h-full print:max-h-none print:bg-white print:border-none print:shadow-none print:text-black">
+         <UserManualModal lang={lang} isOpen={showManual} onClose={() => setShowManual(false)} />
 
-                     {/* Modal Header */}
-                     <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 print:hidden bg-black/20">
-                         <div className="flex items-center gap-3">
-                             <FileText className="w-6 h-6 text-accent" />
-                             <h2 className="text-lg font-black text-white">{lang === 'ar' ? 'دليل المستخدم الشامل للبرنامج' : 'Universal Map Converter User Guide'}</h2>
-                         </div>
-                         <div className="flex items-center gap-2">
-                             <button
-                                 onClick={() => window.print()}
-                                 className="px-4 py-2.5 bg-accent hover:brightness-110 active:scale-95 text-primary rounded-xl font-black text-[11px] transition-all flex items-center gap-1.5 shadow-lg"
-                             >
-                                 <Download className="w-4 h-4" />
-                                 <span>{lang === 'ar' ? 'طباعة / حفظ كـ PDF' : 'Print / Save as PDF'}</span>
-                             </button>
-                             <button
-                                 onClick={() => setShowManual(false)}
-                                 className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
-                             >
-                                 <X className="w-5 h-5" />
-                             </button>
-                         </div>
-                     </div>
+         {/* Engineering Suite Modals */}
+         {showProfileModal && (
+           <LongitudinalProfileModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             selectedPipe={focusedPoint ? (displayPoints.find(p => p.id === (focusedPoint as any).id) || null) : null}
+             onClose={() => setShowProfileModal(false)}
+             onFocusPoint={(pt) => {
+               setFocusedPoint({ id: `pt-${Date.now()}`, x: pt.lng, y: pt.lat, lat: pt.lat, lng: pt.lng } as any);
+               setDataId(`profile-focus-${Date.now()}`);
+             }}
+           />
+         )}
 
-                     {/* Modal Body / Content */}
-                     <div className="flex-1 overflow-y-auto p-10 space-y-8 custom-scrollbar print:p-0 print:overflow-visible">
-                         <div className="text-center pb-6 border-b border-white/10">
-                             <h1 className="text-2xl font-black text-accent mb-2 print:text-black print:text-xl">{lang === 'ar' ? 'دليل تشغيل المحول الشامل للخرائط والمساحة' : 'Universal Map & GIS Converter User Manual'}</h1>
-                             <p className="text-[11px] text-white/50 font-bold uppercase tracking-widest print:text-black/50">
-                                 {lang === 'ar' ? 'دليل خطوة بخطوة للتحويل والتقسيم وتخطيط الشوارع وتحليل أطوال الشبكات' : 'Step-by-Step Guide for Converting, Splitting, Planning, and Network Length Analysis'}
-                             </p>
-                         </div>
+         {showEarthworkModal && (
+           <EarthworkBoqModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             onClose={() => setShowEarthworkModal(false)}
+           />
+         )}
 
-                         {/* Sections list */}
-                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 print:grid-cols-1 print:gap-4">
-                             {/* Section 1: عرض الخريطة والمنسوب الطبوغرافي */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><MapPin className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "1. عرض الخريطة والمنسوب الطبوغرافي (Map & Profile)" : "1. Map Viewer & Elevation Profile"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "استعراض البيانات المكانية على خرائط تفاعلية متعددة الطبقات وإجراء تحليلات المناسيب والقطاعات الطولية." : "View spatial data on interactive multi-layer maps and perform level and longitudinal elevation profile analysis."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li><b>التحكم بالخرائط:</b> التبديل بين خرائط القمريات (Satellite)، الشوارع، التضاريس، و OpenStreetMap مع نمط الرؤية ثلاثية الأبعاد (3D).</li>
-                                             <li><b>أداة قياس المنسوب (Profile Tool):</b> انقر على أي خط أو أنبوب لعرض قطاع المنسوب الطبوغرافي التفاعلي بالارتفاعات (Z) والميول (Slope %) والمسافات التراكمية.</li>
-                                             <li><b>مؤشر الخريطة المباشر:</b> تحريك الماوس على المخطط البياني يحدد موقعك فورياً بسهم أحمر ثلاثي الأبعاد حركي على الخريطة.</li>
-                                             <li><b>تقارير الخريطة:</b> استخراج تقارير هندسية بصيغة PDF وتصدير بيانات الموقع فورياً.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li><b>Map Controls:</b> Switch between Satellite, Street, Terrain, and OpenStreetMap basemaps with 3D view mode.</li>
-                                             <li><b>Elevation Profile Tool:</b> Click any pipeline to generate an interactive profile chart showing Z-elevations, slope %, and cumulative distances.</li>
-                                             <li><b>Interactive Pointer:</b> Hovering on the profile chart dynamically moves a 3D animated red arrow pointer directly on the Leaflet map.</li>
-                                             <li><b>Map Reports:</b> Generate professional PDF engineering map reports instantly.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
+         {showClashModal && (
+           <ClashDetectionModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             onClose={() => setShowClashModal(false)}
+             onFocusClash={(pt) => {
+               setFocusedPoint({ id: `pt-${Date.now()}`, x: pt.lng, y: pt.lat, lat: pt.lat, lng: pt.lng } as any);
+               setDataId(`clash-focus-${Date.now()}`);
+             }}
+           />
+         )}
 
-                             {/* Section 2: محول الإحداثيات والبيانات */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><RefreshCw className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "2. محول الإحداثيات والبيانات (Converter)" : "2. Coordinate Converter"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "تحويل الإحداثيات والبيانات من ملفات Excel, CSV, DXF, KMZ, GDB إلى KML/KMZ مباشرة." : "Convert points and lines from Excel, CSV, DXF, KMZ, GDB directly into clean KML/KMZ files."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>ارفع الملف بالنقر أو السحب لمنطقة الرفع التفاعلية.</li>
-                                             <li>اختر نظام الإحداثيات المصدر (مثل UTM Zone 37N-40N أو عين العبد أو WGS84).</li>
-                                             <li>عيّن أسماء الأعمدة في ملفك (الاسم، السيني X، الصادي Y، المنسوب Z).</li>
-                                             <li>حمل ملف KML أو KMZ المنسق لمشاهدة البيانات بدقة على الخريطة.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Upload files via drag and drop or browsing.</li>
-                                             <li>Select source CRS (UTM Zone 37N-40N, Ain El Abd, WGS84).</li>
-                                             <li>Map coordinate columns (Name, Easting X, Northing Y, Elevation Z).</li>
-                                             <li>Download styled, full-fidelity KML/KMZ output files.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 3: مخطط الشوارع */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><MapPinned className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "3. مخطط الشوارع (Street Planner)" : "3. Street Planner"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "استخراج مسارات الشوارع الفعلية من خرائط OpenStreetMap لتخطيط شبكات المياه والصرف الصحي." : "Extract real geographic street layouts from OpenStreetMap for water & wastewater network planning."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>استخدم أداة "رسم النطاق" لتحديد المنطقة المستهدفة على الخريطة.</li>
-                                             <li>اختر نوع الشبكة المطلوبة (مياه أو صرف صحي).</li>
-                                             <li>حدد أنواع الشوارع (رئيسية، فرعية، سكنية) لاستخراجها.</li>
-                                             <li>انقر على استخراج لإنشاء شبكة خطوط جاهزة مع بيانات الشوارع وتصديرها بصيغة KML.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Use "Draw Polygon" to select your target area on the map.</li>
-                                             <li>Select network type (Water or Wastewater).</li>
-                                             <li>Choose street hierarchies (primary, secondary, residential).</li>
-                                             <li>Extract to generate network lines with street names and export as KML.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 4: محلل الأطوال */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><BarChart3 className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "4. محلل أطوال الشبكات (Network Analyzer)" : "4. Network Length Analyzer"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "تحليل أطوال شبكات المياه والصرف الصحي المرفوعة وتصنيفها حسب الأقطار والمواد." : "Analyze lengths and attributes of uploaded water and wastewater networks categorized by diameter and material."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>ارفق ملف KML/KMZ يحتوي على مسارات الشبكة المطلوبة.</li>
-                                             <li>يتعرف النظام تلقائياً على الأعمدة (DIAMETER, MATERIAL).</li>
-                                             <li>استعرض إجمالي الأطوال مقسمة حسب القطر ونوع المادة بالأمتار والكيلومترات.</li>
-                                             <li>قم بتصدير البيانات كتقرير عروض تقديمية احترافية (PowerPoint - PPTX) وإكسل.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Upload KML/KMZ files containing network pipelines.</li>
-                                             <li>System automatically identifies attributes (DIAMETER, MATERIAL).</li>
-                                             <li>View total lengths categorized by diameter and material type in meters & kilometers.</li>
-                                             <li>Export the analysis as a Presentation Report (PPTX) and Excel.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 5: كود البناء السعودي */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-amber-400/10 rounded-xl text-amber-400"><ShieldCheck className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "5. كود البناء السعودي (SBC Code Check)" : "5. Saudi Building Code (SBC Validator)"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "فحص ومطابقة الشبكات والخطوط مع متطلبات كود البناء السعودي (SBC 701/702/1001)." : "Validate pipelines against Saudi Building Code (SBC 701/702/1001) engineering standards."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>التحقق آلياً من الأعماق، درجات الانحدار، أغطية الأنابيب (Pipe Cover)، والميول المسموحة.</li>
-                                             <li>تمييز ألوان التوافق على الخريطة مباشرة: (أخضر=مطابق، أصفر=تحذير، أحمر=مخالفة كود).</li>
-                                             <li>التحقق من وجود واستيفاء رقم تصريح الحفر (Permit No) و Segment ID.</li>
-                                             <li>تصدير تقارير المطابقة والمخالفات بالتفصيل لتسليم الهيئات.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Automatically verify pipe depths, slopes, pipe cover, and engineering thresholds.</li>
-                                             <li>Highlight compliance on map: Green (Compliant), Yellow (Warning), Red (SBC Violation).</li>
-                                             <li>Validate existence and format of Permit Numbers and Segment IDs.</li>
-                                             <li>Export detailed SBC audit reports for authority submissions.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 6: تنسيق البيانات والشفرات */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Database className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "6. تنسيق البيانات والشفرات (Attribute Formatter)" : "6. Attribute Formatter"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "توحيد وهيكلة حقول البيانات الوصفية لتطابق المعايير المعتمدة لشركة المياه الوطنية." : "Standardize metadata fields and structure them according to NWC and GIS data templates."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>اختيار القالب الهندسي المستهدف (Mainline, Manhole, Valve, Hydrant).</li>
-                                             <li>الجلب الآلي لأسماء الشوارع والأحياء بواسطة تقنية العنونة العكسية (Reverse Geocoding).</li>
-                                             <li>الربط والاستنتاج الذكي لمعرفات القطاعات (Segment ID) وأرقام تصاريح الحفر (Permit No).</li>
-                                             <li>تصدير الملف المنسق مع كامل البيانات الوصفية والشفرات المعيارية.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Select target element schema template (Mainline, Manhole, Valve, Hydrant).</li>
-                                             <li>Auto-fetch street & district names via reverse geocoding from coordinates.</li>
-                                             <li>Smartly infer and extract Segment IDs and Excavation Permit Numbers.</li>
-                                             <li>Export formatted files with mapped attributes and standard GIS codings.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 7: مصنف الخرائط */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Layers className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "7. مصنف الخرائط والطبقات (Map Classifier)" : "7. Map Classifier"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "تصنيف البيانات المكانية المعقدة إلى طبقات ومجلدات منظمة بجدول ألوان معتمد." : "Classify spatial data into multiple layers and colorize them based on attributes (like diameters)."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>ارفع ملف البيانات المكانية (KML/KMZ/DXF/GDB).</li>
-                                             <li>اختر الحقل المراد التصنيف بناءً عليه (مثلاً القطر أو نوع المادة).</li>
-                                             <li>تطبيق لوحة الألوان المعتمدة لشركة المياه والصرف الصحي تلقائياً.</li>
-                                             <li>تصدير ملف مقسم إلى مجلدات أو طبقات منظمة بصرياً.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Upload spatial data files (KML/KMZ/DXF/GDB).</li>
-                                             <li>Select field for classification (e.g., DIAMETER or MATERIAL).</li>
-                                             <li>Apply official NWC color schemes automatically.</li>
-                                             <li>Export cleanly structured files grouped into folders/layers.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 8: مقسم الملفات */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Split className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "8. مقسم وصالون الملفات (File Splitter)" : "8. Spatial File Splitter"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "تجزئة الملفات المكانية الكبيرة إلى أجزاء أصغر إما بالعدد أو جغرافياً." : "Split large spatial datasets into smaller parts numerically or geographically."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>التقسيم الرقمي: تقسيم الملف الضخم إلى عدد محدد من الأجزاء المتساوية.</li>
-                                             <li>التقسيم الجغرافي: استخدام أداة رسم المضلع لقص جزء محدد فقط ضمن نطاق معين.</li>
-                                             <li>أداة تفكيك وتجميع العناصر (Explode/Group) وفصلها.</li>
-                                             <li>تصدير الملفات المقسمة كحزمة ملفات ZIP مجمعة.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Numerical Split: Divide heavy files into equal parts.</li>
-                                             <li>Geospatial Split: Use polygon drawing tool to clip out data within a specific region.</li>
-                                             <li>Explode & Group tools for separating complex polylines.</li>
-                                             <li>Export split items instantly as a combined ZIP file.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 9: محول المضلعات */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><Shapes className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "9. محول المضلعات (Polygon Converter)" : "9. Polygon Converter & Boundary"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "تحويل الخطوط المتقطعة والمنفصلة إلى مضلعات هندسية مغلقة وإنشاء حدود النطاق." : "Automatically convert disconnected lines into closed geometric polygons and create convex boundaries."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>تتبع الخطوط وربطها لإنشاء مضلعات مغلقة (Polygons) ملونة.</li>
-                                             <li>إنشاء مضلع إحاطة شامل (Convex Boundary) لكافة عناصر مشروعك على الخريطة.</li>
-                                             <li>تحويل المخططات الكروكية إلى نطاقات عمل رسمية وتصديرها كملفات KML/KMZ.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Trace and connect broken lines to form closed, styled Polygons.</li>
-                                             <li>Generate Convex Hull Boundaries surrounding all project features automatically.</li>
-                                             <li>Convert blueprint sketches into official GIS Boundaries and export as KML/KMZ.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 10: مقارنة الشبكات */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><GitCompare className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "10. مقارنة الشبكات والملفات (Comparator)" : "10. Data & Geometry Comparator"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "مقارنة ملفين مكانيين واكتشاف الفروقات والتداخلات والتطابقات بينهما." : "Compare two spatial datasets to detect duplicate lines, intersections, and geometric variances."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>رفع الملف الأساسي (Base) والملف المقارن (Compare).</li>
-                                             <li>فحص واكتشاف عناصر المطابقة التامة (Duplicates) والتداخلات (Intersections).</li>
-                                             <li>استعراض نتائج الفروقات تفاعلياً على الخريطة وتصدير التقارير منفصلة.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Upload Base dataset and Comparison dataset.</li>
-                                             <li>Scan and isolate geometric Duplicates and line Intersections.</li>
-                                             <li>Review differences interactively on the map and export comparison reports.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 11: حافظة القطاعات Segment Vault */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><FolderArchive className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "11. حافظة القطاعات (Segment Vault)" : "11. Segment Vault Manager"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "الأرشيف الذكي لإدارة قطاعات الأنابيب وربط رخص الحفر والتحكم بنطاقات التسامح." : "Smart archive for managing pipe segments, linking excavation permits, and setting tolerance limits."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li>حفظ وتنظيم القطاعات مع إمكانية التجميع الآلي حسب مسافة التسامح الهندسي (Tolerance).</li>
-                                             <li>ربط أرقام التصاريح (Permits) بالـ Segment ID المقابل بشكل منظم.</li>
-                                             <li>استرجاع المشاريع والقطاعات المحفوظة وإعادة تحميلها بضغطة زر إلى الخريطة التفاعلية.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li>Store and group pipe segments automatically based on geometric tolerance limits.</li>
-                                             <li>Link permit numbers with corresponding Segment IDs seamlessly.</li>
-                                             <li>Reload saved projects and segments directly onto the interactive map with one click.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-
-                             {/* Section 12: رسم الخطوط وتوليد الشبكات من CAD */}
-                             <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
-                                 <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
-                                     <div className="p-2 bg-accent/10 rounded-xl text-accent"><PenTool className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "12. أداة رسم الخطوط واستخلاص شبكات CAD (Line Drawer & CAD Extractor)" : "12. Line Drawer & CAD Network Extractor"}</h3>
-                                 </div>
-                                 <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "رسم وتخطيط مسارات الأنابيب يدوياً أو استخلاص محاور الشوارع آلياً من ملفات CAD/DXF وShapefile وتحويل إحداثيات UTM إلى WGS84 وتوليد كامل الشبكة بضغطة زر." : "Draw pipeline routes manually, import from Excel, or auto-extract street centerlines from CAD/DXF & Shapefiles with UTM-to-WGS84 projection and batch pipe generation."}
-                                 </p>
-                                 <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
-                                     {lang === "ar" ? (
-                                         <>
-                                             <li><b>توليد آلي من CAD / Shapefile:</b> قراءة وتصفية طبقات محاور الشوارع (LINE و LWPOLYLINE) وتجاهل النصوص والبلوكات تلقائياً.</li>
-                                             <li><b>التحويل الجغرافي والإسقاط:</b> تحويل الإحداثيات المترية (UTM Zone 37N/38N/39N و Ain el Abd) إلى WGS84 لتسقط على الخريطة في موقعها الصحيح.</li>
-                                             <li><b>توليد شبكة الأنابيب دفعة واحدة:</b> تحديد القطر والمادة ورقم التصريح وبادئة الـ Segment ID وتطبيقها آلياً على كامل شبكة الشوارع بنقرة واحدة.</li>
-                                             <li><b>الرسم المباشر والإكسل:</b> رسم تفاعلي بالنقر على الخريطة، أو استيراد ملفات الإكسل مع حساب الأطوال والبروفايل الطبوغرافي وحفظ السجل محلياً بذاكرة جهازك.</li>
-                                         </>
-                                     ) : (
-                                         <>
-                                             <li><b>Auto-Extraction from CAD/Shapefile:</b> Filter street centerline layers (LINE / LWPOLYLINE), automatically ignoring text annotations and block boundaries.</li>
-                                             <li><b>Coordinate Transformation:</b> Convert local metric systems (UTM Zone 37N/38N/39N, Ain El Abd) into global WGS84 coordinates.</li>
-                                             <li><b>Batch Network Pipe Generation:</b> Configure pipe diameter, material, permit number, and Segment ID prefix, then apply to the entire street grid with one click.</li>
-                                             <li><b>Direct Drafting & Excel Import:</b> Interactive map clicking, Excel file import, live profile chart generation, and offline storage in device memory.</li>
-                                         </>
-                                     )}
-                                 </ul>
-                             </div>
-                         </div>
-                         {/* Instruction Note with Print Help */}
-                         <div className="p-6 bg-[#0e3f53]/50 rounded-2xl border border-accent/25 space-y-2 print:bg-slate-50 print:border-slate-400 print:border print:text-slate-900 leading-relaxed">
-                             <h4 className="font-black text-xs text-accent print:text-black">{lang === 'ar' ? '💡 لحفظ هذا الدليل بنجاح كملف PDF عالي الجودة وبطريقة رسمية:' : '💡 To save this manual as a high-fidelity vector PDF file:'}</h4>
-                             <p className="text-[10px] leading-relaxed text-white/80 print:text-slate-800">
-                                 {lang === 'ar' ? (
-                                     <>
-                                         1. أولاً، تأكد من فتح هذا التطبيق في نافذة مستقلة وجديدة (عن طريق النقر على زر السهم أو الفتح في متصفح جديد).<br />
-                                         2. انقر على زر <b>تحميل بصيغة PDF</b> في الأعلى.<br />
-                                         3. في نافذة الطباعة المنبثقة، اختر الوجهة كـ <b>"حفظ بتنسيق PDF" (Save as PDF)</b>.<br />
-                                         4. تأكد من تفعيل "خلفية الرسوم" (Background graphics) في خيارات الطباعة الإضافية ليظهر التصميم الملائم والدقيق.
-                                     </>
-                                 ) : (
-                                     <>
-                                         1. Maximize the application page or open in a direct tab (using the pop-out browser option).<br />
-                                         2. Click the <b>Print / Save as PDF</b> button at the top corner.<br />
-                                         3. In the printing dialog window, set the destination layout to <b>Save as PDF</b>.<br />
-                                         4. Ensure you enable <b>Background graphics</b> in the print settings for maximum layout fidelity.
-                                     </>
-                                 )}
-                             </p>
-                         </div>
-                     </div>
-
-                     {/* Modal Footer */}
-                     <div className="p-6 border-t border-white/5 bg-black/30 flex justify-end gap-3 shrink-0 print:hidden bg-black/40">
-                         <button
-                             onClick={() => setShowManual(false)}
-                             className="px-6 py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-black transition-all"
-                         >
-                             {lang === 'ar' ? 'إغلاق الدليل' : 'Close Manual'}
-                         </button>
-                     </div>
-                 </div>
-             </div>
+         {showOverflowModal && (
+           <OverflowSimulationModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             onClose={() => setShowOverflowModal(false)}
+             onFocusManhole={(pt) => {
+               setFocusedPoint({ id: `pt-${Date.now()}`, x: pt.lng, y: pt.lat, lat: pt.lat, lng: pt.lng } as any);
+               setDataId(`overflow-focus-${Date.now()}`);
+             }}
+           />
          )}
          <InstallPwaModal
             isOpen={showInstallModal}

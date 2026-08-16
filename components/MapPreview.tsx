@@ -13,7 +13,8 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { 
   GeoPoint, BaseMapType, HydraulicNetworkSummary, 
-  HydraulicColorMode, AsphaltCalculationParams, PipeHydraulicData 
+  HydraulicColorMode, AsphaltCalculationParams, PipeHydraulicData,
+  OutfallTarget, OutfallSummaryInfo, OutfallFurthestPipeInfo
 } from '../types';
 import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
@@ -23,7 +24,7 @@ import {
   analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
   DEFAULT_ASPHALT_PARAMS, DEFAULT_MANNING_N 
 } from '../services/hydraulicService';
-import { OutfallTarget, OutfallSummaryInfo, OUTFALL_PALETTE } from '../services/gravitySewerEngine';
+import { OUTFALL_PALETTE } from '../services/gravitySewerEngine';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -299,12 +300,35 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     }
   };
 
-  // Reset coloring mode to original file colors when a new dataset is loaded
   useEffect(() => {
-    if (dataId) {
-      setLocalHydraulicColorMode('default');
-    }
-  }, [dataId]);
+    (window as any).__orientTowardsOutfall = (x: number, y: number) => {
+      if (onOrientNetworkTowardsOutfallRef.current) {
+        onOrientNetworkTowardsOutfallRef.current({ x, y });
+      }
+    };
+    (window as any).__removeOutfallTarget = (id: string) => {
+      if (onRemoveOutfallTargetRef.current) {
+        onRemoveOutfallTargetRef.current(id);
+      }
+    };
+    (window as any).__focusFurthestPipe = (pipeX: number, pipeY: number, outfallX?: number, outfallY?: number) => {
+      if (!mapInstance.current) return;
+      if (outfallX !== undefined && outfallY !== undefined && isValidLatLng(outfallY, outfallX) && isValidLatLng(pipeY, pipeX)) {
+        const bounds = L.latLngBounds([
+          [outfallY, outfallX],
+          [pipeY, pipeX]
+        ]);
+        mapInstance.current.fitBounds(bounds, { padding: [100, 100], maxZoom: 17, animate: true });
+      } else if (isValidLatLng(pipeY, pipeX)) {
+        mapInstance.current.flyTo([pipeY, pipeX], 18, { animate: true, duration: 1.2 });
+      }
+    };
+    return () => {
+      delete (window as any).__orientTowardsOutfall;
+      delete (window as any).__removeOutfallTarget;
+      delete (window as any).__focusFurthestPipe;
+    };
+  }, []);
 
   const activeHydraulicSummary = useMemo(() => {
     if (propHydraulicSummary) return propHydraulicSummary;
@@ -321,6 +345,47 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const [showPoints, setShowPoints] = useState(true);
   const [showOutfalls, setShowOutfalls] = useState(true);
   const [showDataOverlay, setShowDataOverlay] = useState(true);
+  const [dismissedDistanceAlert, setDismissedDistanceAlert] = useState(false);
+
+  // Compute outfalls that exceed hydraulic design standards
+  const exceededOutfalls = useMemo(() => {
+    const list: Array<{ id: string; name: string; distanceMeters: number; outfallX: number; outfallY: number; furthestPoint: { x: number; y: number } }> = [];
+    
+    if (outfallTargets && outfallTargets.length > 0) {
+      outfallTargets.forEach(t => {
+        if ((t.isDistanceExceeded || t.furthestPipe?.exceedsStandard) && t.furthestPipe && t.furthestPipe.furthestPoint) {
+          list.push({
+            id: t.id,
+            name: t.name || t.id,
+            distanceMeters: t.furthestPipe.distanceMeters,
+            outfallX: t.x,
+            outfallY: t.y,
+            furthestPoint: t.furthestPipe.furthestPoint
+          });
+        }
+      });
+    }
+
+    if (flowAnalysis?.outfallNodes) {
+      flowAnalysis.outfallNodes.forEach(n => {
+        const nodeFurthest = (n as any).furthestPipe as OutfallFurthestPipeInfo | undefined;
+        if (((n as any).isDistanceExceeded || nodeFurthest?.exceedsStandard) && nodeFurthest && nodeFurthest.furthestPoint) {
+          if (!list.some(item => item.id === n.id)) {
+            list.push({
+              id: n.id,
+              name: (n as any).name || n.id,
+              distanceMeters: nodeFurthest.distanceMeters,
+              outfallX: n.x,
+              outfallY: n.y,
+              furthestPoint: nodeFurthest.furthestPoint
+            });
+          }
+        }
+      });
+    }
+
+    return list;
+  }, [outfallTargets, flowAnalysis]);
 
   const t = translations[lang];
 
@@ -1333,6 +1398,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         totalInflowCapacityLs?: number;
         color?: string;
         isTarget?: boolean;
+        furthestPipe?: OutfallFurthestPipeInfo;
+        isDistanceExceeded?: boolean;
       }>();
 
       // 1. Add explicitly configured outfall targets
@@ -1346,7 +1413,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             y: t.y,
             z: t.z,
             color: t.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
-            isTarget: true
+            isTarget: true,
+            furthestPipe: t.furthestPipe,
+            isDistanceExceeded: t.isDistanceExceeded || t.furthestPipe?.exceedsStandard
           });
         });
       }
@@ -1357,9 +1426,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           if (!isValidLatLng(node.y, node.x)) return;
           const key = node.id || `outfall-${idx}`;
           const existing = combinedOutfallsMap.get(key);
+          const nodeFurthest = (node as any).furthestPipe as OutfallFurthestPipeInfo | undefined;
+          const nodeExceeded = (node as any).isDistanceExceeded || nodeFurthest?.exceedsStandard;
+
           if (existing) {
-            existing.inflowCount = node.inflowCount;
+            existing.inflowCount = node.inflowCount ?? existing.inflowCount;
             existing.elevation = node.elevation ?? existing.elevation;
+            if (nodeFurthest) existing.furthestPipe = nodeFurthest;
+            if (nodeExceeded !== undefined) existing.isDistanceExceeded = nodeExceeded;
           } else {
             combinedOutfallsMap.set(key, {
               id: node.id,
@@ -1369,7 +1443,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               elevation: node.elevation,
               inflowCount: node.inflowCount,
               color: (node as any).color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
-              isTarget: false
+              isTarget: false,
+              furthestPipe: nodeFurthest,
+              isDistanceExceeded: nodeExceeded
             });
           }
         });
@@ -1379,26 +1455,153 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         if (!isValidLatLng(outfall.y, outfall.x)) return;
 
         const outfallColor = outfall.color || '#ef4444';
+        const furthest = outfall.furthestPipe;
+        const exceedsDistance = !!(outfall.isDistanceExceeded || furthest?.exceedsStandard);
+
+        // Render critical distance ray vector line if furthest pipe exists
+        if (furthest && furthest.furthestPoint && isValidLatLng(furthest.furthestPoint.y, furthest.furthestPoint.x)) {
+          const rayLatLngs: [number, number][] = [
+            [outfall.y, outfall.x],
+            [furthest.furthestPoint.y, furthest.furthestPoint.x]
+          ];
+
+          const rayColor = exceedsDistance ? '#ef4444' : '#f59e0b';
+          const rayWeight = exceedsDistance ? 3 : 1.5;
+
+          // Dashed vector ray line
+          L.polyline(rayLatLngs, {
+            color: rayColor,
+            weight: rayWeight,
+            dashArray: exceedsDistance ? '8, 8' : '4, 8',
+            opacity: exceedsDistance ? 0.95 : 0.5,
+          }).addTo(layerGroup.current!);
+
+          // Center distance badge on ray
+          const midLat = (outfall.y + furthest.furthestPoint.y) / 2;
+          const midLng = (outfall.x + furthest.furthestPoint.x) / 2;
+          const distLabel = furthest.distanceMeters >= 1000 
+            ? `${(furthest.distanceMeters / 1000).toFixed(2)} كم`
+            : `${furthest.distanceMeters.toFixed(0)} م`;
+
+          const rayBadgeIcon = L.divIcon({
+            className: 'bg-transparent border-0',
+            html: `
+              <div style="transform: translate(-50%, -50%);" class="pointer-events-auto cursor-pointer">
+                <div class="px-2.5 py-1 rounded-full shadow-2xl font-black text-[10px] flex items-center gap-1.5 border whitespace-nowrap transition-transform hover:scale-110 active:scale-95 ${
+                  exceedsDistance 
+                    ? 'bg-red-950/95 text-rose-200 border-red-500/80 shadow-red-900/60' 
+                    : 'bg-slate-900/90 text-amber-300 border-amber-500/50 shadow-black/80'
+                }">
+                  <span>${exceedsDistance ? '🚨' : '📏'}</span>
+                  <span>${lang === 'ar' ? 'أبعد خط:' : 'Furthest Pipe:'} <b>${distLabel}</b></span>
+                  ${exceedsDistance ? `<span class="bg-red-600 text-white text-[8.5px] px-1.5 py-0.2 rounded-full font-sans font-bold">${lang === 'ar' ? 'يتجاوز 1500م' : '> 1500m'}</span>` : ''}
+                </div>
+              </div>
+            `,
+            iconSize: [120, 24],
+            iconAnchor: [60, 12]
+          });
+
+          const rayBadgeMarker = L.marker([midLat, midLng], { icon: rayBadgeIcon, zIndexOffset: 12000 }).addTo(layerGroup.current!);
+          rayBadgeMarker.on('click', () => {
+            (window as any).__focusFurthestPipe?.(furthest.furthestPoint.x, furthest.furthestPoint.y, outfall.x, outfall.y);
+          });
+
+          // Endpoint pin marker on the furthest pipe if exceeded
+          if (exceedsDistance) {
+            const endPinIcon = L.divIcon({
+              className: 'bg-transparent border-0',
+              html: `
+                <div style="position:relative; width:26px; height:26px; display:flex; align-items:center; justify-content:center; transform:translate(-50%, -50%);">
+                  <div style="position:absolute; width:100%; height:100%; background:#ef444444; border:2px solid #ef4444; border-radius:50%; animation:ping 2s cubic-bezier(0,0,0.2,1) infinite;"></div>
+                  <div style="position:relative; width:20px; height:20px; background:#ef4444; border:2px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:10px; font-weight:900; box-shadow:0 0 10px #ef4444;">
+                    ⚠️
+                  </div>
+                </div>
+              `,
+              iconSize: [26, 26],
+              iconAnchor: [13, 13]
+            });
+            const endMarker = L.marker([furthest.furthestPoint.y, furthest.furthestPoint.x], { icon: endPinIcon, zIndexOffset: 14000 }).addTo(layerGroup.current!);
+            endMarker.bindTooltip(
+              `<div class="p-1 font-bold text-[10px] text-red-300 bg-red-950/90 rounded border border-red-500/40">${lang === 'ar' ? `أبعد نقطة موجهة للمصب (${distLabel})` : `Furthest Point to Outfall (${distLabel})`}</div>`,
+              { sticky: true, direction: 'top' }
+            );
+          }
+        }
+
         const outfallHtml = `
-          <div style="position:relative; width:36px; height:36px; display:flex; align-items:center; justify-content:center;">
-            <div style="position:absolute; width:100%; height:100%; border:2.5px dashed ${outfallColor}; border-radius:50%; animation: spin 6s linear infinite; opacity:0.9;"></div>
-            <div style="position:absolute; width:28px; height:28px; background-color:${outfallColor}33; border:2px solid ${outfallColor}; border-radius:50%; animation: ping 2.5s cubic-bezier(0,0,0.2,1) infinite;"></div>
-            <div style="position:relative; width:24px; height:24px; background:${outfallColor}; border:2.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:12px; box-shadow:0 0 16px ${outfallColor}ee; font-weight:bold;">
+          <div style="position:relative; width:38px; height:38px; display:flex; align-items:center; justify-content:center;">
+            <div style="position:absolute; width:100%; height:100%; border:2.5px dashed ${exceedsDistance ? '#ef4444' : outfallColor}; border-radius:50%; animation: spin 6s linear infinite; opacity:0.9;"></div>
+            <div style="position:absolute; width:30px; height:30px; background-color:${exceedsDistance ? '#ef444433' : outfallColor + '33'}; border:2px solid ${exceedsDistance ? '#ef4444' : outfallColor}; border-radius:50%; animation: ping 2.5s cubic-bezier(0,0,0.2,1) infinite;"></div>
+            <div style="position:relative; width:26px; height:26px; background:${outfallColor}; border:2.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:13px; box-shadow:0 0 16px ${exceedsDistance ? '#ef4444ee' : outfallColor + 'ee'}; font-weight:bold;">
               🌊
             </div>
+            ${exceedsDistance ? `
+              <div style="position:absolute; top:-6px; right:-6px; width:18px; height:18px; background:#dc2626; border:2px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:10px; font-weight:900; box-shadow:0 2px 8px rgba(0,0,0,0.6); animation: bounce 1.5s infinite;">
+                ⚠️
+              </div>
+            ` : ''}
           </div>
         `;
 
         const outfallIcon = L.divIcon({
           className: 'bg-transparent border-0',
           html: outfallHtml,
-          iconSize: [36, 36],
-          iconAnchor: [18, 18]
+          iconSize: [38, 38],
+          iconAnchor: [19, 19]
         });
+
+        const furthestDistStr = furthest 
+          ? (furthest.distanceMeters >= 1000 ? `${(furthest.distanceMeters / 1000).toFixed(2)} كم` : `${furthest.distanceMeters.toFixed(0)} م`)
+          : undefined;
+
+        let warningBlockHtml = '';
+        if (furthest) {
+          if (exceedsDistance) {
+            warningBlockHtml = `
+              <div class="my-2 p-2.5 rounded-xl bg-gradient-to-br from-red-950/95 to-slate-950 border border-red-500/60 text-rose-200 text-[10px] space-y-1.5 shadow-lg">
+                <div class="flex items-center justify-between font-black text-rose-300 border-b border-red-500/30 pb-1">
+                  <span class="flex items-center gap-1">
+                    <span>⚠️</span>
+                    <span>${lang === 'ar' ? 'تنبيه المعايير الهيدروليكية المعتمدة' : 'Hydraulic Standard Exceeded'}</span>
+                  </span>
+                  <span class="text-[9px] px-1.5 py-0.5 rounded bg-red-600 text-white font-mono font-bold">${lang === 'ar' ? 'مسافة مفرطة' : 'Excessive Run'}</span>
+                </div>
+                <div class="text-[9.5px] leading-relaxed text-slate-200">
+                  ${lang === 'ar' 
+                    ? `المسافة بين هذا المصب وأبعد خط موجه إليه (<b>${furthestDistStr}</b>) تتجاوز الحد الأقصى المعتمد للشبكات الانحدارية (<b>1,500 م</b>).`
+                    : `Distance to furthest pipe (<b>${furthestDistStr}</b>) exceeds recommended gravity limit (<b>1,500 m</b>).`}
+                </div>
+                <div class="text-[9px] text-amber-300 font-semibold bg-amber-950/40 p-1.5 rounded-lg border border-amber-500/30">
+                  💡 ${lang === 'ar' ? 'يُوصى بنقل المصب أو إضافة مصب وسيط أو محطة رفع لتجنب أعماق الحفر الزائدة (>6م).' : 'Recommended to add intermediate outfall or lift station to avoid deep trenches (>6m).'}
+                </div>
+                <button
+                  type="button"
+                  onclick="window.__focusFurthestPipe && window.__focusFurthestPipe(${furthest.furthestPoint.x}, ${furthest.furthestPoint.y}, ${outfall.x}, ${outfall.y})"
+                  class="w-full py-1 px-2 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg text-[9.5px] transition-all cursor-pointer flex items-center justify-center gap-1 mt-1 shadow"
+                >
+                  <span>🔍</span>
+                  <span>${lang === 'ar' ? 'تكبير ومطابقة أبعد خط والمسار الحرج' : 'Focus Furthest Pipe & Critical Span'}</span>
+                </button>
+              </div>
+            `;
+          } else {
+            warningBlockHtml = `
+              <div class="my-1.5 p-2 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-200 text-[10px] flex items-center justify-between">
+                <span class="flex items-center gap-1 font-bold text-emerald-300">
+                  <span>✅</span>
+                  <span>${lang === 'ar' ? 'أبعد خط موجه:' : 'Furthest Pipe:'}</span>
+                </span>
+                <span class="font-mono font-bold text-emerald-100">${furthestDistStr} (${lang === 'ar' ? 'ضمن المعايير ≤ 1.5 كم' : 'Compliant ≤ 1.5km'})</span>
+              </div>
+            `;
+          }
+        }
 
         const outfallMarker = L.marker([outfall.y, outfall.x], { icon: outfallIcon, zIndexOffset: 15000 });
         outfallMarker.bindPopup(`
-          <div class="p-3.5 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[240px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+          <div class="p-3.5 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[250px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
             <div class="flex items-center justify-between border-b border-cyan-500/30 pb-2 mb-2">
               <div class="flex items-center gap-2 text-cyan-300 font-bold text-xs">
                 <span class="text-base" style="color:${outfallColor}">🌊</span>
@@ -1423,6 +1626,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 <b>${lang === 'ar' ? 'منسوب الأرض (GL):' : 'Ground Level (GL)'}:</b>
                 <span class="font-bold text-emerald-400 font-mono">${outfall.elevation.toFixed(2)} م</span>
               </div>` : ''}
+
+              ${warningBlockHtml}
 
               <div class="pt-2 border-t border-white/10 flex flex-col gap-1.5 mt-2">
                 <button
@@ -1643,6 +1848,64 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 <span>{lang === 'ar' ? 'إزالة نتائج الفحص' : 'Clear Audit'}</span>
               </button>
             )}
+          </div>
+        )}
+
+        {/* Visual Alert Banner for Outfall Hydraulic Distance Standard Exceeded */}
+        {showFlowDirection && exceededOutfalls.length > 0 && !dismissedDistanceAlert && (
+          <div className="absolute top-16 sm:top-20 left-1/2 -translate-x-1/2 z-[650] max-w-[94vw] sm:max-w-xl animate-in fade-in slide-in-from-top-4 duration-300">
+            <div className="p-3 bg-gradient-to-r from-red-950/95 via-slate-950/95 to-red-950/95 backdrop-blur-2xl border-2 border-red-500/80 rounded-2xl shadow-2xl shadow-red-950/80 text-white text-xs flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2 border-b border-red-500/30 pb-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-xl bg-red-600/30 border border-red-500 flex items-center justify-center text-red-300 text-base animate-pulse">
+                    ⚠️
+                  </div>
+                  <div>
+                    <h5 className="font-black text-rose-200 text-xs flex items-center gap-1.5">
+                      <span>{lang === 'ar' ? 'تنبيه معايير التصميم الهيدروليكي للمصبات' : 'Hydraulic Outfall Distance Alert'}</span>
+                      <span className="text-[9px] px-2 py-0.5 rounded-full bg-red-600 text-white font-mono font-bold">
+                        {exceededOutfalls.length} {lang === 'ar' ? 'مصب متأثر' : 'outfalls affected'}
+                      </span>
+                    </h5>
+                    <p className="text-[10px] text-slate-300 leading-tight">
+                      {lang === 'ar' 
+                        ? 'المسافة بين المصب وأبعد خط موجه إليه تتجاوز المعايير الهيدروليكية المعتمدة (الحد النموذجي 1,500 م).'
+                        : 'Distance from outfall to furthest connected pipe exceeds standard gravity threshold (1,500 m).'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDismissedDistanceAlert(true)}
+                  className="p-1 hover:bg-white/10 text-slate-400 hover:text-white rounded-lg transition-all"
+                  title={lang === 'ar' ? 'إغلاق التنبيه' : 'Dismiss Alert'}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                  {exceededOutfalls.map((item, i) => (
+                    <button
+                      key={item.id || i}
+                      type="button"
+                      onClick={() => (window as any).__focusFurthestPipe?.(item.furthestPoint.x, item.furthestPoint.y, item.outfallX, item.outfallY)}
+                      className="px-2 py-1 rounded-lg bg-red-950/80 hover:bg-red-900/90 border border-red-500/50 text-rose-200 font-bold transition-all flex items-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+                    >
+                      <span>🌊 {item.name}:</span>
+                      <span className="text-amber-300 font-mono">
+                        {item.distanceMeters >= 1000 ? `${(item.distanceMeters / 1000).toFixed(2)} كم` : `${item.distanceMeters.toFixed(0)} م`}
+                      </span>
+                      <span className="text-cyan-300 text-[9px] underline">({lang === 'ar' ? 'تكبير المسار' : 'Focus'})</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[9.5px] text-amber-300 font-medium">
+                  💡 {lang === 'ar' ? 'يُوصى بإضافة مصب إضافي لتفادي أعماق حفر كبيرة.' : 'Consider adding an outfall or lift station.'}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1971,35 +2234,72 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                       </span>
                     </button>
 
-                    {/* Outfall List with Badges and Delete Actions */}
+                    {/* Outfall List with Badges, Hydraulic Distance Alerts and Delete Actions */}
                     {outfallTargets && outfallTargets.length > 0 && (
-                      <div className="space-y-1 pt-1 max-h-36 overflow-y-auto custom-scrollbar">
+                      <div className="space-y-1.5 pt-1 max-h-44 overflow-y-auto custom-scrollbar">
                         {outfallTargets.map((of, idx) => {
                           const ofColor = of.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length];
+                          const fur = of.furthestPipe;
+                          const isExceeded = !!(of.isDistanceExceeded || fur?.exceedsStandard);
+                          const furDistStr = fur ? (fur.distanceMeters >= 1000 ? `${(fur.distanceMeters / 1000).toFixed(2)} كم` : `${fur.distanceMeters.toFixed(0)} م`) : null;
+
                           return (
                             <div
                               key={of.id}
-                              className="flex items-center justify-between p-1.5 rounded-xl bg-slate-950/80 border border-white/10 text-[9.5px]"
+                              className={cn(
+                                "p-1.5 rounded-xl border text-[9.5px] transition-all",
+                                isExceeded 
+                                  ? "bg-red-950/70 border-red-500/40 shadow-sm shadow-red-900/30" 
+                                  : "bg-slate-950/80 border-white/10"
+                              )}
                             >
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: ofColor }} />
-                                <span className="font-bold text-slate-200 truncate">{of.name || `مصب ${idx + 1}`}</span>
-                                <span className="text-[8.5px] font-mono text-cyan-400 dir-ltr opacity-75">
-                                  ({of.y.toFixed(3)}, {of.x.toFixed(3)})
-                                </span>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: ofColor }} />
+                                  <span className="font-bold text-slate-200 truncate">{of.name || `مصب ${idx + 1}`}</span>
+                                  <span className="text-[8.5px] font-mono text-cyan-400 dir-ltr opacity-75">
+                                    ({of.y.toFixed(3)}, {of.x.toFixed(3)})
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  {onRemoveOutfallTarget && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onRemoveOutfallTarget(of.id)}
+                                      className="p-1 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-all"
+                                      title={lang === 'ar' ? 'حذف هذا المصب' : 'Remove this outfall'}
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                              <div className="flex items-center gap-1 flex-shrink-0">
-                                {onRemoveOutfallTarget && (
-                                  <button
-                                    type="button"
-                                    onClick={() => onRemoveOutfallTarget(of.id)}
-                                    className="p-1 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-all"
-                                    title={lang === 'ar' ? 'حذف هذا المصب' : 'Remove this outfall'}
-                                  >
-                                    <Trash2 className="w-3 h-3" />
-                                  </button>
-                                )}
-                              </div>
+
+                              {/* Distance standard status chip */}
+                              {furDistStr && (
+                                <div className="mt-1 flex items-center justify-between gap-1 pt-1 border-t border-white/5 text-[8.5px]">
+                                  <span className={cn(
+                                    "px-1.5 py-0.5 rounded font-mono font-bold flex items-center gap-1",
+                                    isExceeded 
+                                      ? "bg-red-600/30 text-rose-300 border border-red-500/40" 
+                                      : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                  )}>
+                                    <span>{isExceeded ? '⚠️' : '✅'}</span>
+                                    <span>{lang === 'ar' ? 'أبعد خط:' : 'Furthest:'} {furDistStr}</span>
+                                    {isExceeded && <span className="text-[7.5px] bg-red-600 text-white px-1 rounded">{lang === 'ar' ? 'تجاوز' : '>1.5km'}</span>}
+                                  </span>
+
+                                  {fur.furthestPoint && (
+                                    <button
+                                      type="button"
+                                      onClick={() => (window as any).__focusFurthestPipe?.(fur.furthestPoint.x, fur.furthestPoint.y, of.x, of.y)}
+                                      className="text-cyan-300 hover:text-cyan-100 underline text-[8.5px] cursor-pointer"
+                                    >
+                                      {lang === 'ar' ? 'عرض المسار' : 'View Ray'}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           );
                         })}

@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Globe, RefreshCw, MapPinned, BarChart3, ShieldCheck, 
   HardDrive, Layers, Split, Shapes, Database, GitCompare, 
-  PenTool, Info, CheckCircle2, Sparkles
+  PenTool, Info, CheckCircle2, Sparkles, Mountain
 } from 'lucide-react';
 
 export interface ToolHelpData {
@@ -271,6 +271,27 @@ export const TOOL_HELP_MAP: Record<string, ToolHelpData> = {
     ],
     badgeAr: 'وصلات عمودية + CAD',
     badgeEn: 'Service Connect + CAD'
+  },
+  'engineering-suite': {
+    titleAr: 'الأدوات الهندسية والتحليلية المتقدمة',
+    titleEn: 'Advanced Engineering & Hydraulic Suite',
+    icon: <Mountain className="w-5 h-5 text-cyan-400" />,
+    summaryAr: 'حزمة متكاملة تضم 4 أدوات تخصصية: المخطط الطولي (Longitudinal Profile)، جدول كميات الحفر والردم (Earthwork BOQ)، كشف التعارضات المكانية (Clash Detection)، ومحاكاة طفح الصرف (Overflow Simulation).',
+    summaryEn: 'Comprehensive 4-in-1 suite: Hydraulic Longitudinal Profile, Earthwork BOQ, Utility 3D Clearance Clash Detection, and Pump Trip Overflow Simulation.',
+    stepsAr: [
+      '1. المخطط الطولي: رسم خط الأرض الطبيعي GL وقاع الأنبوب IL والميول والهدارات.',
+      '2. حساب الكميات BOQ: حساب حجم الحفر، فرشة الرمل، الردم، قطع الإسفلت والتصنيف حسب العمق.',
+      '3. كشف التعارضات: فحص خلوص تقاطعات المياه والصرف (المياه أعلى بـ 0.50م) واكتشاف التصادم.',
+      '4. محاكاة الطفح: حساب زمن الطفح TTO وسعة الشبكة وتحديد المناهل الحرجة وأسطول الصهاريج.'
+    ],
+    stepsEn: [
+      '1. Longitudinal Profile: Generate GL/IL slope charts with drop manholes.',
+      '2. Earthwork BOQ: Compute excavation, bedding sand, backfilling & depth-based BOQ.',
+      '3. Clash Detection: Audit 3D clearance at water/sewer line intersections.',
+      '4. Overflow Simulation: Calculate Time-to-Overflow (TTO) & emergency tanker dispatch.'
+    ],
+    badgeAr: '4 أدوات هندسية',
+    badgeEn: '4 Eng Modules'
   }
 };
 

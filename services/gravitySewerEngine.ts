@@ -9,6 +9,11 @@ export const DEFAULT_SEWER_DIAMETER_MM = 200; // 200 mm (8 inches) standard mini
 export const MIN_SELF_CLEANSING_VELOCITY = 0.60; // 0.60 m/s
 export const MAX_EROSION_VELOCITY = 2.50; // 2.50 m/s
 
+// Hydraulic Design Standards for Maximum Gravity Run / Distance to Outfall
+export const DEFAULT_MAX_HYDRAULIC_OUTFLOW_DISTANCE_M = 1500; // 1,500m (Standard Maximum Recommended Gravity Sewer Reach)
+export const CRITICAL_MAX_HYDRAULIC_OUTFLOW_DISTANCE_M = 2000; // 2,000m (Critical Maximum Gravity Run)
+export const CAUTION_HYDRAULIC_OUTFLOW_DISTANCE_M = 1200; // 1,200m (Caution boundary)
+
 /**
  * Calculates 2D / 3D geodesic path length in meters
  */
@@ -529,6 +534,7 @@ export function orientNetworkTowardsOutfall(
     minSlopeDecimal?: number;
     manningN?: number;
     outfallTerminalDepth?: number;
+    maxHydraulicDistanceM?: number;
   } = {}
 ): OutfallCascadeResult {
   const minCoverDepth = options.minCoverDepth ?? DEFAULT_MIN_COVER_DEPTH;
@@ -537,6 +543,7 @@ export function orientNetworkTowardsOutfall(
   const defaultDiameterMm = options.defaultDiameterMm ?? DEFAULT_SEWER_DIAMETER_MM;
   const manningN = options.manningN ?? DEFAULT_SEWER_MANNING_N;
   const outfallTerminalDepth = options.outfallTerminalDepth ?? 2.50;
+  const standardLimitMeters = options.maxHydraulicDistanceM ?? DEFAULT_MAX_HYDRAULIC_OUTFLOW_DISTANCE_M;
   const targetOutfalls = options.targetOutfalls || options.outfallTargets;
 
   // Separate line features from point/polygon features
@@ -914,12 +921,53 @@ export function orientNetworkTowardsOutfall(
 
   const orientedPipes: GeoPoint[] = [];
 
+  // Track furthest pipe and vertex for each outfall
+  const outfallFurthestMap = new Map<string, {
+    maxDirectDist: number;
+    maxHydraulicRunDist: number;
+    furthestPoint: { x: number; y: number; z?: number };
+    pipe: GeoPoint;
+    node: GraphNode;
+  }>();
+
   edges.forEach(edge => {
     const pipe = edge.pipe;
     const U = edge.directedFrom!;
     const D = edge.directedTo!;
     const outfall = edge.assignedOutfall || D.assignedOutfall || activeOutfallNodes[0];
     const length = edge.length;
+
+    // Track distance to outfall for furthest pipe detection
+    const outfallCoord = { x: outfall.x, y: outfall.y };
+    const distU = calculateDistance(outfallCoord, { x: U.x, y: U.y });
+    const distD = calculateDistance(outfallCoord, { x: D.x, y: D.y });
+    const netDistU = U.distToOutfall !== Infinity ? U.distToOutfall : distU;
+    const netDistD = D.distToOutfall !== Infinity ? D.distToOutfall : distD;
+
+    let maxEdgeDirectDist = Math.max(distU, distD);
+    let maxEdgeNetDist = Math.max(netDistU, netDistD);
+    let maxVertex = distU >= distD ? { x: U.x, y: U.y, z: U.z } : { x: D.x, y: D.y, z: D.z };
+
+    if (pipe.path && pipe.path.length > 0) {
+      for (const pt of pipe.path) {
+        const d = calculateDistance(outfallCoord, pt);
+        if (d > maxEdgeDirectDist) {
+          maxEdgeDirectDist = d;
+          maxVertex = { x: pt.x, y: pt.y, z: pt.z };
+        }
+      }
+    }
+
+    const currentFurthest = outfallFurthestMap.get(outfall.id);
+    if (!currentFurthest || maxEdgeDirectDist > currentFurthest.maxDirectDist) {
+      outfallFurthestMap.set(outfall.id, {
+        maxDirectDist: maxEdgeDirectDist,
+        maxHydraulicRunDist: Math.max(maxEdgeNetDist, maxEdgeDirectDist),
+        furthestPoint: maxVertex,
+        pipe,
+        node: distU >= distD ? U : D
+      });
+    }
 
     const attrs = pipe.attributes || {};
     const rawDia = extractNumeric(attrs, ['diameter', 'diameter_mm', 'dia', 'القطر']);
@@ -1067,6 +1115,49 @@ export function orientNetworkTowardsOutfall(
   // Build Outfall summaries
   const outfallSummaries: OutfallSummaryInfo[] = activeOutfallNodes.map((outfall, idx) => {
     const oStat = outfallStatsMap.get(outfall.id) || { totalPipes: 0, totalLength: 0, totalFlowLs: 0, sumSlope: 0, sumVel: 0 };
+    const furthest = outfallFurthestMap.get(outfall.id);
+    
+    let furthestPipeInfo: OutfallFurthestPipeInfo | undefined = undefined;
+    let isDistanceExceeded = false;
+
+    if (furthest && furthest.maxDirectDist > 0) {
+      const maxDirectM = Number(furthest.maxDirectDist.toFixed(1));
+      const maxNetM = Number(furthest.maxHydraulicRunDist.toFixed(1));
+      const exceeds = maxDirectM > standardLimitMeters || maxNetM > standardLimitMeters;
+      isDistanceExceeded = exceeds;
+
+      let severity: 'safe' | 'caution' | 'critical' = 'safe';
+      if (maxDirectM > CRITICAL_MAX_HYDRAULIC_OUTFLOW_DISTANCE_M || maxNetM > CRITICAL_MAX_HYDRAULIC_OUTFLOW_DISTANCE_M) {
+        severity = 'critical';
+      } else if (maxDirectM > CAUTION_HYDRAULIC_OUTFLOW_DISTANCE_M || maxNetM > CAUTION_HYDRAULIC_OUTFLOW_DISTANCE_M) {
+        severity = 'caution';
+      }
+
+      const formattedDist = maxDirectM >= 1000 ? `${(maxDirectM / 1000).toFixed(2)} كم` : `${maxDirectM.toFixed(0)} م`;
+      const formattedLimit = standardLimitMeters >= 1000 ? `${(standardLimitMeters / 1000).toFixed(1)} كم` : `${standardLimitMeters} م`;
+
+      const warningMessageAr = exceeds
+        ? `⚠️ تنبيه هيدروليكي: المسافة بين المصب وأبعد خط موجه إليه (${formattedDist}) تتجاوز الحد الأقصى المعتمد للشبكات الانحدارية (${formattedLimit}). هذا الامتداد قد يسبب زيادة أعماق الحفر عن 6م وتراكم الغازات. يُوصى بنقل المصب أو إضافة مصب وسيط أو محطة رفع.`
+        : undefined;
+
+      const warningMessageEn = exceeds
+        ? `⚠️ Hydraulic Alert: Distance from outfall to furthest pipe (${formattedDist}) exceeds the gravity design standard (${formattedLimit}). Intermediate outfall or lift station recommended.`
+        : undefined;
+
+      furthestPipeInfo = {
+        pipeId: String(furthest.pipe.id),
+        pipeName: furthest.pipe.attributes?.['Name'] || furthest.pipe.attributes?.['اسم_الخط'] || (furthest.pipe as any).name || String(furthest.pipe.id),
+        distanceMeters: maxDirectM,
+        hydraulicRunLengthMeters: maxNetM,
+        furthestPoint: furthest.furthestPoint,
+        exceedsStandard: exceeds,
+        standardLimitMeters: standardLimitMeters,
+        severity,
+        warningMessageAr,
+        warningMessageEn
+      };
+    }
+
     return {
       id: outfall.id,
       name: outfall.customName || `مصب ${idx + 1} (${outfall.id})`,
@@ -1081,7 +1172,9 @@ export function orientNetworkTowardsOutfall(
       totalIncomingFlowLs: Number(oStat.totalFlowLs.toFixed(1)),
       avgSlope: oStat.totalLength > 0 ? Number((oStat.sumSlope / oStat.totalLength).toFixed(2)) : 0,
       avgVelocity: oStat.totalLength > 0 ? Number((oStat.sumVel / oStat.totalLength).toFixed(2)) : 0,
-      color: outfall.outfallColor || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length]
+      color: outfall.outfallColor || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
+      furthestPipe: furthestPipeInfo,
+      isDistanceExceeded
     };
   });
 

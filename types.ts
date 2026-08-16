@@ -123,6 +123,50 @@ export type CheckResultModalState = any;
 
 export type HydraulicVelocityStatus = 'low' | 'optimal' | 'high';
 
+export interface OutfallTarget {
+  id: string;
+  name?: string;
+  x: number;
+  y: number;
+  z?: number;
+  color?: string;
+  isExplicitTarget?: boolean;
+  furthestPipe?: OutfallFurthestPipeInfo;
+  isDistanceExceeded?: boolean;
+}
+
+export interface OutfallFurthestPipeInfo {
+  pipeId: string;
+  pipeName?: string;
+  distanceMeters: number;
+  hydraulicRunLengthMeters: number;
+  furthestPoint: { x: number; y: number; z?: number };
+  exceedsStandard: boolean;
+  standardLimitMeters: number;
+  severity: 'safe' | 'caution' | 'critical';
+  warningMessageAr?: string;
+  warningMessageEn?: string;
+}
+
+export interface OutfallSummaryInfo {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  z?: number;
+  GL: number;
+  IL: number;
+  depth: number;
+  totalConnectedPipes: number;
+  totalLengthMeters: number;
+  totalIncomingFlowLs: number;
+  avgSlope: number;
+  avgVelocity: number;
+  color: string;
+  furthestPipe?: OutfallFurthestPipeInfo;
+  isDistanceExceeded?: boolean;
+}
+
 export type AsphaltRestorationScope = 'trench' | 'lane' | 'full_street';
 
 export interface AsphaltCalculationParams {
