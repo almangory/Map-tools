@@ -250,25 +250,25 @@ export const TOOL_HELP_MAP: Record<string, ToolHelpData> = {
     badgeEn: 'Diff Detector'
   },
   'line-drawer': {
-    titleAr: 'أداة رسم الخطوط',
-    titleEn: 'Manual Polyline Drawer',
+    titleAr: 'أداة رسم الخطوط وتوليد الشبكات من CAD',
+    titleEn: 'Line Drawer & CAD Network Extractor',
     icon: <PenTool className="w-5 h-5 text-accent" />,
-    summaryAr: 'رسم وتخطيط مسارات الأنابيب يدوياً على الخريطة أو بإدخال الإحداثيات وحساب الأطوال والبروفايل فورياً.',
-    summaryEn: 'Draft pipeline routes directly on the map or by entering GPS coordinates with live profile generation.',
+    summaryAr: 'رسم وتخطيط الأنابيب يدوياً أو استخلاص طبقات محاور الشوارع آلياً من ملفات CAD/DXF وShapefile مع تحويل الإحداثيات المترية (UTM) وتوليد الشبكة بنقرة واحدة.',
+    summaryEn: 'Draft pipeline routes directly on map, import from Excel, or auto-extract street centerlines from CAD/DXF & Shapefile with UTM-to-WGS84 projection and batch pipe generation.',
     stepsAr: [
-      'إدخال إحداثيات النقاط (X, Y, Z) أو النقر المباشر على الخريطة.',
-      'حساب فوري للأطوال وزوايا الانحدار والميول.',
-      'توليد بروفايل المنسوب الطبوغرافي للمسار المخطط.',
-      'تصدير المسار المرسوم بصيغة KML أو DXF.'
+      'استخلاص آلي لطبقات الشوارع (LINE/LWPOLYLINE) من ملفات CAD/DXF وتجاهل النصوص والبلوكات.',
+      'تحويل الإحداثيات المترية (UTM Zone 37N/38N/39N, عين العبد) إلى WGS84 لتسقط فورياً على الخريطة.',
+      'توليد شبكة الأنابيب دفعة واحدة وتحديد القطر والمادة والنوع ورقم التصريح وبادئة Segment ID.',
+      'رسم تفاعلي مباشر بالنقر أو إدخال الإحداثيات اليدوية واستيراد إكسل وحفظ السجل بذاكرة جهازك.'
     ],
     stepsEn: [
-      'Enter GPS coordinates manually or click directly on map.',
-      'Instant length and slope angle calculations.',
-      'Generate live elevation profile chart for drafted route.',
-      'Export drawn polylines as KML or DXF CAD file.'
+      'Auto-filter street centerline layers (LINE/LWPOLYLINE) from CAD/DXF, ignoring text & blocks.',
+      'Transform local metric CRS (UTM Zones 37N-39N, Ain El Abd) to global WGS84 for exact map positioning.',
+      'Batch generate pipe networks with customizable diameter, material, category, and Segment IDs.',
+      'Direct map drawing, Excel import, manual coordinate entry, and local offline storage.'
     ],
-    badgeAr: 'رسم حر',
-    badgeEn: 'Live Drafting'
+    badgeAr: 'توليد CAD ذكي',
+    badgeEn: 'Smart CAD AI'
   }
 };
 

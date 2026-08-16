@@ -8829,27 +8829,29 @@ const App: React.FC = () => {
                                  </ul>
                              </div>
 
-                             {/* Section 12: رسم الخطوط */}
+                             {/* Section 12: رسم الخطوط وتوليد الشبكات من CAD */}
                              <div className="bg-white/5 p-6 rounded-2xl border border-white/5 space-y-3 print:bg-white print:border-slate-300 print:border">
                                  <div className="flex items-center gap-2.5 pb-2 border-b border-white/5 print:border-slate-200">
                                      <div className="p-2 bg-accent/10 rounded-xl text-accent"><PenTool className="w-4 h-4" /></div>
-                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "12. أداة رسم الخطوط (Line Drawer)" : "12. Manual Line Drawer"}</h3>
+                                     <h3 className="font-black text-sm text-white print:text-black">{lang === "ar" ? "12. أداة رسم الخطوط واستخلاص شبكات CAD (Line Drawer & CAD Extractor)" : "12. Line Drawer & CAD Network Extractor"}</h3>
                                  </div>
                                  <p className="text-[11px] text-white/70 leading-relaxed print:text-slate-800">
-                                     {lang === "ar" ? "رسم وتخطيط مسارات الأنابيب والأنشطة يدوياً على الخريطة أو بإدخال الإحداثيات." : "Draw and plan pipeline routes manually on the map or by entering GPS/UTM coordinates."}
+                                     {lang === "ar" ? "رسم وتخطيط مسارات الأنابيب يدوياً أو استخلاص محاور الشوارع آلياً من ملفات CAD/DXF وShapefile وتحويل إحداثيات UTM إلى WGS84 وتوليد كامل الشبكة بضغطة زر." : "Draw pipeline routes manually, import from Excel, or auto-extract street centerlines from CAD/DXF & Shapefiles with UTM-to-WGS84 projection and batch pipe generation."}
                                  </p>
                                  <ul className="text-[10px] text-white/60 space-y-1.5 list-disc list-inside print:text-slate-700">
                                      {lang === "ar" ? (
                                          <>
-                                             <li>إدخال إحداثيات النقاط يدوياً أو النقر المباشر على الخريطة لتتبع المسار.</li>
-                                             <li>توليد المنسوب الطبوغرافي والقطاع العرضي للمسار المرسوم فورياً.</li>
-                                             <li>حساب الأطوال والميول وتصدير الخطوط المخططة كملفات KML/DXF.</li>
+                                             <li><b>توليد آلي من CAD / Shapefile:</b> قراءة وتصفية طبقات محاور الشوارع (LINE و LWPOLYLINE) وتجاهل النصوص والبلوكات تلقائياً.</li>
+                                             <li><b>التحويل الجغرافي والإسقاط:</b> تحويل الإحداثيات المترية (UTM Zone 37N/38N/39N و Ain el Abd) إلى WGS84 لتسقط على الخريطة في موقعها الصحيح.</li>
+                                             <li><b>توليد شبكة الأنابيب دفعة واحدة:</b> تحديد القطر والمادة ورقم التصريح وبادئة الـ Segment ID وتطبيقها آلياً على كامل شبكة الشوارع بنقرة واحدة.</li>
+                                             <li><b>الرسم المباشر والإكسل:</b> رسم تفاعلي بالنقر على الخريطة، أو استيراد ملفات الإكسل مع حساب الأطوال والبروفايل الطبوغرافي وحفظ السجل محلياً بذاكرة جهازك.</li>
                                          </>
                                      ) : (
                                          <>
-                                             <li>Enter GPS/UTM coordinates manually or click directly on map to draft routes.</li>
-                                             <li>Generate elevation profiles and cross-sections for drafted lines instantly.</li>
-                                             <li>Calculate lengths & slope angles and export drawn polylines as KML/DXF.</li>
+                                             <li><b>Auto-Extraction from CAD/Shapefile:</b> Filter street centerline layers (LINE / LWPOLYLINE), automatically ignoring text annotations and block boundaries.</li>
+                                             <li><b>Coordinate Transformation:</b> Convert local metric systems (UTM Zone 37N/38N/39N, Ain El Abd) into global WGS84 coordinates.</li>
+                                             <li><b>Batch Network Pipe Generation:</b> Configure pipe diameter, material, permit number, and Segment ID prefix, then apply to the entire street grid with one click.</li>
+                                             <li><b>Direct Drafting & Excel Import:</b> Interactive map clicking, Excel file import, live profile chart generation, and offline storage in device memory.</li>
                                          </>
                                      )}
                                  </ul>
