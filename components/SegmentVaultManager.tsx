@@ -635,7 +635,7 @@ export const SegmentVaultManager: React.FC<SegmentVaultManagerProps> = ({
               const isSelected = selectedIds.has(proj.id);
               return (
                 <div
-                  key={proj.id}
+                  key={`proj-${proj.id}-${idx}`}
                   className={
                     isSelected
                       ? "p-5 bg-[#0c3647]/90 border-2 border-accent rounded-3xl shadow-xl transition-all space-y-4"

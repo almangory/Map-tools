@@ -465,9 +465,9 @@ export const SegmentLengthChart: React.FC<SegmentLengthChartProps> = ({
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-            {processedData.slice(0, 3).map((item) => (
+            {processedData.slice(0, 3).map((item, idx) => (
               <div
-                key={item.fullName}
+                key={`segment-hl-${item.fullName || item.segmentId || idx}-${idx}`}
                 onClick={() => onHighlightSegment && onHighlightSegment(item.points)}
                 className="bg-black/40 hover:bg-[#9000FF]/20 p-3 rounded-xl border border-white/10 flex items-center justify-between gap-2 cursor-pointer transition-all hover:border-[#9000FF]/50 group"
               >

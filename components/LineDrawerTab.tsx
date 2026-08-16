@@ -25,8 +25,17 @@ import {
   CadExtractionSummary,
   ExtractedCadLine
 } from '../services/cadNetworkExtractorService';
+import {
+  Point2D,
+  findNearestPerpendicularPoint,
+  projectPointOntoSegment,
+  geoDistanceMeters
+} from '../services/spatialPerpendicularService';
+import { computeGravityPipeSegment, enrichGeoPointWithHydraulics, orientNetworkTowardsOutfall } from '../services/gravitySewerEngine';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
+
+export type LineTypeCategory = 'main-pipeline' | 'service-connection' | 'cad-axis';
 
 export interface LineConfig {
   name: string;
@@ -38,6 +47,8 @@ export interface LineConfig {
   permitNo: string;
   segmentId: string;
   notes: string;
+  lineType?: LineTypeCategory; // 'main-pipeline' | 'service-connection' | 'cad-axis'
+  snapPerpendicularToStreet?: boolean;
 }
 
 interface Props {
@@ -129,7 +140,9 @@ export const LineDrawerTab: React.FC<Props> = ({
     material: 'HDPE',
     permitNo: '',
     segmentId: '',
-    notes: ''
+    notes: '',
+    lineType: 'main-pipeline',
+    snapPerpendicularToStreet: true
   });
   const [localPickingTarget, setLocalPickingTarget] = useState<'start' | 'end' | null>(null);
 
@@ -329,7 +342,7 @@ export const LineDrawerTab: React.FC<Props> = ({
         if (segmentId) { customAttributes['segment id'] = segmentId; customAttributes['معرف الشريحة'] = segmentId; }
         if (notes) { customAttributes['Notes'] = notes; customAttributes['ملاحظات'] = notes; }
 
-        generated.push({
+        const rawLine: GeoPoint = {
           id: lineId,
           x: sx,
           y: sy,
@@ -338,7 +351,16 @@ export const LineDrawerTab: React.FC<Props> = ({
           color,
           layer,
           attributes: customAttributes
-        });
+        };
+
+        try {
+          const calc = computeGravityPipeSegment(rawLine, {
+            defaultDiameterMm: customAttributes['Diameter'] ? parseFloat(customAttributes['Diameter']) : 200
+          });
+          generated.push(enrichGeoPointWithHydraulics(rawLine, calc));
+        } catch {
+          generated.push(rawLine);
+        }
       });
 
       if (generated.length === 0) {
@@ -347,14 +369,23 @@ export const LineDrawerTab: React.FC<Props> = ({
         return;
       }
 
-      setDrawnLines(prev => [...generated, ...prev]);
-      setGlobalPoints(prev => [...generated, ...prev]);
+      // Automatically Orient Network Flow & Cascade Levels Towards Outfall
+      let finalOriented = generated;
+      try {
+        const cascade = orientNetworkTowardsOutfall(generated);
+        finalOriented = cascade.orientedPoints;
+      } catch (err) {
+        console.warn('Auto outfall orientation notice:', err);
+      }
+
+      setDrawnLines(prev => [...finalOriented, ...prev]);
+      setGlobalPoints(prev => [...finalOriented, ...prev]);
       setDataId(`excel-lines-${Date.now()}`);
 
       setSuccess(
         lang === 'ar'
-          ? `تم استيراد ورسم ${generated.length} خطاً بنجاح على الخريطة الرئيسية!`
-          : `Successfully imported and drew ${generated.length} lines on the map!`
+          ? `تم استيراد ورسم ${finalOriented.length} خطاً بنجاح وتوجيه الفلو تلقائياً نحو المصب على الخريطة الرئيسية!`
+          : `Successfully imported, drew ${finalOriented.length} lines, and auto-oriented flow towards outfall!`
       );
       setActiveMode('lines-inventory');
     } catch (err: any) {
@@ -376,14 +407,14 @@ export const LineDrawerTab: React.FC<Props> = ({
       return;
     }
 
-    const newLine: GeoPoint = {
+    let newLine: GeoPoint = {
       id: lineConfig.name || `LINE_${drawnLines.length + 1}`,
       x: sx,
       y: sy,
       type: 'LineString',
       path: [{ x: sx, y: sy }, { x: ex, y: ey }],
       color: lineConfig.color || '#3b82f6',
-      layer: lineConfig.layer || 'شبكة المياه',
+      layer: lineConfig.layer || 'شبكة الصرف الصحي',
       attributes: {
         StartX: sx,
         StartY: sy,
@@ -396,6 +427,15 @@ export const LineDrawerTab: React.FC<Props> = ({
         ...(lineConfig.notes ? { Notes: lineConfig.notes, 'ملاحظات': lineConfig.notes } : {})
       }
     };
+
+    try {
+      const calc = computeGravityPipeSegment(newLine, {
+        defaultDiameterMm: lineConfig.diameter ? parseFloat(lineConfig.diameter) : 200
+      });
+      newLine = enrichGeoPointWithHydraulics(newLine, calc);
+    } catch (e) {
+      console.warn('Hydraulic calc notice:', e);
+    }
 
     setDrawnLines(prev => [newLine, ...prev]);
     setGlobalPoints(prev => [newLine, ...prev]);
@@ -660,21 +700,54 @@ export const LineDrawerTab: React.FC<Props> = ({
     setActiveMode('lines-inventory');
   };
 
+  const handleOrientDrawnLinesTowardsOutfall = () => {
+    if (!drawnLines || drawnLines.length === 0) {
+      setError(lang === 'ar' ? 'لا توجد خطوط في السجل لتوجيهها.' : 'No lines to orient.');
+      return;
+    }
+
+    try {
+      const result = orientNetworkTowardsOutfall(drawnLines);
+      setDrawnLines(result.orientedPoints);
+      if (setGlobalPoints) {
+        setGlobalPoints(prev => {
+          const orientedMap = new Map(result.orientedPoints.map(p => [p.id, p]));
+          return prev.map(p => orientedMap.get(p.id) || p);
+        });
+      }
+      try {
+        localStorage.setItem('DRAWN_MAP_LINES', JSON.stringify(result.orientedPoints));
+      } catch (e) {
+        console.warn('Storage quota notice:', e);
+      }
+
+      setSuccess(
+        lang === 'ar'
+          ? `🌊 تم بنجاح توجيه فلو ${result.totalPipesOriented} خط نحو المصب (${result.outfallNode.id}) وضبط المناسيب والميلان الهيدروليكي وسرعات مانينغ تلقائياً!`
+          : `🌊 Successfully oriented ${result.totalPipesOriented} lines to Outfall (${result.outfallNode.id}) and auto-cascaded hydraulic slopes & levels!`
+      );
+    } catch (err: any) {
+      setError(err.message || 'Error orienting network to outfall');
+    }
+  };
+
   const handleFinishLineAction = () => {
     if (onFinishCurrentLine) {
       onFinishCurrentLine();
       return;
     }
     if (!currentVertices || currentVertices.length < 2) return;
+    const isServiceConn = lineConfig.lineType === 'service-connection';
     const newLine: GeoPoint = {
-      id: lineConfig.name || `LINE_${(drawnLines?.length || 0) + 1}`,
+      id: lineConfig.name || (isServiceConn ? `SERV_${(drawnLines?.length || 0) + 1}` : `LINE_${(drawnLines?.length || 0) + 1}`),
       x: currentVertices[0].x,
       y: currentVertices[0].y,
       type: 'LineString',
       path: [...currentVertices],
-      color: lineConfig.color || '#3b82f6',
-      layer: lineConfig.layer || 'شبكة المياه',
+      color: lineConfig.color || (isServiceConn ? '#ef4444' : '#3b82f6'),
+      layer: lineConfig.layer || (isServiceConn ? 'وصلات خدمة منزلية (House Connections)' : 'شبكة المياه'),
       attributes: {
+        Type: isServiceConn ? 'Service Connection (وصلة منزلية)' : 'Pipeline',
         StartX: currentVertices[0].x,
         StartY: currentVertices[0].y,
         EndX: currentVertices[currentVertices.length - 1].x,
@@ -696,12 +769,13 @@ export const LineDrawerTab: React.FC<Props> = ({
     }
     setCurrentVertices([]);
     setIsDrawingOnMainMap(false);
+    const prefix = isServiceConn ? 'SERV_' : 'LINE_';
     const match = lineConfig.name.match(/\d+$/);
     if (match) {
       const nextNum = parseInt(match[0], 10) + 1;
       setLineConfig(prev => ({ ...prev, name: prev.name.replace(/\d+$/, nextNum.toString()) }));
     } else {
-      setLineConfig(prev => ({ ...prev, name: `LINE_${(drawnLines?.length || 0) + 2}` }));
+      setLineConfig(prev => ({ ...prev, name: `${prefix}${(drawnLines?.length || 0) + 2}` }));
     }
     setSuccess(lang === 'ar' ? `تم حفظ الخط (${newLine.id}) بنجاح!` : `Line ${newLine.id} saved!`);
   };
@@ -946,6 +1020,97 @@ export const LineDrawerTab: React.FC<Props> = ({
                     {lang === 'ar' ? 'حدد اسم الخط، الطبقة، القطر، المادة، ورقم التصريح لحفظها في الجداول وملفات التصدير' : 'Set layer, diameter, material, permit number and other GIS metadata'}
                   </p>
                 </div>
+              </div>
+
+              {/* Line Type Classification: Main Pipeline vs Service Connection */}
+              <div className="p-4 bg-[#071c27] rounded-2xl border border-white/10 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black text-white flex items-center gap-1.5">
+                    <PenTool className="w-4 h-4 text-accent" />
+                    <span>{lang === 'ar' ? 'نوع الخط الهندسي المراد رسمه:' : 'Line Classification Type:'}</span>
+                  </label>
+                  <span className={cn(
+                    "text-[10px] font-black px-2.5 py-0.5 rounded-full border",
+                    lineConfig.lineType === 'service-connection' 
+                      ? "bg-rose-500/20 text-rose-300 border-rose-500/40" 
+                      : "bg-accent/20 text-accent border-accent/40"
+                  )}>
+                    {lineConfig.lineType === 'service-connection' 
+                      ? (lang === 'ar' ? '🏠 وصلة خدمة منزلية' : '🏠 Service Connection') 
+                      : (lang === 'ar' ? '🌊 خط أنبوب رئيسي' : '🌊 Main Pipeline')}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLineConfig(prev => ({
+                        ...prev,
+                        lineType: 'main-pipeline',
+                        layer: prev.layer === 'وصلات خدمة منزلية (House Connections)' ? 'شبكة المياه' : prev.layer,
+                        color: prev.color === '#ef4444' ? '#3b82f6' : prev.color,
+                        width: prev.width === 3 ? 4 : prev.width,
+                        name: prev.name.startsWith('SERV_') ? prev.name.replace('SERV_', 'PIPE_') : prev.name
+                      }));
+                    }}
+                    className={cn(
+                      "p-3 rounded-xl border text-xs font-black flex items-center justify-center gap-2 transition-all",
+                      lineConfig.lineType !== 'service-connection'
+                        ? "bg-blue-600/20 text-blue-300 border-blue-400/60 shadow-lg ring-1 ring-blue-400/30"
+                        : "bg-white/5 text-white/50 border-white/10 hover:text-white"
+                    )}
+                  >
+                    <span className="text-sm">🌊</span>
+                    <div className="text-start">
+                      <div className="leading-tight">{lang === 'ar' ? 'خط شبكة / أنبوب رئيسي' : 'Main Pipeline / Axis'}</div>
+                      <div className="text-[10px] text-white/50 font-normal">{lang === 'ar' ? 'رسم مسار خط عادي بين النقاط' : 'Standard route polyline'}</div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLineConfig(prev => ({
+                        ...prev,
+                        lineType: 'service-connection',
+                        layer: 'وصلات خدمة منزلية (House Connections)',
+                        color: '#ef4444',
+                        width: 3,
+                        diameter: '25',
+                        material: 'HDPE SDR11',
+                        name: prev.name.startsWith('PIPE_') || prev.name.startsWith('LINE_') ? `SERV_${prev.name.split('_')[1] || '1'}` : prev.name,
+                        snapPerpendicularToStreet: true
+                      }));
+                    }}
+                    className={cn(
+                      "p-3 rounded-xl border text-xs font-black flex items-center justify-center gap-2 transition-all relative overflow-hidden",
+                      lineConfig.lineType === 'service-connection'
+                        ? "bg-rose-500/25 text-rose-200 border-rose-400 shadow-lg ring-2 ring-rose-500/40"
+                        : "bg-white/5 text-white/50 border-white/10 hover:text-white"
+                    )}
+                  >
+                    <span className="text-sm">🏠</span>
+                    <div className="text-start">
+                      <div className="leading-tight text-rose-300">{lang === 'ar' ? 'وصلة خدمة منزلية (عمودية)' : 'House Service Connection'}</div>
+                      <div className="text-[10px] text-white/60 font-normal">{lang === 'ar' ? 'إسقاط عمودي آلي 90° من العقار إلى خط الشارع' : 'Perpendicular 90° snap from property to street'}</div>
+                    </div>
+                  </button>
+                </div>
+
+                {lineConfig.lineType === 'service-connection' && (
+                  <div className="p-3 bg-rose-950/40 rounded-xl border border-rose-500/30 text-[11px] text-rose-200 space-y-1.5 animate-in fade-in">
+                    <div className="flex items-center gap-1.5 font-bold text-rose-300">
+                      <Sparkles className="w-3.5 h-3.5 text-rose-400" />
+                      <span>{lang === 'ar' ? 'ميزة الإسقاط العمودي التلقائي مفعلة:' : 'Perpendicular Snapping Activated:'}</span>
+                    </div>
+                    <p className="text-white/80 leading-relaxed text-[10.5px]">
+                      {lang === 'ar' 
+                        ? 'عند النقر على موقع عقار المنزل في الخريطة، يقوم المحرك آلياً بحساب الإسقاط الهندسي المتعامد (90°) والربط بالخط المرسوم في الشارع وحساب طول الوصلة بدقة!' 
+                        : 'Click on the house/property, and the tool will automatically project perpendicularly (90°) onto the street pipeline!'}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Grid 1: Basic Identifiers */}
@@ -1832,7 +1997,15 @@ export const LineDrawerTab: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={handleOrientDrawnLinesTowardsOutfall}
+                        className="px-3.5 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-lg shadow-cyan-500/10"
+                        title={lang === 'ar' ? 'توجيه فلو الشبكة تلقائياً نحو المصب وضبط الميلان والمناسيب الهيدروليكية' : 'Auto-orient network flow towards outfall and cascade hydraulics'}
+                      >
+                        <span className="text-sm">🌊</span>
+                        <span>{lang === 'ar' ? 'توجيه الشبكة نحو المصب' : 'Orient to Outfall'}</span>
+                      </button>
                       <button
                         onClick={handleClearAllLines}
                         className="px-3.5 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5"
@@ -1902,7 +2075,7 @@ export const LineDrawerTab: React.FC<Props> = ({
                         {drawnLines.map((line, idx) => {
                           const len = line.path ? calculatePathLength(line.path) : 0;
                           return (
-                            <tr key={line.id || idx} className="hover:bg-white/[0.03] transition-colors">
+                            <tr key={`drawn-line-${line.id || 'line'}-${idx}`} className="hover:bg-white/[0.03] transition-colors">
                               <td className="p-3 font-mono font-bold text-accent">{line.id}</td>
                               <td className="p-3">{line.layer || 'Lines'}</td>
                               <td className="p-3">

@@ -563,9 +563,9 @@ export const PermitLengthChart: React.FC<PermitLengthChartProps> = ({
             </span>
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-            {processedData.slice(0, 3).map((item) => (
+            {processedData.slice(0, 3).map((item, idx) => (
               <div
-                key={item.fullName}
+                key={`permit-hl-${item.fullName || item.permitId || idx}-${idx}`}
                 onClick={() => onHighlightPermit && onHighlightPermit(item.points)}
                 className="bg-black/40 hover:bg-[#FF6D00]/20 p-3 rounded-xl border flex items-center justify-between gap-2 cursor-pointer transition-all hover:border-[#FF6D00]/50 group"
                 style={{ borderColor: `${item.color}40` }}

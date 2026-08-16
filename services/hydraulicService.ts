@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { GeoPoint, PipeHydraulicData, HydraulicNetworkSummary, AsphaltCalculationParams, AsphaltRestorationScope } from '../types';
 import { NetworkFlowAnalysis } from './flowDirectionService';
+import { computeGravityPipeSegment, DEFAULT_SEWER_MANNING_N, DEFAULT_MIN_COVER_DEPTH, DEFAULT_MAX_TRENCH_DEPTH } from './gravitySewerEngine';
 
 export const DEFAULT_ASPHALT_PARAMS: AsphaltCalculationParams = {
   scope: 'trench',
@@ -85,7 +86,7 @@ function extractStringAttribute(
 }
 
 /**
- * Computes hydraulic parameters using Manning's equation and asphalt restoration quantities
+ * Computes hydraulic parameters using Manning's equation, gravity sewer levels, and asphalt restoration quantities
  */
 export function computePipeHydraulics(
   pt: GeoPoint,
@@ -98,130 +99,66 @@ export function computePipeHydraulics(
     ...(pt.attributes || {})
   };
 
-  // 1. Length in meters
-  let lineLength = pt.length || 0;
-  if (!lineLength && pt.path && pt.path.length >= 2) {
-    lineLength = calculatePathLengthMeters(pt.path);
-  }
-  if (lineLength <= 0) lineLength = 1.0; // fallback safe length
-
-  // 2. Diameter in mm & meters
-  const diameterKeys = [
-    'diameter', 'innerdiameter', 'pipediameter', 'pipe_diameter',
-    'dia', 'size', 'pipe_size', 'pipesize', 'قطر', 'القطر', 'قطر_الانبوب'
-  ];
-  let rawDiameter = extractNumericAttribute(attrs, diameterKeys);
-  let diameterMm = DEFAULT_PIPE_DIAMETER_MM;
-  if (rawDiameter !== undefined && rawDiameter > 0) {
-    // If raw diameter is small (e.g. 0.2 or 0.3), assume meters and convert to mm
-    if (rawDiameter <= 5.0) {
-      diameterMm = rawDiameter * 1000;
-    } else {
-      diameterMm = rawDiameter;
-    }
-  }
-  const diameterM = diameterMm / 1000; // D in meters
-
-  // 3. Slope calculation
-  const slopeKeys = ['slope', 'pipeslope', 'pipe_slope', 'gradient', 'الميل', 'ميل_الانبوب'];
-  let rawSlope = extractNumericAttribute(attrs, slopeKeys);
-  let slopeDecimal = DEFAULT_MIN_SLOPE_DECIMAL;
-  let slopeSource: 'attribute' | 'elevation_diff' | 'dem_diff' | 'default' = 'default';
-
   const seg = flowAnalysis?.segments?.get(String(pt.id)) || 
               flowAnalysis?.segments?.get(pt.id as any) ||
               (typeof pt.id === 'number' ? flowAnalysis?.segments?.get(Number(pt.id)) : undefined);
 
-  if (rawSlope !== undefined && rawSlope > 0) {
-    // If slope > 0.5, assume it was provided as percentage (%)
-    if (rawSlope > 0.2) {
-      slopeDecimal = rawSlope / 100;
-    } else {
-      slopeDecimal = rawSlope;
-    }
+  // Compute specialized Gravity Sewer Hydraulics
+  const sewerCalc = computeGravityPipeSegment(pt, {
+    manningN: manningN > 0 ? manningN : DEFAULT_MANNING_N,
+    knownGlStart: seg?.zStart,
+    knownGlEnd: seg?.zEnd
+  });
+
+  const lineLength = sewerCalc.Length;
+  const diameterMm = sewerCalc.Diameter_mm;
+  const diameterM = sewerCalc.Diameter_m;
+  const slopeDecimal = sewerCalc.SlopeDecimal;
+  const slopePercent = sewerCalc.Slope;
+  const safeN = sewerCalc.Manning_n;
+
+  let slopeSource: 'attribute' | 'elevation_diff' | 'dem_diff' | 'default' = 'default';
+  if (extractNumericAttribute(attrs, ['slope', 'pipeslope', 'pipe_slope', 'gradient', 'الميل'])) {
     slopeSource = 'attribute';
-  } else if (seg && seg.zStart !== undefined && seg.zEnd !== undefined && lineLength > 0) {
-    const diffZ = Math.abs(seg.zStart - seg.zEnd);
-    if (diffZ > 0.0001) {
-      slopeDecimal = Math.max(0.0005, diffZ / lineLength);
-      slopeSource = seg.priority === 1 ? 'elevation_diff' : 'dem_diff';
-    }
-  } else if (pt.path && pt.path.length >= 2) {
-    const z1 = pt.path[0].z;
-    const z2 = pt.path[pt.path.length - 1].z;
-    if (z1 !== undefined && z2 !== undefined && Math.abs(z1 - z2) > 0.0001 && lineLength > 0) {
-      slopeDecimal = Math.max(0.0005, Math.abs(z1 - z2) / lineLength);
-      slopeSource = 'elevation_diff';
-    }
+  } else if (seg && seg.zStart !== undefined && seg.zEnd !== undefined) {
+    slopeSource = seg.priority === 1 ? 'elevation_diff' : 'dem_diff';
+  } else if (pt.path && pt.path.length >= 2 && pt.path[0].z !== undefined && pt.path[pt.path.length - 1].z !== undefined) {
+    slopeSource = 'elevation_diff';
   }
 
-  // Safety clamps for slope
-  if (slopeDecimal <= 0 || isNaN(slopeDecimal)) {
-    slopeDecimal = DEFAULT_MIN_SLOPE_DECIMAL;
-    slopeSource = 'default';
-  }
-  const slopePercent = slopeDecimal * 100;
-
-  // 4. Manning's Equation:
-  // Area A = π * (D / 2)²
   const flowArea = Math.PI * Math.pow(diameterM / 2, 2); // m²
-  // Hydraulic Radius R = D / 4
   const hydraulicRadius = diameterM / 4; // m
-
-  // Velocity V = (1 / n) * R^(2/3) * S^(1/2) (m/s)
-  const safeN = manningN > 0 ? manningN : DEFAULT_MANNING_N;
-  const velocity = (1 / safeN) * Math.pow(hydraulicRadius, 2 / 3) * Math.sqrt(slopeDecimal);
-
-  // Full Capacity Q_full = A * V (m³/s) -> Liters/Second (L/s)
-  const maxCapacityLs = flowArea * velocity * 1000;
-
-  // Design Capacity at 75% depth (Q_75%):
-  // For standard circular pipe at 0.75 D fill depth:
-  // θ = 2 * acos(1 - 2 * 0.75) = 4π/3 ≈ 4.18879
-  // A_75 = (D²/8)*(θ - sin(θ)) ≈ 0.8045 * A_full
-  // P_75 = (θ * D) / 2 ≈ 2.0944 * D
-  // R_75 = A_75 / P_75 ≈ 0.3017 * D ≈ 1.2068 * (D/4)
-  // V_75 = (1/n) * R_75^(2/3) * S^(1/2) = (1.2068)^(2/3) * V_full ≈ 1.1333 * V_full
-  // Q_75 = A_75 * V_75 = 0.8045 * 1.1333 * Q_full ≈ 0.9118 * Q_full
+  const velocity = sewerCalc.Velocity;
+  const maxCapacityLs = sewerCalc.Flow_Capacity_Ls;
   const designCapacity75Ls = maxCapacityLs * 0.9118;
 
-  // 5. Velocity Classification
-  // Low: V < 0.6 m/s -> Orange/Yellow (#FF9800), 'رسوبيات' (Sedimentation), 2.5s duration
-  // Optimal: 0.6 <= V <= 3.0 m/s -> Bright Green (#00E676), 'سلس ومطابق' (Optimal), 1.2s duration
-  // High: V > 3.0 m/s -> Red (#FF1744), 'نحر وتآكل' (Scour), 0.5s duration
-  let velocityStatus: 'low' | 'optimal' | 'high' = 'optimal';
-  let statusBadgeAr = 'سلس ومطابق';
-  let statusBadgeEn = 'Optimal Flow';
+  // Velocity Classification
+  let velocityStatus: 'low' | 'optimal' | 'high' = sewerCalc.VelocityStatus;
+  let statusBadgeAr = sewerCalc.VelocityStatusLabelAr;
+  let statusBadgeEn = sewerCalc.VelocityStatusLabelEn;
   let velocityColor = '#00E676';
   let animationDurationSec = 1.2;
   let animationClass: 'flow-anim-low' | 'flow-anim-optimal' | 'flow-anim-high' = 'flow-anim-optimal';
 
-  if (velocity < 0.6) {
-    velocityStatus = 'low';
-    statusBadgeAr = 'رسوبيات (سرعة منخفضة)';
-    statusBadgeEn = 'Sedimentation Risk';
+  if (velocityStatus === 'low') {
     velocityColor = '#FF9800';
     animationDurationSec = 2.5;
     animationClass = 'flow-anim-low';
-  } else if (velocity > 3.0) {
-    velocityStatus = 'high';
-    statusBadgeAr = 'نحر وتآكل (سرعة عالية)';
-    statusBadgeEn = 'High Scour Risk';
+  } else if (velocityStatus === 'high') {
     velocityColor = '#FF1744';
     animationDurationSec = 0.5;
     animationClass = 'flow-anim-high';
   }
 
-  // 6. Upstream / Downstream & Flow Direction Information
+  // Upstream / Downstream & Flow Direction
   const upMhKeys = ['upstreammanholeno', 'upstreammanhole', 'upstreammh', 'from_mh', 'frommanhole', 'startmanhole', 'منهل_البداية'];
   const downMhKeys = ['downstreammanholeno', 'downstreammanhole', 'downstreammh', 'to_mh', 'tomanhole', 'endmanhole', 'منهل_النهاية'];
   
-  let upstreamNode = extractStringAttribute(attrs, upMhKeys) || 'Start-MH';
-  let downstreamNode = extractStringAttribute(attrs, downMhKeys) || 'End-MH';
+  let upstreamNode = extractStringAttribute(attrs, upMhKeys) || sewerCalc.UpstreamNode;
+  let downstreamNode = extractStringAttribute(attrs, downMhKeys) || sewerCalc.DownstreamNode;
 
-  let isReversed = seg?.isReversed || false;
+  let isReversed = seg?.isReversed || sewerCalc.IsReversed || false;
   if (isReversed) {
-    // Swap upstream & downstream if flow was determined in reverse
     const tmp = upstreamNode;
     upstreamNode = downstreamNode;
     downstreamNode = tmp;
@@ -234,7 +171,7 @@ export function computePipeHydraulics(
   const priorityLabelAr = seg?.priorityLabelAr || 'أولوية 1: مناسيب الأنبوب';
   const priorityLabelEn = seg?.priorityLabelEn || 'Priority 1: Pipe Elevation';
 
-  // 7. Asphalt Restoration Quantities (Riyadh Municipality Standards)
+  // Asphalt Restoration Quantities
   let restorationWidth = asphaltParams.trenchWidth;
   if (asphaltParams.scope === 'lane') {
     restorationWidth = asphaltParams.laneWidth;
@@ -271,12 +208,29 @@ export function computePipeHydraulics(
     velocityColor,
     animationDurationSec,
     animationClass,
+    
+    // Sewer Hydraulic Fields
+    glStart: sewerCalc.GL_start,
+    glEnd: sewerCalc.GL_end,
+    ilStart: sewerCalc.IL_start,
+    ilEnd: sewerCalc.IL_end,
+    depthStart: sewerCalc.Depth_start,
+    depthEnd: sewerCalc.Depth_end,
+    sewerStatus: sewerCalc.Status,
+    sewerStatusReasonAr: sewerCalc.StatusReasonAr,
+    sewerStatusReasonEn: sewerCalc.StatusReasonEn,
+    isLiftStationRequired: sewerCalc.IsLiftStationRequired,
+    isDropManhole: sewerCalc.IsDropManhole,
+    dropHeightM: sewerCalc.DropHeight_m,
+    outfallId: sewerCalc.Outfall_ID,
+    isOutfall: sewerCalc.IsOutfall,
+
     flowDirectionTextAr,
     flowDirectionTextEn,
     upstreamNode,
     downstreamNode,
-    startElevation: seg?.zStart,
-    endElevation: seg?.zEnd,
+    startElevation: seg?.zStart ?? sewerCalc.GL_start,
+    endElevation: seg?.zEnd ?? sewerCalc.GL_end,
     priority,
     priorityLabelAr,
     priorityLabelEn,
@@ -314,8 +268,33 @@ export function analyzeNetworkHydraulics(
   let highVelocityCount = 0;
   let highVelocityLengthM = 0;
 
+  let normalGravityCount = 0;
+  let dropManholeCount = 0;
+  let liftStationCount = 0;
+
   let totalAsphaltAreaM2 = 0;
   let totalAsphaltVolumeM3 = 0;
+
+  const liftStationNodes: Array<{
+    id: string;
+    x: number;
+    y: number;
+    reasonAr: string;
+    requiredDepth: number;
+    pipeId: string | number;
+  }> = [];
+
+  const dropManholeNodes: Array<{
+    id: string;
+    x: number;
+    y: number;
+    dropMeters: number;
+    pipeId: string | number;
+  }> = [];
+
+  let lowestIL = Infinity;
+  let primaryOutfallId: string | undefined = undefined;
+  let primaryOutfallIL: number | undefined = undefined;
 
   lineFeatures.forEach(pt => {
     const data = computePipeHydraulics(pt, flowAnalysis, manningN, asphaltParams);
@@ -340,9 +319,53 @@ export function analyzeNetworkHydraulics(
       highVelocityLengthM += data.length;
     }
 
+    if (data.sewerStatus === 'Normal Gravity') normalGravityCount++;
+    else if (data.sewerStatus === 'Drop Manhole') dropManholeCount++;
+    else if (data.sewerStatus === 'Lift Station Needed') liftStationCount++;
+
+    const path = pt.path!;
+    const endCoord = data.isReversed ? path[0] : path[path.length - 1];
+
+    if (data.isLiftStationRequired) {
+      liftStationNodes.push({
+        id: `LS-${data.id}`,
+        x: endCoord.x,
+        y: endCoord.y,
+        reasonAr: data.sewerStatusReasonAr || 'عمق حفر يتجاوز 5م / انحدار عكسي',
+        requiredDepth: Math.max(data.depthStart || 1.2, data.depthEnd || 5.0),
+        pipeId: data.id
+      });
+    }
+
+    if (data.isDropManhole) {
+      dropManholeNodes.push({
+        id: `DROP-${data.id}`,
+        x: endCoord.x,
+        y: endCoord.y,
+        dropMeters: data.dropHeightM || 0.6,
+        pipeId: data.id
+      });
+    }
+
+    if (data.ilEnd !== undefined && data.ilEnd < lowestIL) {
+      lowestIL = data.ilEnd;
+      primaryOutfallId = `OUTFALL-${data.id}`;
+      primaryOutfallIL = data.ilEnd;
+    }
+
     totalAsphaltAreaM2 += data.asphaltAreaM2;
     totalAsphaltVolumeM3 += data.asphaltVolumeM3;
   });
+
+  // Mark outfall flag on lowest pipe
+  if (primaryOutfallId) {
+    const outfallPipeId = primaryOutfallId.replace('OUTFALL-', '');
+    const outfallPipe = pipesMap.get(outfallPipeId);
+    if (outfallPipe) {
+      outfallPipe.isOutfall = true;
+      outfallPipe.outfallId = primaryOutfallId;
+    }
+  }
 
   const totalPipes = lineFeatures.length;
   const avgVelocity = totalLengthM > 0 ? sumVelocity / totalLengthM : 0;
@@ -364,6 +387,13 @@ export function analyzeNetworkHydraulics(
     optimalVelocityLengthM,
     highVelocityCount,
     highVelocityLengthM,
+    normalGravityCount,
+    dropManholeCount,
+    liftStationCount,
+    primaryOutfallId,
+    primaryOutfallIL,
+    liftStationNodes,
+    dropManholeNodes,
     statsByVelocity: {
       low: lowVelocityCount,
       optimal: optimalVelocityCount,
@@ -386,7 +416,7 @@ export function exportHydraulicFlowExcel(
 ): void {
   const isAr = lang === 'ar';
 
-  // Sheet 1: Detailed Pipe Hydraulic Records
+  // Sheet 1: Detailed Pipe Hydraulic & Gravity Sewer Records
   const pipeRows = summary.pipes.map((pipe, index) => {
     if (isAr) {
       return {
@@ -394,6 +424,12 @@ export function exportHydraulicFlowExcel(
         'معرف الخط': pipe.id,
         'المنهل المصدري (Upstream)': pipe.upstreamNode,
         'المنهل المصب (Downstream)': pipe.downstreamNode,
+        'منسوب الأرض بداية GL (م)': pipe.glStart !== undefined ? Number(pipe.glStart.toFixed(2)) : '',
+        'منسوب الأرض نهاية GL (م)': pipe.glEnd !== undefined ? Number(pipe.glEnd.toFixed(2)) : '',
+        'منسوب القاع بداية IL (م)': pipe.ilStart !== undefined ? Number(pipe.ilStart.toFixed(2)) : '',
+        'منسوب القاع نهاية IL (م)': pipe.ilEnd !== undefined ? Number(pipe.ilEnd.toFixed(2)) : '',
+        'عمق الحفر بداية (م)': pipe.depthStart !== undefined ? Number(pipe.depthStart.toFixed(2)) : '',
+        'عمق الحفر نهاية (م)': pipe.depthEnd !== undefined ? Number(pipe.depthEnd.toFixed(2)) : '',
         'القطر (ملم)': pipe.diameterMm,
         'الميل (%)': Number(pipe.slopePercent.toFixed(3)),
         'معامل مانينغ (n)': pipe.manningN,
@@ -401,8 +437,8 @@ export function exportHydraulicFlowExcel(
         'التصريف الكلي Q_max (لتر/ث)': Number(pipe.maxCapacityLs.toFixed(2)),
         'التصريف التصميمي Q_75% (لتر/ث)': Number(pipe.designCapacity75Ls.toFixed(2)),
         'اتجاه التدفق': pipe.flowDirectionTextAr,
-        'الحالة الهيدروليكية': pipe.statusBadgeAr,
-        'أولوية التحديد': pipe.priorityLabelAr,
+        'حالة شبكة الانحدار': pipe.sewerStatus || 'انحدار طبيعي',
+        'ملاحظات الهيدروليكا ومحطة الرفع': pipe.sewerStatusReasonAr || pipe.statusBadgeAr,
         'طول الخط (م)': Number(pipe.length.toFixed(2)),
         'عرض إعادة السفلتة (م)': pipe.restorationWidth,
         'مساحة الأسفلت (م²)': Number(pipe.asphaltAreaM2.toFixed(2)),
@@ -414,6 +450,12 @@ export function exportHydraulicFlowExcel(
         'Line ID': pipe.id,
         'Upstream MH': pipe.upstreamNode,
         'Downstream MH': pipe.downstreamNode,
+        'GL Start (m)': pipe.glStart !== undefined ? Number(pipe.glStart.toFixed(2)) : '',
+        'GL End (m)': pipe.glEnd !== undefined ? Number(pipe.glEnd.toFixed(2)) : '',
+        'IL Start (m)': pipe.ilStart !== undefined ? Number(pipe.ilStart.toFixed(2)) : '',
+        'IL End (m)': pipe.ilEnd !== undefined ? Number(pipe.ilEnd.toFixed(2)) : '',
+        'Depth Start (m)': pipe.depthStart !== undefined ? Number(pipe.depthStart.toFixed(2)) : '',
+        'Depth End (m)': pipe.depthEnd !== undefined ? Number(pipe.depthEnd.toFixed(2)) : '',
         'Diameter (mm)': pipe.diameterMm,
         'Slope (%)': Number(pipe.slopePercent.toFixed(3)),
         'Manning n': pipe.manningN,
@@ -421,8 +463,8 @@ export function exportHydraulicFlowExcel(
         'Max Capacity Q_full (L/s)': Number(pipe.maxCapacityLs.toFixed(2)),
         'Design Capacity Q_75% (L/s)': Number(pipe.designCapacity75Ls.toFixed(2)),
         'Flow Direction': pipe.flowDirectionTextEn,
-        'Hydraulic Status': pipe.statusBadgeEn,
-        'Priority': pipe.priorityLabelEn,
+        'Sewer Status': pipe.sewerStatus || 'Normal Gravity',
+        'Hydraulic Remarks': pipe.sewerStatusReasonEn || pipe.statusBadgeEn,
         'Length (m)': Number(pipe.length.toFixed(2)),
         'Restoration Width (m)': pipe.restorationWidth,
         'Asphalt Area (m²)': Number(pipe.asphaltAreaM2.toFixed(2)),
@@ -440,12 +482,18 @@ export function exportHydraulicFlowExcel(
     { 'البند / الخاصية': 'متوسط أقطار الأنابيب', 'القيمة': Math.round(summary.avgDiameterMm), 'الوحدة': 'ملم' },
     { 'البند / الخاصية': 'متوسط ميل خطوط الشبكة', 'القيمة': Number(summary.avgSlopePercent.toFixed(3)), 'الوحدة': '%' },
     { 'البند / الخاصية': 'إجمالي القدرة الاستيعابية للشبكة (Q_Total)', 'القيمة': Number(summary.totalCapacityLs.toFixed(2)), 'الوحدة': 'لتر / ثانية' },
-    { 'البند / الخاصية': 'الأنابيب المطابقة وذات الجريان السلس (0.6 - 3.0 م/ث)', 'القيمة': `${summary.optimalVelocityCount} خط (${((summary.optimalVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'الوحدة': 'مطابق للاشتراطات' },
+    { 'البند / الخاصية': 'خطوط الانحدار الطبيعي السليمة', 'القيمة': `${summary.normalGravityCount || 0} خط`, 'الوحدة': 'انحدار طبيعي' },
+    { 'البند / الخاصية': 'المناهل الهدارة المقترحة (Drop Manholes)', 'القيمة': `${summary.dropManholeCount || 0} موقع`, 'الوحدة': 'تخفيض ميل/سرعة' },
+    { 'البند / الخاصية': 'العقد التي تتطلب محطات رفع (Lift Stations)', 'القيمة': `${summary.liftStationCount || 0} موقع`, 'الوحدة': 'عمق حفر > 5م / انحدار عكسي' },
+    { 'البند / الخاصية': 'المصب الرئيسي للشبكة (Outfall)', 'القيمة': summary.primaryOutfallId || 'غير محدد', 'الوحدة': summary.primaryOutfallIL !== undefined ? `منسوب IL: ${summary.primaryOutfallIL.toFixed(2)}م` : 'أدنى نقطة' },
+    { 'البند / الخاصية': 'الأنابيب المطابقة وذات الجريان السلس (0.6 - 2.5 م/ث)', 'القيمة': `${summary.optimalVelocityCount} خط (${((summary.optimalVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'الوحدة': 'مطابق للاشتراطات' },
     { 'البند / الخاصية': 'الأنابيب المعرضة للرسوبيات (< 0.6 م/ث)', 'القيمة': `${summary.lowVelocityCount} خط (${((summary.lowVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'الوحدة': 'تتطلب مراجعة الميل أو الغسيل' },
-    { 'البند / الخاصية': 'الأنابيب المعرضة للنحر والتآكل (> 3.0 م/ث)', 'القيمة': `${summary.highVelocityCount} خط (${((summary.highVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'الوحدة': 'تتطلب كواسر سرعة أو تهدئة' },
+    { 'البند / الخاصية': 'الأنابيب المعرضة للنحر والتآكل (> 2.5 م/ث)', 'القيمة': `${summary.highVelocityCount} خط (${((summary.highVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'الوحدة': 'تتطلب كواسر سرعة أو هدار' },
     { 'البند / الخاصية': 'إجمالي مسطحات إعادة السفلتة (معايير الأمانة)', 'القيمة': Number(summary.totalAsphaltAreaM2.toFixed(2)), 'الوحدة': 'متر مربع (م²)' },
     { 'البند / الخاصية': 'إجمالي كميات خرسانة الأسفلت المطلوبة', 'القيمة': Number(summary.totalAsphaltVolumeM3.toFixed(2)), 'الوحدة': 'متر مكعب (م³)' },
-    { 'البند / الخاصية': 'معادلة الحساب الهيدروليكي', 'القيمة': 'معادلة مانينغ للجريان الحر بالجاذبية (Manning Gravity Equation)', 'الوحدة': 'V = (1/n)*R^(2/3)*S^(1/2)' },
+    { 'البند / الخاصية': 'معادلة الحساب الهيدروليكي', 'القيمة': 'معادلة مانينغ لشبكات انحدار الصرف الصحي', 'الوحدة': 'V = (1/n)*R^(2/3)*S^(1/2)' },
+    { 'البند / الخاصية': 'الحد الأدنى لعمق التغطية (Min Cover)', 'القيمة': '1.20 متر', 'الوحدة': 'متر' },
+    { 'البند / الخاصية': 'الحد الأقصى لعمق الحفر قبل محطة الرفع', 'القيمة': '5.00 أمتار', 'الوحدة': 'متر' },
     { 'البند / الخاصية': 'تاريخ التصدير', 'القيمة': new Date().toLocaleString('ar-SA'), 'الوحدة': 'توقيت الرياض' }
   ] : [
     { 'Property / Metric': 'Total Network Pipe Segments', 'Value': summary.totalPipes, 'Unit': 'pipes' },
@@ -455,12 +503,18 @@ export function exportHydraulicFlowExcel(
     { 'Property / Metric': 'Average Pipe Diameter', 'Value': Math.round(summary.avgDiameterMm), 'Unit': 'mm' },
     { 'Property / Metric': 'Average Pipe Slope', 'Value': Number(summary.avgSlopePercent.toFixed(3)), 'Unit': '%' },
     { 'Property / Metric': 'Total Network Capacity (Q_Total)', 'Value': Number(summary.totalCapacityLs.toFixed(2)), 'Unit': 'L/s' },
-    { 'Property / Metric': 'Optimal Velocity Pipes (0.6 - 3.0 m/s)', 'Value': `${summary.optimalVelocityCount} (${((summary.optimalVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'Unit': 'Compliant' },
+    { 'Property / Metric': 'Normal Gravity Lines', 'Value': `${summary.normalGravityCount || 0}`, 'Unit': 'Normal Gravity' },
+    { 'Property / Metric': 'Suggested Drop Manholes', 'Value': `${summary.dropManholeCount || 0}`, 'Unit': 'Drop MH' },
+    { 'Property / Metric': 'Lift Station Required Nodes', 'Value': `${summary.liftStationCount || 0}`, 'Unit': 'Depth > 5m / Adverse Slope' },
+    { 'Property / Metric': 'Primary Network Outfall', 'Value': summary.primaryOutfallId || 'N/A', 'Unit': summary.primaryOutfallIL !== undefined ? `IL: ${summary.primaryOutfallIL.toFixed(2)}m` : 'Lowest IL' },
+    { 'Property / Metric': 'Optimal Velocity Pipes (0.6 - 2.5 m/s)', 'Value': `${summary.optimalVelocityCount} (${((summary.optimalVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'Unit': 'Compliant' },
     { 'Property / Metric': 'Low Velocity / Sedimentation Risk (< 0.6 m/s)', 'Value': `${summary.lowVelocityCount} (${((summary.lowVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'Unit': 'Warning' },
-    { 'Property / Metric': 'High Velocity / Scour Risk (> 3.0 m/s)', 'Value': `${summary.highVelocityCount} (${((summary.highVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'Unit': 'Warning' },
+    { 'Property / Metric': 'High Velocity / Scour Risk (> 2.5 m/s)', 'Value': `${summary.highVelocityCount} (${((summary.highVelocityCount / Math.max(1, summary.totalPipes)) * 100).toFixed(1)}%)`, 'Unit': 'Warning' },
     { 'Property / Metric': 'Total Asphalt Restoration Area', 'Value': Number(summary.totalAsphaltAreaM2.toFixed(2)), 'Unit': 'm²' },
     { 'Property / Metric': 'Total Asphalt Volume', 'Value': Number(summary.totalAsphaltVolumeM3.toFixed(2)), 'Unit': 'm³' },
-    { 'Property / Metric': 'Hydraulic Model', 'Value': "Manning's Equation for Gravity Flow", 'Unit': 'V = (1/n)*R^(2/3)*S^(1/2)' },
+    { 'Property / Metric': 'Hydraulic Model', 'Value': "Manning's Gravity Sewer Flow", 'Unit': 'V = (1/n)*R^(2/3)*S^(1/2)' },
+    { 'Property / Metric': 'Minimum Cover Depth', 'Value': '1.20 m', 'Unit': 'meters' },
+    { 'Property / Metric': 'Maximum Trench Depth Before Lift Station', 'Value': '5.00 m', 'Unit': 'meters' },
     { 'Property / Metric': 'Export Timestamp', 'Value': new Date().toISOString(), 'Unit': 'UTC' }
   ];
 
@@ -468,9 +522,8 @@ export function exportHydraulicFlowExcel(
 
   // Create Pipes Sheet
   const wsPipes = XLSX.utils.json_to_sheet(pipeRows);
-  // Auto-width columns
   const pipeCols = Object.keys(pipeRows[0] || {}).map(k => ({
-    wch: Math.max(k.length * 2, 14)
+    wch: Math.max(k.length * 2, 16)
   }));
   wsPipes['!cols'] = pipeCols;
 
@@ -478,12 +531,13 @@ export function exportHydraulicFlowExcel(
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
   wsSummary['!cols'] = [{ wch: 45 }, { wch: 25 }, { wch: 30 }];
 
-  const sheet1Name = isAr ? 'تقرير التدفق والسرعات' : 'Hydraulic Flow & Capacity';
-  const sheet2Name = isAr ? 'ملخص الشبكة والأسفلت' : 'Executive Network Summary';
+  const sheet1Name = isAr ? 'شبكة الانحدار ومناسيب القاع' : 'Sewer Gravity & Hydraulics';
+  const sheet2Name = isAr ? 'ملخص الشبكة ومحطات الرفع' : 'Executive Network Summary';
 
   XLSX.utils.book_append_sheet(wb, wsPipes, sheet1Name);
   XLSX.utils.book_append_sheet(wb, wsSummary, sheet2Name);
 
-  const cleanFileName = (filename || 'Hydraulic_Report').replace(/[^a-zA-Z0-9_\u0600-\u06FF-]/g, '_');
-  XLSX.writeFile(wb, `${cleanFileName}_Flow_Quantities.xlsx`);
+  const cleanFileName = (filename || 'Gravity_Sewer_Report').replace(/[^a-zA-Z0-9_\u0600-\u06FF-]/g, '_');
+  XLSX.writeFile(wb, `${cleanFileName}_Gravity_Sewer_Engine.xlsx`);
 }
+

@@ -322,7 +322,7 @@ export const ElevationProfileModal: React.FC<ElevationProfileModalProps> = ({
           <div className="flex items-center gap-2 flex-nowrap">
             {activeFeatures.map((feat, idx) => (
               <div
-                key={feat.id || idx}
+                key={`active-feat-${feat.id || 'feat'}-${idx}`}
                 className="flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-white/10 text-white border border-white/10 shrink-0"
               >
                 <span className="w-4 h-4 rounded-full bg-amber-400 text-black font-black text-[10px] flex items-center justify-center">

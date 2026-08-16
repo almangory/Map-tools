@@ -22,7 +22,7 @@ import { twMerge } from 'tailwind-merge';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
 
-import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon } from './types';
+import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon, OutfallTarget } from './types';
 import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
@@ -34,6 +34,8 @@ import { downloadDXF } from './services/dxfExportService';
 import { downloadDataPDF, downloadNetworkGapsPDF } from './services/pdfExportService';
 import { downloadShapefile } from './services/shapefileExportService';
 import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
+import { findNearestPerpendicularPoint } from './services/spatialPerpendicularService';
+import { orientNetworkTowardsOutfall, computeGravityPipeSegment, enrichGeoPointWithHydraulics } from './services/gravitySewerEngine';
 import MapPreview from './components/MapPreview';
 import { ElevationProfileModal } from './components/ElevationProfileModal';
 import { DataFormatter } from './components/DataFormatter';
@@ -577,6 +579,7 @@ const App: React.FC = () => {
   // Flow Direction & Hydraulic Animation state
   const [showFlowDirection, setShowFlowDirection] = useState<boolean>(false);
   const [flowAnalysis, setFlowAnalysis] = useState<import('./services/flowDirectionService').NetworkFlowAnalysis | null>(null);
+  const [outfallTargets, setOutfallTargets] = useState<OutfallTarget[]>([]);
 
   // Multi-Polygon & Street Planner States needed for displayPoints
   const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
@@ -597,21 +600,25 @@ const App: React.FC = () => {
     material: 'HDPE',
     permitNo: '',
     segmentId: '',
-    notes: ''
+    notes: '',
+    lineType: 'main-pipeline',
+    snapPerpendicularToStreet: true
   });
   const [lineDrawerPickingTarget, setLineDrawerPickingTarget] = useState<'start' | 'end' | null>(null);
 
   const handleFinishLineDrawerLine = () => {
     if (lineDrawerVertices.length < 2) return;
-    const newLine: GeoPoint = {
-      id: lineDrawerConfig.name || `LINE_${lineDrawerDrawnLines.length + 1}`,
+    const isServiceConn = lineDrawerConfig.lineType === 'service-connection';
+    let newLine: GeoPoint = {
+      id: lineDrawerConfig.name || (isServiceConn ? `SERV_${lineDrawerDrawnLines.length + 1}` : `LINE_${lineDrawerDrawnLines.length + 1}`),
       x: lineDrawerVertices[0].x,
       y: lineDrawerVertices[0].y,
       type: 'LineString',
       path: [...lineDrawerVertices],
-      color: lineDrawerConfig.color || '#3b82f6',
-      layer: lineDrawerConfig.layer || 'شبكة المياه',
+      color: lineDrawerConfig.color || (isServiceConn ? '#ef4444' : '#3b82f6'),
+      layer: lineDrawerConfig.layer || (isServiceConn ? 'وصلات خدمة منزلية (House Connections)' : 'شبكة الصرف الصحي'),
       attributes: {
+        Type: isServiceConn ? 'Service Connection (وصلة منزلية)' : 'Gravity Sewer Pipeline',
         StartX: lineDrawerVertices[0].x,
         StartY: lineDrawerVertices[0].y,
         EndX: lineDrawerVertices[lineDrawerVertices.length - 1].x,
@@ -624,19 +631,131 @@ const App: React.FC = () => {
         ...(lineDrawerConfig.notes ? { Notes: lineDrawerConfig.notes, 'ملاحظات': lineDrawerConfig.notes } : {})
       }
     };
+
+    // Calculate Hydraulic & Gravity Sewer Parameters (GL, IL, Slope, Manning Velocity, Depth, Status)
+    try {
+      const calc = computeGravityPipeSegment(newLine, {
+        defaultDiameterMm: lineDrawerConfig.diameter ? parseFloat(lineDrawerConfig.diameter) : 200
+      });
+      newLine = enrichGeoPointWithHydraulics(newLine, calc);
+    } catch (e) {
+      console.warn('Hydraulic computation notice for new line:', e);
+    }
+
     setLineDrawerDrawnLines(prev => [newLine, ...prev]);
     setGlobalPoints(prev => [newLine, ...prev]);
     setDataId(`draw-line-${Date.now()}`);
     setLineDrawerVertices([]);
     setIsLineDrawingOnMainMap(false);
 
+    const prefix = isServiceConn ? 'SERV_' : 'LINE_';
     const match = lineDrawerConfig.name.match(/\d+$/);
     if (match) {
       const nextNum = parseInt(match[0], 10) + 1;
       setLineDrawerConfig(prev => ({ ...prev, name: prev.name.replace(/\d+$/, nextNum.toString()) }));
     } else {
-      setLineDrawerConfig(prev => ({ ...prev, name: `LINE_${lineDrawerDrawnLines.length + 2}` }));
+      setLineDrawerConfig(prev => ({ ...prev, name: `${prefix}${lineDrawerDrawnLines.length + 2}` }));
     }
+  };
+
+  const handleOrientNetworkTowardsMultiOutfalls = (targets?: OutfallTarget[]) => {
+    const currentLines = (globalPoints || []).filter(p => p.type === 'LineString' && Array.isArray(p.path) && p.path.length >= 2);
+    if (currentLines.length === 0) {
+      setErrorMessage(lang === 'ar' ? 'لا توجد خطوط شبكة لتوجيهها نحو المصبات.' : 'No network pipe lines found to orient.');
+      return;
+    }
+
+    try {
+      const targetsToUse = targets && targets.length > 0 ? targets : outfallTargets;
+      const result = orientNetworkTowardsOutfall(globalPoints, {
+        outfallTargets: targetsToUse
+      });
+
+      setGlobalPoints(result.orientedPoints);
+      if (lineDrawerDrawnLines.length > 0) {
+        const orientedMap = new Map(result.orientedPoints.map(p => [p.id, p]));
+        setLineDrawerDrawnLines(prev => prev.map(p => orientedMap.get(p.id) || p));
+      }
+      setDataId(`orient-outfall-${Date.now()}`);
+
+      // If auto-detected outfalls returned and no targets were explicitly set, update outfallTargets
+      if (result.outfallNodes && result.outfallNodes.length > 0 && targetsToUse.length === 0) {
+        setOutfallTargets(result.outfallNodes);
+      }
+
+      // Re-run flow direction analysis
+      import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
+        analyzeNetworkFlowDirections(result.orientedPoints).then(res => {
+          setFlowAnalysis(res);
+        });
+      });
+
+      setShowFlowDirection(true);
+
+      const outfallsCount = result.outfallNodes?.length || 1;
+      setStatusMessage(
+        lang === 'ar'
+          ? `🌊 تم بنجاح توزيع وتوجيه فلو ${result.totalPipesOriented} خط شبكة على (${outfallsCount}) مصبات وتحديث أحواض التجميع وميلان التصرف!`
+          : `🌊 Successfully partitioned and oriented ${result.totalPipesOriented} pipes across (${outfallsCount}) outfalls and updated catchment basins & slopes!`
+      );
+    } catch (err: any) {
+      console.error('Orient network error:', err);
+      setErrorMessage(err.message || 'Error orienting network to outfall');
+    }
+  };
+
+  const handleOrientNetworkTowardsOutfall = (targetOutfallCoord?: { x: number; y: number; z?: number }) => {
+    if (targetOutfallCoord) {
+      const singleTarget: OutfallTarget = {
+        id: `Outfall_${Date.now()}`,
+        name: `Outfall Target`,
+        x: targetOutfallCoord.x,
+        y: targetOutfallCoord.y,
+        z: targetOutfallCoord.z,
+        isExplicitTarget: true
+      };
+      handleOrientNetworkTowardsMultiOutfalls([singleTarget]);
+    } else {
+      handleOrientNetworkTowardsMultiOutfalls();
+    }
+  };
+
+  const handleAddOutfallTarget = (target: OutfallTarget) => {
+    setOutfallTargets(prev => {
+      const exists = prev.some(o => o.id === target.id || (Math.abs(o.x - target.x) < 0.0001 && Math.abs(o.y - target.y) < 0.0001));
+      if (exists) return prev;
+      const nextTargets = [...prev, target];
+      // Automatically distribute network flow to all outfalls
+      setTimeout(() => {
+        handleOrientNetworkTowardsMultiOutfalls(nextTargets);
+      }, 50);
+      return nextTargets;
+    });
+    setStatusMessage(
+      lang === 'ar'
+        ? `🎯 تم إضافة المصب (${target.name || target.id}) وتوزيع خطوط الشبكة عليه تلقائياً!`
+        : `🎯 Added outfall target (${target.name || target.id}) and auto-distributed network flow!`
+    );
+  };
+
+  const handleRemoveOutfallTarget = (id: string) => {
+    setOutfallTargets(prev => {
+      const next = prev.filter(o => o.id !== id);
+      setTimeout(() => {
+        handleOrientNetworkTowardsMultiOutfalls(next);
+      }, 50);
+      return next;
+    });
+    setStatusMessage(
+      lang === 'ar' ? 'تم حذف المصب وإعادة توزيع الفلو على المصبات المتبقية.' : 'Removed outfall target and re-partitioned remaining flow.'
+    );
+  };
+
+  const handleClearOutfallTargets = () => {
+    setOutfallTargets([]);
+    setStatusMessage(
+      lang === 'ar' ? 'تم مسح نقاط المصب المخصصة.' : 'Cleared custom outfall targets.'
+    );
   };
 
   const displayPoints = useMemo(() => {
@@ -5610,16 +5729,16 @@ const App: React.FC = () => {
                                             <RefreshCw className="w-4 h-4 text-accent group-hover:rotate-180 transition-transform duration-500" />
                                         </button>
                                     </div>
-                                    <select value={sourceEPSG} onChange={(e) => setSourceEPSG(e.target.value)} className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-3 text-[11px] font-bold text-white outline-none">{COMMON_EPSG.map(e => <option key={e.code} value={e.code}>{e.name}</option>)}</select>
+                                    <select value={sourceEPSG} onChange={(e) => setSourceEPSG(e.target.value)} className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-3 text-[11px] font-bold text-white outline-none">{COMMON_EPSG.map((e, eIdx) => <option key={`epsg-${e.code}-${eIdx}`} value={e.code}>{e.name}</option>)}</select>
                                     <label className="flex items-center justify-between p-3 bg-white/5 rounded-xl cursor-pointer"><span className="text-xs font-black text-white/80">{t.swapXY}</span><input type="checkbox" checked={swapXY} onChange={(e) => setSwapXY(e.target.checked)} className="accent-accent w-4 h-4" /></label>
                                 </div>
                                 {(activeFile.type === 'excel' || activeFile.type === 'csv') && (
                                     <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
                                         <h3 className="text-white font-black text-sm mb-4">{t.colMapping}</h3>
-                                        {['xColumn', 'yColumn', 'idColumn', 'linkColumn'].map(key => (
-                                            <div key={key} className="space-y-1">
+                                        {['xColumn', 'yColumn', 'idColumn', 'linkColumn'].map((key, kIdx) => (
+                                            <div key={`col-map-${key}-${kIdx}`} className="space-y-1">
                                                 <label className="text-[9px] font-black text-white/30 uppercase px-2">{(t as any)[key === 'xColumn' ? 'easting' : key === 'yColumn' ? 'northing' : key === 'idColumn' ? 'nameCol' : 'linkCol']}</label>
-                                                <select value={(mapping as any)[key]} onChange={(e) => setMapping(prev => ({...prev, [key]: e.target.value}))} className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-3 text-[10px] font-black text-white"><option value="">{t.select}</option>{activeFile.headers?.map(h => <option key={h} value={h}>{h}</option>)}</select>
+                                                <select value={(mapping as any)[key]} onChange={(e) => setMapping(prev => ({...prev, [key]: e.target.value}))} className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-3 text-[10px] font-black text-white"><option value="">{t.select}</option>{activeFile.headers?.map((h, hIdx) => <option key={`h-${h}-${hIdx}`} value={h}>{h}</option>)}</select>
                                             </div>
                                         ))}
                                     </div>
@@ -5660,11 +5779,11 @@ const App: React.FC = () => {
                                         </div>
 
                                         <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-1.5 pr-1 border border-white/5 rounded-xl p-3 bg-black/10">
-                                            {Array.from(new Set([...activeFile.headers, ...defaultFields])).map((header) => {
+                                            {Array.from(new Set([...activeFile.headers, ...defaultFields])).map((header, headIdx) => {
                                                 const isChecked = selectedHeaders.includes(header);
                                                 return (
                                                     <button
-                                                        key={header}
+                                                        key={`head-${header}-${headIdx}`}
                                                         type="button"
                                                         onClick={() => {
                                                             if (isChecked) {
@@ -5716,8 +5835,8 @@ const App: React.FC = () => {
                                                     className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2.5 text-[11px] font-bold text-white outline-none"
                                                 >
                                                     <option value="">{lang === 'ar' ? '-- بدون ربط (عمود جديد) --' : '-- No mapping (New Column) --'}</option>
-                                                    {activeFile.headers.map(h => (
-                                                        <option key={h} value={h}>{h}</option>
+                                                    {activeFile.headers.map((h, hIdx) => (
+                                                        <option key={`street-h-${h}-${hIdx}`} value={h}>{h}</option>
                                                     ))}
                                                 </select>
                                             </div>
@@ -5731,8 +5850,8 @@ const App: React.FC = () => {
                                                     className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2.5 text-[11px] font-bold text-white outline-none"
                                                 >
                                                     <option value="">{lang === 'ar' ? '-- بدون ربط (عمود جديد) --' : '-- No mapping (New Column) --'}</option>
-                                                    {activeFile.headers.map(h => (
-                                                        <option key={h} value={h}>{h}</option>
+                                                    {activeFile.headers.map((h, hIdx) => (
+                                                        <option key={`dist-h-${h}-${hIdx}`} value={h}>{h}</option>
                                                     ))}
                                                 </select>
                                             </div>
@@ -5815,8 +5934,8 @@ const App: React.FC = () => {
                                                     onChange={(e) => setGroupByColumnSelect(e.target.value)}
                                                     className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-3 text-[10px] font-black text-white outline-none"
                                                 >
-                                                    {activeFile.headers.map(h => (
-                                                        <option key={h} value={h}>{h}</option>
+                                                    {activeFile.headers.map((h, hIdx) => (
+                                                        <option key={`group-h-${h}-${hIdx}`} value={h}>{h}</option>
                                                     ))}
                                                 </select>
                                             </div>
@@ -7459,7 +7578,7 @@ const App: React.FC = () => {
                                 <div className="flex items-center gap-2 px-2"><Layers2 className="w-4 h-4 text-accent" /><h4 className="text-[11px] font-black text-white/60 uppercase">{lang === 'ar' ? 'المضلعات المرسومة' : 'Drawn Polygons'}</h4></div>
                                 <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar px-1">
                                   {splitPolygons.map((poly, idx) => (
-                                    <div key={poly.id} className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-xl group hover:bg-white/10 transition-all">
+                                    <div key={`split-poly-${poly.id || 'poly'}-${idx}`} className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded-xl group hover:bg-white/10 transition-all">
                                       <div className="flex items-center gap-3">
                                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: poly.color }} />
                                         <div className="flex flex-col">
@@ -7773,7 +7892,26 @@ const App: React.FC = () => {
             activeLineName={lineDrawerConfig.name}
             activeLineLayer={lineDrawerConfig.layer}
             onAddLineVertex={(pt) => {
-              setLineDrawerVertices(prev => [...prev, pt]);
+              if (lineDrawerConfig.lineType === 'service-connection' && lineDrawerConfig.snapPerpendicularToStreet !== false) {
+                // Find nearest street or pipeline in candidate polylines (globalPoints, plannedStreets, lineDrawerDrawnLines)
+                const candidateLines = [...(globalPoints || []), ...(plannedStreets || []), ...(lineDrawerDrawnLines || [])]
+                  .filter(p => p.type === 'LineString' && Array.isArray(p.path) && p.path.length >= 2);
+                
+                const projection = findNearestPerpendicularPoint(pt, candidateLines, 600);
+                if (projection) {
+                  // Property point -> Perpendicular point on street centerline
+                  setLineDrawerVertices([pt, projection.projectedPoint]);
+                  setStatusMessage(
+                    lang === 'ar'
+                      ? `تم الإسقاط العمودي (90°) على خط الشارع/الأنبوب (${projection.streetName || projection.streetId}) بطول ${projection.distanceMeters.toFixed(1)} م!`
+                      : `Perpendicular snap to pipeline (${projection.streetName || projection.streetId}) - Length: ${projection.distanceMeters.toFixed(1)}m!`
+                  );
+                } else {
+                  setLineDrawerVertices(prev => [...prev, pt]);
+                }
+              } else {
+                setLineDrawerVertices(prev => [...prev, pt]);
+              }
             }}
             onUndoLineVertex={() => {
               setLineDrawerVertices(prev => prev.slice(0, -1));
@@ -7792,6 +7930,12 @@ const App: React.FC = () => {
                 setLineDrawerPickingTarget(null);
               }
             }}
+            onOrientNetworkTowardsOutfall={handleOrientNetworkTowardsOutfall}
+            outfallTargets={outfallTargets}
+            onAddOutfallTarget={handleAddOutfallTarget}
+            onRemoveOutfallTarget={handleRemoveOutfallTarget}
+            onClearOutfallTargets={handleClearOutfallTargets}
+            onOrientNetworkTowardsMultiOutfalls={handleOrientNetworkTowardsMultiOutfalls}
             onPolygonComplete={(poly) => {
               if (activeTab === 'splitter' && splitMode === 'spatial') {
                 const newPoly: SplitPolygon = {

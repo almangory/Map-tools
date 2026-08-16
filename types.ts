@@ -133,7 +133,85 @@ export interface AsphaltCalculationParams {
   asphaltThickness: number; // default: 0.10 m (10 cm)
 }
 
-export type HydraulicColorMode = 'velocity' | 'priority' | 'diameter' | 'default';
+export type HydraulicColorMode = 'velocity' | 'priority' | 'diameter' | 'status' | 'catchment' | 'default';
+
+export type SewerHydraulicStatus = 'Normal Gravity' | 'Drop Manhole' | 'Lift Station Needed';
+
+export interface GravityPipeCalculations {
+  id: string | number;
+  GL_start: number;
+  GL_end: number;
+  IL_start: number;
+  IL_end: number;
+  Depth_start: number;
+  Depth_end: number;
+  Length: number;
+  Slope: number; // Slope in percentage (%) = ((IL_start - IL_end) / Length) * 100
+  SlopeDecimal: number; // m/m
+  Diameter_mm: number;
+  Diameter_m: number;
+  Manning_n: number;
+  Velocity: number; // m/s
+  Flow_Capacity_Ls: number; // L/s
+  Flow_Capacity_M3s: number; // m3/s
+  VelocityStatus: 'optimal' | 'low' | 'high';
+  VelocityStatusLabelAr: string;
+  VelocityStatusLabelEn: string;
+  Status: SewerHydraulicStatus;
+  StatusReasonAr: string;
+  StatusReasonEn: string;
+  DropHeight_m?: number;
+  Outfall_ID?: string;
+  IsOutfall: boolean;
+  IsLiftStationRequired: boolean;
+  IsDropManhole: boolean;
+  UpstreamNode: string;
+  DownstreamNode: string;
+  IsReversed: boolean;
+}
+
+export interface GravityNetworkResult {
+  pipes: GravityPipeCalculations[];
+  pipesMap: Map<string | number, GravityPipeCalculations>;
+  totalPipes: number;
+  totalLengthM: number;
+  outfallNode?: {
+    id: string;
+    x: number;
+    y: number;
+    IL: number;
+    GL: number;
+    depth: number;
+    totalIncomingCapacityLs: number;
+  };
+  liftStationNodes: Array<{
+    id: string;
+    x: number;
+    y: number;
+    reasonAr: string;
+    reasonEn: string;
+    requiredDepth: number;
+    pipeId: string | number;
+  }>;
+  dropManholeNodes: Array<{
+    id: string;
+    x: number;
+    y: number;
+    dropMeters: number;
+    pipeId: string | number;
+  }>;
+  stats: {
+    normalGravityCount: number;
+    dropManholeCount: number;
+    liftStationCount: number;
+    optimalVelocityCount: number;
+    lowVelocityCount: number;
+    highVelocityCount: number;
+    avgSlopePercent: number;
+    avgVelocity: number;
+    totalFlowCapacityLs: number;
+  };
+}
 
 export interface PipeHydraulicData {
   id: string | number;
@@ -156,6 +234,22 @@ export interface PipeHydraulicData {
   animationDurationSec: number; // 2.5s | 1.2s | 0.5s
   animationClass: 'flow-anim-low' | 'flow-anim-optimal' | 'flow-anim-high';
   
+  // Sewer Gravity Levels & Depths
+  glStart?: number; // Ground Level Start (m)
+  glEnd?: number; // Ground Level End (m)
+  ilStart?: number; // Invert Level Start (m)
+  ilEnd?: number; // Invert Level End (m)
+  depthStart?: number; // Excavation / Trench depth at start (m)
+  depthEnd?: number; // Excavation / Trench depth at end (m)
+  sewerStatus?: SewerHydraulicStatus;
+  sewerStatusReasonAr?: string;
+  sewerStatusReasonEn?: string;
+  isLiftStationRequired?: boolean;
+  isDropManhole?: boolean;
+  dropHeightM?: number;
+  outfallId?: string;
+  isOutfall?: boolean;
+
   // Direction & Topology
   flowDirectionTextAr: string;
   flowDirectionTextEn: string;
@@ -196,6 +290,28 @@ export interface HydraulicNetworkSummary {
     optimal: number;
     high: number;
   };
+
+  // Sewer Specific Stats
+  normalGravityCount?: number;
+  dropManholeCount?: number;
+  liftStationCount?: number;
+  primaryOutfallId?: string;
+  primaryOutfallIL?: number;
+  liftStationNodes?: Array<{
+    id: string;
+    x: number;
+    y: number;
+    reasonAr: string;
+    requiredDepth: number;
+    pipeId: string | number;
+  }>;
+  dropManholeNodes?: Array<{
+    id: string;
+    x: number;
+    y: number;
+    dropMeters: number;
+    pipeId: string | number;
+  }>;
   
   totalAsphaltAreaM2: number;
   totalAsphaltVolumeM3: number;

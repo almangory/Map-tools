@@ -2,6 +2,7 @@ import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
 import shp from 'shpjs';
 import { GeoPoint } from '../types';
+import { orientNetworkTowardsOutfall } from './gravitySewerEngine';
 
 export const COMMON_UTM_CRS: Record<string, { label: string; proj4: string }> = {
   'EPSG:32638': {
@@ -317,9 +318,10 @@ export interface NetworkPipeCustomConfig {
 
 export const generateNetworkPipesFromStreets = (
   extractedLines: ExtractedCadLine[],
-  config: NetworkPipeCustomConfig
+  config: NetworkPipeCustomConfig,
+  targetOutfallCoord?: { x: number; y: number; z?: number }
 ): GeoPoint[] => {
-  return extractedLines.map((line, index) => {
+  const rawPipes = extractedLines.map((line, index) => {
     const numStr = String(index + 1).padStart(3, '0');
     const lineId = `${config.linePrefix}_${numStr}`;
     const segmentId = `${config.segmentPrefix}-${numStr}`;
@@ -357,4 +359,17 @@ export const generateNetworkPipesFromStreets = (
 
     return geoPoint;
   });
+
+  // Automatically Orient Network Flow & Cascade Gravity Hydraulics Towards Outfall
+  try {
+    const diameterNum = parseFloat(config.diameter) || 200;
+    const cascade = orientNetworkTowardsOutfall(rawPipes, {
+      targetOutfallCoord,
+      defaultDiameterMm: diameterNum
+    });
+    return cascade.orientedPoints;
+  } catch (err) {
+    console.warn('Auto network outfall orientation notice:', err);
+    return rawPipes;
+  }
 };

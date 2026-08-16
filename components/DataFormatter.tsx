@@ -233,12 +233,12 @@ export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
         ) : (
           <div className="flex flex-wrap items-center gap-1 w-full justify-between">
             <div className="flex flex-wrap items-center gap-1 max-w-[85%]">
-              {selectedFields.map(sf => {
+              {selectedFields.map((sf, sfIdx) => {
                 const spec = specialOptions.find(o => o.value === sf);
                 const displayLabel = spec ? spec.label : sf;
                 return (
                   <span 
-                    key={sf} 
+                    key={`sf-${sf}-${sfIdx}`} 
                     className="inline-flex items-center gap-1 bg-accent/20 text-accent border border-accent/40 px-2 py-0.5 rounded-md font-black text-[10px] shadow-sm"
                   >
                     <span className="truncate max-w-[110px]">{displayLabel}</span>
@@ -321,11 +321,11 @@ export const MultiSourceFieldSelect: React.FC<MultiSourceFieldSelectProps> = ({
                 {lang === 'ar' ? 'لا توجد نتائج' : 'No fields found'}
               </div>
             ) : (
-              filteredAttributes.map(attr => {
+              filteredAttributes.map((attr, attrIdx) => {
                 const isChecked = selectedFields.includes(attr.name);
                 return (
                   <div 
-                    key={attr.name}
+                    key={`filtered-attr-${attr.name}-${attrIdx}`}
                     onClick={() => toggleField(attr.name)}
                     className={cn(
                       "flex items-center justify-between p-2 rounded-lg text-[11px] font-bold cursor-pointer transition-all gap-2",
@@ -1439,13 +1439,13 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             >
               <option value="">{lang === 'ar' ? 'الاسم الافتراضي' : 'Default Name'}</option>
               <optgroup label={lang === 'ar' ? 'الحقول المصدرية' : 'Source Fields'}>
-                {sourceAttributes.map(attr => (
-                  <option key={attr.name} value={attr.name}>{attr.name}</option>
+                {sourceAttributes.map((attr, attrIdx) => (
+                  <option key={`src-attr-${attr.name}-${attrIdx}`} value={attr.name}>{attr.name}</option>
                 ))}
               </optgroup>
               <optgroup label={lang === 'ar' ? 'حقول القالب' : 'Template Fields'}>
-                {TEMPLATES[targetTemplate].fields.map(field => (
-                  <option key={field} value={field}>{field}</option>
+                {TEMPLATES[targetTemplate].fields.map((field, fIdx) => (
+                  <option key={`tmpl-field-${field}-${fIdx}`} value={field}>{field}</option>
                 ))}
               </optgroup>
             </select>
@@ -1480,10 +1480,10 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
               </div>
             </div>
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-              {TEMPLATES[targetTemplate].fields.map(field => {
+              {TEMPLATES[targetTemplate].fields.map((field, fIdx) => {
                 const isSelected = selectedFields[targetTemplate]?.includes(field) ?? false;
                 return (
-                <div key={field} className={cn("flex flex-col md:flex-row items-center gap-3 p-3 rounded-xl transition-all", isSelected ? "bg-black/20" : "bg-black/10 opacity-50")}>
+                <div key={`mapping-field-${field}-${fIdx}`} className={cn("flex flex-col md:flex-row items-center gap-3 p-3 rounded-xl transition-all", isSelected ? "bg-black/20" : "bg-black/10 opacity-50")}>
                   <div className="w-full md:w-1/3 flex items-center gap-2">
                     <button
                       type="button"

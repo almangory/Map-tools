@@ -270,7 +270,7 @@ export function performSbcAuditEngine(points: GeoPoint[]): ValidationIssue[] {
         const dist = getDistanceMeters(wPt, sPt);
         if (dist > 0.05 && dist < 3.0) {
           issues.push({
-            id: `horiz-sep-${wPt.id || sPt.id}`,
+            id: `horiz-sep-${wPt.id || 'w'}-${sPt.id || 's'}-${issues.length}`,
             type: 'HORIZ_SEPARATION',
             severity: 'error',
             titleAr: 'مخالفة مسافة الفصل الأفقية الإلزامية بين المياه والصرف (< 3 أمتار)',
@@ -1413,9 +1413,9 @@ export const SbcValidator: React.FC<SbcValidatorProps> = ({
 
           {/* Issue Cards List */}
           <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1 custom-scrollbar">
-            {filteredIssues.map((issue) => (
+            {filteredIssues.map((issue, idx) => (
               <div
-                key={issue.id}
+                key={`sbc-issue-${issue.id || 'issue'}-${idx}`}
                 className={`p-4 rounded-2xl border transition-all ${
                   issue.severity === 'error'
                     ? 'bg-red-950/20 border-red-500/40 hover:border-red-500/70'

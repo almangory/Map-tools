@@ -23,6 +23,7 @@ import {
   analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
   DEFAULT_ASPHALT_PARAMS, DEFAULT_MANNING_N 
 } from '../services/hydraulicService';
+import { OutfallTarget, OutfallSummaryInfo, OUTFALL_PALETTE } from '../services/gravitySewerEngine';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -71,6 +72,12 @@ export interface MapPreviewProps {
   onCancelLineDraw?: () => void;
   isPickingCoordinate?: 'start' | 'end' | null;
   onPickMapCoordinate?: (coord: { x: number; y: number }) => void;
+  onOrientNetworkTowardsOutfall?: (targetOutfallCoord?: { x: number; y: number; z?: number }) => void;
+  outfallTargets?: OutfallTarget[];
+  onAddOutfallTarget?: (target: OutfallTarget) => void;
+  onRemoveOutfallTarget?: (id: string) => void;
+  onClearOutfallTargets?: () => void;
+  onOrientNetworkTowardsMultiOutfalls?: (targets?: OutfallTarget[]) => void;
 }
 
 /**
@@ -122,7 +129,13 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   onFinishLine,
   onCancelLineDraw,
   isPickingCoordinate = null,
-  onPickMapCoordinate
+  onPickMapCoordinate,
+  onOrientNetworkTowardsOutfall,
+  outfallTargets = [],
+  onAddOutfallTarget,
+  onRemoveOutfallTarget,
+  onClearOutfallTargets,
+  onOrientNetworkTowardsMultiOutfalls
 }) => {
 
   useEffect(() => {
@@ -215,6 +228,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const onFinishLineRef = useRef(onFinishLine);
   const isPickingCoordinateRef = useRef(isPickingCoordinate);
   const onPickMapCoordinateRef = useRef(onPickMapCoordinate);
+  const onOrientNetworkTowardsOutfallRef = useRef(onOrientNetworkTowardsOutfall);
+  const onAddOutfallTargetRef = useRef(onAddOutfallTarget);
+  const onRemoveOutfallTargetRef = useRef(onRemoveOutfallTarget);
+  const onOrientNetworkTowardsMultiOutfallsRef = useRef(onOrientNetworkTowardsMultiOutfalls);
+  const outfallTargetsRef = useRef<OutfallTarget[]>([]);
+  const isPickingOutfallTargetRef = useRef(false);
+
+  const [isPickingOutfallTarget, setIsPickingOutfallTarget] = useState(false);
 
   useEffect(() => {
     isLineDrawingModeRef.current = !!isLineDrawingMode;
@@ -223,7 +244,36 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     onFinishLineRef.current = onFinishLine;
     isPickingCoordinateRef.current = isPickingCoordinate;
     onPickMapCoordinateRef.current = onPickMapCoordinate;
-  }, [isLineDrawingMode, activeLineVertices, onAddLineVertex, onFinishLine, isPickingCoordinate, onPickMapCoordinate]);
+    onOrientNetworkTowardsOutfallRef.current = onOrientNetworkTowardsOutfall;
+    onAddOutfallTargetRef.current = onAddOutfallTarget;
+    onRemoveOutfallTargetRef.current = onRemoveOutfallTarget;
+    onOrientNetworkTowardsMultiOutfallsRef.current = onOrientNetworkTowardsMultiOutfalls;
+    outfallTargetsRef.current = outfallTargets || [];
+    isPickingOutfallTargetRef.current = isPickingOutfallTarget;
+  }, [
+    isLineDrawingMode, activeLineVertices, onAddLineVertex, onFinishLine, 
+    isPickingCoordinate, onPickMapCoordinate, onOrientNetworkTowardsOutfall, 
+    onAddOutfallTarget, onRemoveOutfallTarget, onOrientNetworkTowardsMultiOutfalls, 
+    outfallTargets, isPickingOutfallTarget
+  ]);
+
+  // Global window bridge for popup buttons
+  useEffect(() => {
+    (window as any).__orientTowardsOutfall = (x: number, y: number) => {
+      if (onOrientNetworkTowardsOutfallRef.current) {
+        onOrientNetworkTowardsOutfallRef.current({ x, y });
+      }
+    };
+    (window as any).__removeOutfallTarget = (id: string) => {
+      if (onRemoveOutfallTargetRef.current) {
+        onRemoveOutfallTargetRef.current(id);
+      }
+    };
+    return () => {
+      delete (window as any).__orientTowardsOutfall;
+      delete (window as any).__removeOutfallTarget;
+    };
+  }, []);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -741,6 +791,27 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     });
 
     mapInstance.current.on('click', (e: L.LeafletMouseEvent) => {
+      // 0. Check if picking outfall target on map
+      if (isPickingOutfallTargetRef.current) {
+        setIsPickingOutfallTarget(false);
+        const nextIndex = outfallTargetsRef.current.length + 1;
+        const assignedColor = OUTFALL_PALETTE[(nextIndex - 1) % OUTFALL_PALETTE.length];
+        const newOutfall: OutfallTarget = {
+          id: `OUTFALL_${Date.now()}`,
+          name: lang === 'ar' ? `مصب ${nextIndex}` : `Outfall ${nextIndex}`,
+          x: e.latlng.lng,
+          y: e.latlng.lat,
+          color: assignedColor
+        };
+
+        if (onAddOutfallTargetRef.current) {
+          onAddOutfallTargetRef.current(newOutfall);
+        } else if (onOrientNetworkTowardsOutfallRef.current) {
+          onOrientNetworkTowardsOutfallRef.current({ x: e.latlng.lng, y: e.latlng.lat });
+        }
+        return;
+      }
+
       // 1. Check if picking a coordinate manually
       if (isPickingCoordinateRef.current) {
         if (onPickMapCoordinateRef.current) {
@@ -991,13 +1062,31 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             const pipeHyd = activeHydraulicSummary.pipesMap.get(pt.id) || activeHydraulicSummary.pipesMap.get(String(pt.id)) || (typeof pt.id === 'number' ? activeHydraulicSummary.pipesMap.get(Number(pt.id)) : undefined);
 
             if (isFlowActive && pipeHyd) {
+              const statusColor = pipeHyd.sewerStatus === 'Lift Station Needed' ? '#ef4444' : (pipeHyd.sewerStatus === 'Drop Manhole' ? '#f59e0b' : '#10b981');
+              const statusBg = pipeHyd.sewerStatus === 'Lift Station Needed' ? 'bg-red-500/20 text-red-300 border-red-500/40' : (pipeHyd.sewerStatus === 'Drop Manhole' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40');
+
               popupContent += `<div class="mb-3 p-3 rounded-2xl bg-gradient-to-br from-slate-900 via-cyan-950 to-slate-900 text-[11px] font-medium space-y-2 shadow-xl border border-cyan-500/40 text-white">
                 <div class="flex items-center justify-between border-b border-cyan-500/20 pb-1.5 font-bold">
-                  <span class="text-cyan-300 flex items-center gap-1">🌊 ${lang === 'ar' ? 'الخصائص الهيدروليكية (معادلة مانينغ):' : 'Hydraulic Flow (Manning):'}</span>
-                  <span class="text-[9.5px] px-2 py-0.5 rounded-full font-bold shadow" style="background-color: ${pipeHyd.velocityColor}33; color: ${pipeHyd.velocityColor}; border: 1px solid ${pipeHyd.velocityColor}66;">
-                    ${lang === 'ar' ? pipeHyd.statusBadgeAr : pipeHyd.statusBadgeEn}
+                  <span class="text-cyan-300 flex items-center gap-1">🌊 ${lang === 'ar' ? 'شبكة الانحدار والهيدروليكا (Manning):' : 'Gravity Sewer & Hydraulics:'}</span>
+                  <span class="text-[9.5px] px-2 py-0.5 rounded-full font-bold shadow border ${statusBg}">
+                    ${lang === 'ar' ? (pipeHyd.sewerStatus === 'Lift Station Needed' ? '🚨 محطة رفع مطلوبة' : (pipeHyd.sewerStatus === 'Drop Manhole' ? '⚠️ منهول هدار' : '✅ انحدار طبيعي')) : (pipeHyd.sewerStatus || 'Normal Gravity')}
                   </span>
                 </div>
+
+                ${pipeHyd.glStart !== undefined ? `
+                <div class="p-2 rounded-xl bg-slate-950/60 border border-cyan-500/20 space-y-1">
+                  <div class="text-[9.5px] font-bold text-cyan-300 flex items-center justify-between">
+                    <span>${lang === 'ar' ? 'مناسيب الأرض والقاع (GL / IL):' : 'Ground & Invert Levels:'}</span>
+                    <span class="text-white/60 font-mono">${pipeHyd.upstreamNode} ➔ ${pipeHyd.downstreamNode}</span>
+                  </div>
+                  <div class="grid grid-cols-2 gap-1 text-[9.5px] font-mono">
+                    <div class="bg-white/5 px-2 py-1 rounded"><span class="text-slate-400">GL Start:</span> <b class="text-amber-300">${pipeHyd.glStart.toFixed(2)}m</b></div>
+                    <div class="bg-white/5 px-2 py-1 rounded"><span class="text-slate-400">GL End:</span> <b class="text-amber-300">${pipeHyd.glEnd?.toFixed(2)}m</b></div>
+                    <div class="bg-white/5 px-2 py-1 rounded"><span class="text-slate-400">IL Start:</span> <b class="text-emerald-300">${pipeHyd.ilStart?.toFixed(2)}m</b></div>
+                    <div class="bg-white/5 px-2 py-1 rounded"><span class="text-slate-400">IL End:</span> <b class="text-emerald-300">${pipeHyd.ilEnd?.toFixed(2)}m</b></div>
+                    <div class="bg-white/5 px-2 py-1 rounded col-span-2 flex justify-between"><span class="text-slate-400">${lang === 'ar' ? 'عمق الحفر:' : 'Depth:'}</span> <b class="text-cyan-300">${pipeHyd.depthStart?.toFixed(2)}m ➔ ${pipeHyd.depthEnd?.toFixed(2)}m</b></div>
+                  </div>
+                </div>` : ''}
                 
                 <div class="grid grid-cols-2 gap-1.5 text-[10px]">
                   <div class="bg-black/30 p-1.5 rounded-lg border border-white/5"><span class="text-white/60">${lang === 'ar' ? 'السرعة V:' : 'Velocity:'}</span> <b style="color:${pipeHyd.velocityColor}" class="font-mono">${pipeHyd.velocity.toFixed(2)} m/s</b></div>
@@ -1006,6 +1095,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                   <div class="bg-black/30 p-1.5 rounded-lg border border-white/5"><span class="text-white/60">${lang === 'ar' ? 'التصريف Q:' : 'Max Q:'}</span> <b class="text-blue-300 font-mono">${pipeHyd.maxCapacityLs.toFixed(1)} L/s</b></div>
                   <div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2"><span class="text-white/60">${lang === 'ar' ? 'التصريف 75%:' : 'Design Q75%:'}</span> <b class="text-emerald-300 font-mono">${pipeHyd.designCapacity75Ls.toFixed(1)} L/s</b></div>
                   <div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2"><span class="text-white/60">${lang === 'ar' ? 'الاتجاه:' : 'Direction:'}</span> <b class="text-cyan-200 font-mono">${pipeHyd.flowDirectionTextAr}</b></div>
+                  ${pipeHyd.sewerStatusReasonAr ? `<div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2 text-[9px] text-amber-200">${pipeHyd.sewerStatusReasonAr}</div>` : ''}
                   <div class="bg-black/30 p-1.5 rounded-lg border border-white/5 col-span-2 flex items-center justify-between"><span class="text-white/60">${lang === 'ar' ? 'الأسفلت (أمانة الرياض):' : 'Asphalt:'}</span> <span class="font-mono font-bold text-amber-300">${pipeHyd.asphaltAreaM2.toFixed(1)} m² | ${pipeHyd.asphaltVolumeM3.toFixed(2)} m³</span></div>
                 </div>
               </div>`;
@@ -1027,7 +1117,11 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             let flowLineColor = featColor || '#06b6d4';
             let flowAnimClass = isFlowActive ? 'flow-anim-optimal' : undefined;
 
-            if (activeColorMode === 'velocity') {
+            if (activeColorMode === 'catchment') {
+              const catchmentColor = (pipeHyd as any)?.catchmentColor || (pt.attributes && (pt.attributes['Catchment_Color'] || pt.attributes['لون_الحوض']));
+              flowLineColor = catchmentColor || featColor || '#06b6d4';
+              flowAnimClass = isFlowActive ? 'flow-anim-optimal' : undefined;
+            } else if (activeColorMode === 'velocity') {
               if (pipeHyd) {
                 flowLineColor = pipeHyd.velocityColor;
                 flowAnimClass = isFlowActive ? pipeHyd.animationClass : undefined;
@@ -1226,14 +1320,70 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     }
 
     // Render Outfall Destination Nodes when Flow Direction and Outfalls are enabled
-    if (showFlowDirection && showOutfalls && flowAnalysis?.outfallNodes) {
-      flowAnalysis.outfallNodes.forEach(outfallNode => {
-        if (!isValidLatLng(outfallNode.y, outfallNode.x)) return;
+    if (showFlowDirection && showOutfalls) {
+      // Collect all outfalls (both explicitly provided targets and detected outfall nodes)
+      const combinedOutfallsMap = new Map<string, {
+        id: string;
+        name: string;
+        x: number;
+        y: number;
+        z?: number;
+        elevation?: number;
+        inflowCount?: number;
+        totalInflowCapacityLs?: number;
+        color?: string;
+        isTarget?: boolean;
+      }>();
 
+      // 1. Add explicitly configured outfall targets
+      if (outfallTargets && outfallTargets.length > 0) {
+        outfallTargets.forEach((t, idx) => {
+          if (!isValidLatLng(t.y, t.x)) return;
+          combinedOutfallsMap.set(t.id || `target-${idx}`, {
+            id: t.id || `target-${idx}`,
+            name: t.name || (lang === 'ar' ? `مصب ${idx + 1}` : `Outfall ${idx + 1}`),
+            x: t.x,
+            y: t.y,
+            z: t.z,
+            color: t.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
+            isTarget: true
+          });
+        });
+      }
+
+      // 2. Add or merge engine detected outfalls
+      if (flowAnalysis?.outfallNodes) {
+        flowAnalysis.outfallNodes.forEach((node, idx) => {
+          if (!isValidLatLng(node.y, node.x)) return;
+          const key = node.id || `outfall-${idx}`;
+          const existing = combinedOutfallsMap.get(key);
+          if (existing) {
+            existing.inflowCount = node.inflowCount;
+            existing.elevation = node.elevation ?? existing.elevation;
+          } else {
+            combinedOutfallsMap.set(key, {
+              id: node.id,
+              name: (node as any).name || (lang === 'ar' ? `مصب رئيسي (${node.id})` : `Main Outfall (${node.id})`),
+              x: node.x,
+              y: node.y,
+              elevation: node.elevation,
+              inflowCount: node.inflowCount,
+              color: (node as any).color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
+              isTarget: false
+            });
+          }
+        });
+      }
+
+      combinedOutfallsMap.forEach(outfall => {
+        if (!isValidLatLng(outfall.y, outfall.x)) return;
+
+        const outfallColor = outfall.color || '#ef4444';
         const outfallHtml = `
-          <div style="position:relative; width:22px; height:22px; display:flex; align-items:center; justify-content:center;">
-            <div class="leaflet-outfall-pulse-bg" style="position:absolute; width:100%; height:100%; border:1.5px solid #06b6d4; border-radius:50%;"></div>
-            <div style="position:relative; width:20px; height:20px; background:linear-gradient(135deg, #0284c7, #06b6d4); border:1.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:10px; box-shadow:0 2px 8px rgba(0,0,0,0.6);">
+          <div style="position:relative; width:36px; height:36px; display:flex; align-items:center; justify-content:center;">
+            <div style="position:absolute; width:100%; height:100%; border:2.5px dashed ${outfallColor}; border-radius:50%; animation: spin 6s linear infinite; opacity:0.9;"></div>
+            <div style="position:absolute; width:28px; height:28px; background-color:${outfallColor}33; border:2px solid ${outfallColor}; border-radius:50%; animation: ping 2.5s cubic-bezier(0,0,0.2,1) infinite;"></div>
+            <div style="position:relative; width:24px; height:24px; background:${outfallColor}; border:2.5px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:12px; box-shadow:0 0 16px ${outfallColor}ee; font-weight:bold;">
               🌊
             </div>
           </div>
@@ -1242,26 +1392,135 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         const outfallIcon = L.divIcon({
           className: 'bg-transparent border-0',
           html: outfallHtml,
-          iconSize: [22, 22],
-          iconAnchor: [11, 11]
+          iconSize: [36, 36],
+          iconAnchor: [18, 18]
         });
 
-        const outfallMarker = L.marker([outfallNode.y, outfallNode.x], { icon: outfallIcon, zIndexOffset: 15000 });
+        const outfallMarker = L.marker([outfall.y, outfall.x], { icon: outfallIcon, zIndexOffset: 15000 });
         outfallMarker.bindPopup(`
-          <div class="p-3 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[200px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
-            <div class="flex items-center gap-2 text-cyan-400 font-bold border-b border-cyan-500/30 pb-2 mb-2 text-xs">
-              <span>🌊</span>
-              <span>${lang === 'ar' ? 'نقطة المصب النهائية' : 'Outfall Terminal Node'}</span>
+          <div class="p-3.5 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[240px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+            <div class="flex items-center justify-between border-b border-cyan-500/30 pb-2 mb-2">
+              <div class="flex items-center gap-2 text-cyan-300 font-bold text-xs">
+                <span class="text-base" style="color:${outfallColor}">🌊</span>
+                <span>${outfall.name}</span>
+              </div>
+              <span class="text-[9px] px-2 py-0.5 rounded-full font-mono font-bold" style="background:${outfallColor}33; color:${outfallColor}; border:1px solid ${outfallColor}66;">
+                ${outfall.id}
+              </span>
             </div>
-            <div class="text-[11px] space-y-1 text-slate-200">
-              <div><b>${lang === 'ar' ? 'معرف المصب' : 'Outfall ID'}:</b> <span class="font-bold text-amber-300">${outfallNode.id}</span></div>
-              <div><b>${lang === 'ar' ? 'عدد الأنابيب الصابة' : 'Inflow Pipes'}:</b> <span class="font-bold text-cyan-300">${outfallNode.inflowCount}</span></div>
-              <div class="text-[10px] text-cyan-400/80 dir-ltr font-mono mt-1">${outfallNode.y.toFixed(6)}, ${outfallNode.x.toFixed(6)}</div>
+            <div class="text-[11px] space-y-1.5 text-slate-200">
+              <div class="flex items-center justify-between">
+                <b>${lang === 'ar' ? 'الموقع الجغرافي:' : 'Location'}:</b>
+                <span class="font-mono text-cyan-200 text-[10px] dir-ltr">${outfall.y.toFixed(5)}, ${outfall.x.toFixed(5)}</span>
+              </div>
+              ${outfall.inflowCount !== undefined ? `
+              <div class="flex items-center justify-between">
+                <b>${lang === 'ar' ? 'عدد الأنابيب المصبة:' : 'Connected Pipes'}:</b>
+                <span class="font-bold text-cyan-300 font-mono">${outfall.inflowCount} ${lang === 'ar' ? 'خط' : 'pipes'}</span>
+              </div>` : ''}
+              ${outfall.elevation !== undefined ? `
+              <div class="flex items-center justify-between">
+                <b>${lang === 'ar' ? 'منسوب الأرض (GL):' : 'Ground Level (GL)'}:</b>
+                <span class="font-bold text-emerald-400 font-mono">${outfall.elevation.toFixed(2)} م</span>
+              </div>` : ''}
+
+              <div class="pt-2 border-t border-white/10 flex flex-col gap-1.5 mt-2">
+                <button
+                  type="button"
+                  onclick="window.__orientTowardsOutfall && window.__orientTowardsOutfall(${outfall.x}, ${outfall.y})"
+                  class="w-full py-1.5 px-3 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black rounded-xl text-[10.5px] transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span>🌊</span>
+                  <span>${lang === 'ar' ? 'توجيه الشبكة نحو هذا المصب' : 'Orient Network to this Outfall'}</span>
+                </button>
+                ${outfall.isTarget ? `
+                <button
+                  type="button"
+                  onclick="window.__removeOutfallTarget && window.__removeOutfallTarget('${outfall.id}')"
+                  class="w-full py-1 px-3 bg-red-950/80 hover:bg-red-900 text-rose-300 border border-red-500/30 rounded-xl text-[10px] transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <span>🗑️</span>
+                  <span>${lang === 'ar' ? 'حذف هذا المصب' : 'Remove Outfall'}</span>
+                </button>` : ''}
+              </div>
             </div>
           </div>
         `);
         outfallMarker.addTo(layerGroup.current!);
       });
+    }
+
+    // Render Lift Station and Drop Manhole Alerts when Flow / Gravity is active
+    if (showFlowDirection && activeHydraulicSummary) {
+      // Lift Station Nodes
+      if (activeHydraulicSummary.liftStationNodes) {
+        activeHydraulicSummary.liftStationNodes.forEach(ls => {
+          if (!isValidLatLng(ls.y, ls.x)) return;
+          const lsIcon = L.divIcon({
+            className: 'bg-transparent border-0',
+            html: `
+              <div style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">
+                <div style="position:absolute; width:100%; height:100%; background-color:#ef4444; border-radius:50%; opacity:0.5; animation: ping 2s cubic-bezier(0,0,0.2,1) infinite;"></div>
+                <div style="position:relative; width:24px; height:24px; background:linear-gradient(135deg, #dc2626, #991b1b); border:2px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:11px; box-shadow:0 3px 10px rgba(220,38,38,0.8);">
+                  ⚡
+                </div>
+              </div>
+            `,
+            iconSize: [28, 28],
+            iconAnchor: [14, 14]
+          });
+          const lsMarker = L.marker([ls.y, ls.x], { icon: lsIcon, zIndexOffset: 16000 });
+          lsMarker.bindPopup(`
+            <div class="p-3 bg-[#1e1014] text-white rounded-2xl font-sans min-w-[220px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+              <div class="flex items-center gap-2 text-rose-400 font-bold border-b border-rose-500/30 pb-2 mb-2 text-xs">
+                <span>🚨</span>
+                <span>${lang === 'ar' ? 'مقترح محطة رفع (Lift Station)' : 'Lift Station Required'}</span>
+              </div>
+              <div class="text-[11px] space-y-1.5 text-slate-200">
+                <div class="text-rose-200 bg-rose-950/60 p-2 rounded-xl border border-rose-500/30">${ls.reasonAr}</div>
+                <div><b>${lang === 'ar' ? 'العمق المحسوب:' : 'Depth Required:'}</b> <span class="font-bold text-amber-300 font-mono">${ls.requiredDepth.toFixed(2)} م</span></div>
+                <div><b>${lang === 'ar' ? 'معرف الخط:' : 'Pipe ID:'}</b> <span class="font-bold text-white font-mono">${ls.pipeId}</span></div>
+                <div class="text-[10px] text-rose-400/80 dir-ltr font-mono">${ls.y.toFixed(6)}, ${ls.x.toFixed(6)}</div>
+              </div>
+            </div>
+          `);
+          lsMarker.addTo(layerGroup.current!);
+        });
+      }
+
+      // Drop Manholes Nodes
+      if (activeHydraulicSummary.dropManholeNodes) {
+        activeHydraulicSummary.dropManholeNodes.forEach(dm => {
+          if (!isValidLatLng(dm.y, dm.x)) return;
+          const dmIcon = L.divIcon({
+            className: 'bg-transparent border-0',
+            html: `
+              <div style="position:relative; width:24px; height:24px; display:flex; align-items:center; justify-content:center;">
+                <div style="position:relative; width:22px; height:22px; background:linear-gradient(135deg, #f59e0b, #b45309); border:2px solid #ffffff; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:10px; box-shadow:0 2px 8px rgba(245,158,11,0.7);">
+                  🪜
+                </div>
+              </div>
+            `,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+          });
+          const dmMarker = L.marker([dm.y, dm.x], { icon: dmIcon, zIndexOffset: 14000 });
+          dmMarker.bindPopup(`
+            <div class="p-3 bg-[#1e1a0e] text-white rounded-2xl font-sans min-w-[200px]" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+              <div class="flex items-center gap-2 text-amber-400 font-bold border-b border-amber-500/30 pb-2 mb-2 text-xs">
+                <span>🪜</span>
+                <span>${lang === 'ar' ? 'منهول هدار (Drop Manhole)' : 'Drop Manhole'}</span>
+              </div>
+              <div class="text-[11px] space-y-1 text-slate-200">
+                <div><b>${lang === 'ar' ? 'مقدار الهبوط (الهدار):' : 'Drop Height:'}</b> <span class="font-bold text-amber-300 font-mono">${dm.dropMeters.toFixed(2)} م</span></div>
+                <div><b>${lang === 'ar' ? 'معرف الخط:' : 'Pipe ID:'}</b> <span class="font-bold text-white font-mono">${dm.pipeId}</span></div>
+                <div class="text-[10px] text-amber-400/80 dir-ltr font-mono">${dm.y.toFixed(6)}, ${dm.x.toFixed(6)}</div>
+              </div>
+            </div>
+          `);
+          dmMarker.addTo(layerGroup.current!);
+        });
+      }
     }
 
     // Auto-zoom logic: Triggered when dataId changes or when new points arrive for the first time
@@ -1455,7 +1714,21 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                       <span>{lang === 'ar' ? 'نمط تلوين الخريطة:' : 'Color Coding Mode:'}</span>
                       <span className="text-cyan-400 font-mono">{activeColorMode}</span>
                     </div>
-                    <div className="grid grid-cols-4 gap-1">
+                    <div className="grid grid-cols-5 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleColorModeChange('catchment')}
+                        className={cn(
+                          "py-1 px-1 rounded-xl text-[8.5px] font-extrabold transition-all border flex items-center justify-center gap-1",
+                          activeColorMode === 'catchment'
+                            ? "bg-cyan-500 text-white border-cyan-300 shadow-md shadow-cyan-500/20"
+                            : "bg-slate-900 text-slate-300 border-white/10 hover:bg-slate-800"
+                        )}
+                        title={lang === 'ar' ? 'تلوين الأنابيب حسب أحواض المصبات' : 'Color by Outfall Catchment'}
+                      >
+                        <MapPin className="w-2.5 h-2.5" />
+                        <span>{lang === 'ar' ? 'الأحواض' : 'Catchments'}</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleColorModeChange('velocity')}
@@ -1510,6 +1783,31 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                       </button>
                     </div>
                   </div>
+
+                  {/* Catchment Legend */}
+                  {activeColorMode === 'catchment' && (
+                    <div className="space-y-1 pt-1 border-t border-white/10 text-[10px]">
+                      <div className="text-[9px] font-bold text-cyan-300 pb-0.5">
+                        {lang === 'ar' ? 'أحواض تجميع المصبات (Outfall Basins):' : 'Catchment Basins:'}
+                      </div>
+                      {((outfallTargets && outfallTargets.length > 0) ? outfallTargets : (flowAnalysis?.outfallNodes || [])).map((ofNode: any, idx: number) => {
+                        const cColor = ofNode.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length];
+                        return (
+                          <div key={ofNode.id || idx} className="flex items-center justify-between p-1.5 rounded-xl bg-slate-900/90 border border-white/10">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-2.5 h-2.5 rounded-full inline-block shadow-sm" style={{ backgroundColor: cColor }} />
+                              <span className="font-bold text-white text-[9.5px]">{ofNode.name || ofNode.id}</span>
+                            </div>
+                            {ofNode.inflowCount !== undefined && (
+                              <span className="font-mono font-bold text-cyan-300 text-[9.5px]">
+                                {ofNode.inflowCount} {lang === 'ar' ? 'خط' : 'pipes'}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
                   {/* Velocity Tiers Legend */}
                   {activeColorMode === 'velocity' && (
@@ -1611,6 +1909,111 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                         {(activeHydraulicSummary?.totalAsphaltVolumeM3 ?? 0).toFixed(1)} m³
                       </span>
                     </div>
+                  </div>
+
+                  {/* Network Outfall Orientation Quick Actions & Multi-Outfall Manager */}
+                  <div className="pt-2 border-t border-white/10 space-y-2">
+                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-300">
+                      <span className="flex items-center gap-1">
+                        <span>🌊</span>
+                        <span>{lang === 'ar' ? 'توزيع المصبات والأحواض' : 'Multi-Outfall Distribution'}</span>
+                      </span>
+                      {outfallTargets && outfallTargets.length > 0 && (
+                        <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
+                          {outfallTargets.length} {lang === 'ar' ? 'مصب' : 'outfalls'}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Action 1: Distribute / Orient towards multiple outfalls */}
+                    {onOrientNetworkTowardsMultiOutfalls ? (
+                      <button
+                        type="button"
+                        onClick={() => onOrientNetworkTowardsMultiOutfalls(outfallTargets)}
+                        className="w-full py-1.5 px-2.5 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-black text-[10.5px] transition-all shadow-md shadow-cyan-500/20 active:scale-95 flex items-center justify-center gap-1.5"
+                      >
+                        <span className="text-xs">🌊</span>
+                        <span>
+                          {outfallTargets && outfallTargets.length > 1
+                            ? (lang === 'ar' ? `توزيع الجريان على (${outfallTargets.length}) مصبات` : `Distribute Flow to (${outfallTargets.length}) Outfalls`)
+                            : (lang === 'ar' ? 'توجيه الشبكة نحو المصب تلقائياً' : 'Auto-Orient Flow to Outfall')}
+                        </span>
+                      </button>
+                    ) : (
+                      onOrientNetworkTowardsOutfall && (
+                        <button
+                          type="button"
+                          onClick={() => onOrientNetworkTowardsOutfall()}
+                          className="w-full py-1.5 px-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-[10.5px] transition-all shadow-md shadow-cyan-500/20 active:scale-95 flex items-center justify-center gap-1.5"
+                        >
+                          <span className="text-xs">🌊</span>
+                          <span>{lang === 'ar' ? 'توجيه الشبكة نحو المصب تلقائياً' : 'Auto-Orient Flow to Outfall'}</span>
+                        </button>
+                      )
+                    )}
+
+                    {/* Action 2: Add Outfall by clicking map */}
+                    <button
+                      type="button"
+                      onClick={() => setIsPickingOutfallTarget(!isPickingOutfallTarget)}
+                      className={cn(
+                        "w-full py-1.5 px-2.5 rounded-xl font-bold text-[10px] transition-all border flex items-center justify-center gap-1.5 active:scale-95",
+                        isPickingOutfallTarget
+                          ? "bg-red-500 text-white border-red-300 shadow-lg shadow-red-500/30 animate-pulse"
+                          : "bg-slate-900/90 text-slate-300 border-white/10 hover:bg-slate-800 hover:text-white"
+                      )}
+                    >
+                      <span>🎯</span>
+                      <span>
+                        {isPickingOutfallTarget 
+                          ? (lang === 'ar' ? 'انقر على الخريطة لتحديد مكان المصب...' : 'Click map to place outfall...') 
+                          : (lang === 'ar' ? '+ تحديد مصب جديد بالنقر على الخريطة' : '+ Pick New Outfall on Map')}
+                      </span>
+                    </button>
+
+                    {/* Outfall List with Badges and Delete Actions */}
+                    {outfallTargets && outfallTargets.length > 0 && (
+                      <div className="space-y-1 pt-1 max-h-36 overflow-y-auto custom-scrollbar">
+                        {outfallTargets.map((of, idx) => {
+                          const ofColor = of.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length];
+                          return (
+                            <div
+                              key={of.id}
+                              className="flex items-center justify-between p-1.5 rounded-xl bg-slate-950/80 border border-white/10 text-[9.5px]"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: ofColor }} />
+                                <span className="font-bold text-slate-200 truncate">{of.name || `مصب ${idx + 1}`}</span>
+                                <span className="text-[8.5px] font-mono text-cyan-400 dir-ltr opacity-75">
+                                  ({of.y.toFixed(3)}, {of.x.toFixed(3)})
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                {onRemoveOutfallTarget && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onRemoveOutfallTarget(of.id)}
+                                    className="p-1 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-all"
+                                    title={lang === 'ar' ? 'حذف هذا المصب' : 'Remove this outfall'}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {onClearOutfallTargets && (
+                          <button
+                            type="button"
+                            onClick={onClearOutfallTargets}
+                            className="w-full py-1 text-[9px] text-rose-400/80 hover:text-rose-300 transition-all text-center"
+                          >
+                            {lang === 'ar' ? 'مسح كافة المصبات المحددة' : 'Clear all custom outfalls'}
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

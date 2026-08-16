@@ -250,25 +250,27 @@ export const TOOL_HELP_MAP: Record<string, ToolHelpData> = {
     badgeEn: 'Diff Detector'
   },
   'line-drawer': {
-    titleAr: 'أداة رسم الخطوط وتوليد الشبكات من CAD',
-    titleEn: 'Line Drawer & CAD Network Extractor',
+    titleAr: 'أداة رسم الخطوط ووصلات الخدمة وتوليد الشبكات',
+    titleEn: 'Line Drawer, Service Connections & CAD Network Extractor',
     icon: <PenTool className="w-5 h-5 text-accent" />,
-    summaryAr: 'رسم وتخطيط الأنابيب يدوياً أو استخلاص طبقات محاور الشوارع آلياً من ملفات CAD/DXF وShapefile مع تحويل الإحداثيات المترية (UTM) وتوليد الشبكة بنقرة واحدة.',
-    summaryEn: 'Draft pipeline routes directly on map, import from Excel, or auto-extract street centerlines from CAD/DXF & Shapefile with UTM-to-WGS84 projection and batch pipe generation.',
+    summaryAr: 'رسم وتخطيط الأنابيب الرئيسية ووصلات الخدمة المنزلية (إسقاط عمودي 90° على الشارع)، أو استخلاص طبقات محاور الشوارع آلياً من ملفات CAD/DXF وShapefile مع تحويل الإحداثيات المترية (UTM) وتوليد الشبكة بنقرة واحدة.',
+    summaryEn: 'Draft pipeline routes, auto-project perpendicular (90°) house service connections to streets, or extract street centerlines from CAD/DXF & Shapefile with UTM-to-WGS84 projection and batch pipe generation.',
     stepsAr: [
+      'وصلات الخدمة المنزلية: انقر على موقع عقار المنزل ليقوم المحرك بحساب الإسقاط العمودي 90° والربط المباشر بخط الشارع.',
       'استخلاص آلي لطبقات الشوارع (LINE/LWPOLYLINE) من ملفات CAD/DXF وتجاهل النصوص والبلوكات.',
       'تحويل الإحداثيات المترية (UTM Zone 37N/38N/39N, عين العبد) إلى WGS84 لتسقط فورياً على الخريطة.',
       'توليد شبكة الأنابيب دفعة واحدة وتحديد القطر والمادة والنوع ورقم التصريح وبادئة Segment ID.',
       'رسم تفاعلي مباشر بالنقر أو إدخال الإحداثيات اليدوية واستيراد إكسل وحفظ السجل بذاكرة جهازك.'
     ],
     stepsEn: [
+      'House Service Connections: Click any property to auto-project a 90° perpendicular connection line to the street pipe.',
       'Auto-filter street centerline layers (LINE/LWPOLYLINE) from CAD/DXF, ignoring text & blocks.',
       'Transform local metric CRS (UTM Zones 37N-39N, Ain El Abd) to global WGS84 for exact map positioning.',
       'Batch generate pipe networks with customizable diameter, material, category, and Segment IDs.',
       'Direct map drawing, Excel import, manual coordinate entry, and local offline storage.'
     ],
-    badgeAr: 'توليد CAD ذكي',
-    badgeEn: 'Smart CAD AI'
+    badgeAr: 'وصلات عمودية + CAD',
+    badgeEn: 'Service Connect + CAD'
   }
 };
 
