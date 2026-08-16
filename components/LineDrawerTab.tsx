@@ -17,6 +17,14 @@ import { calculatePathLength, downloadKMZ } from '../services/kmlService';
 import { downloadShapefile } from '../services/shapefileExportService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
+import { 
+  extractStreetNetworkFromDxf, 
+  extractStreetNetworkFromShpOrGeoJson, 
+  generateNetworkPipesFromStreets,
+  COMMON_UTM_CRS,
+  CadExtractionSummary,
+  ExtractedCadLine
+} from '../services/cadNetworkExtractorService';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
@@ -57,7 +65,7 @@ interface Props {
   onFocusPoint?: (pt: GeoPoint) => void;
 }
 
-type DrawMode = 'file-import' | 'map-interactive' | 'manual-coords' | 'lines-inventory';
+type DrawMode = 'file-import' | 'map-interactive' | 'cad-network-auto' | 'manual-coords' | 'lines-inventory';
 
 const PRESET_COLORS = [
   { name: 'أزرق (Blue)', hex: '#3b82f6' },
@@ -165,6 +173,23 @@ export const LineDrawerTab: React.FC<Props> = ({
   const [manualStartY, setManualStartY] = useState<string>('');
   const [manualEndX, setManualEndX] = useState<string>('');
   const [manualEndY, setManualEndY] = useState<string>('');
+
+  // --- CAD / GIS Street Network Auto-Extraction State ---
+  const [cadExtractionSummary, setCadExtractionSummary] = useState<CadExtractionSummary | null>(null);
+  const [cadSourceCrs, setCadSourceCrs] = useState<string>('EPSG:32638');
+  const [cadSelectedLayers, setCadSelectedLayers] = useState<string[]>([]);
+  const [cadLoading, setCadLoading] = useState(false);
+  const [cadAutoPipeConfig, setCadAutoPipeConfig] = useState({
+    networkType: 'مياه صالحة للشرب (Potable Water)',
+    pipeHierarchy: 'main', // 'main' | 'sub'
+    diameter: '160',
+    material: 'HDPE',
+    permitNo: 'PERMIT-2026-X',
+    segmentPrefix: 'SEG',
+    linePrefix: 'PIPE',
+    layerName: 'شبكة المياه الرئيسية',
+    color: '#3b82f6'
+  });
 
   // Listen to coordinate pick events from main map
   useEffect(() => {
@@ -534,6 +559,107 @@ export const LineDrawerTab: React.FC<Props> = ({
     URL.revokeObjectURL(url);
   };
 
+  // --- CAD Street Extraction Handlers ---
+  const handleCadFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const uploadedFile = e.target.files?.[0];
+    if (!uploadedFile) return;
+
+    setCadLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      let summary: CadExtractionSummary;
+      if (uploadedFile.name.toLowerCase().endsWith('.dxf')) {
+        summary = await extractStreetNetworkFromDxf(uploadedFile, cadSourceCrs);
+      } else if (
+        uploadedFile.name.toLowerCase().endsWith('.zip') || 
+        uploadedFile.name.toLowerCase().endsWith('.geojson') || 
+        uploadedFile.name.toLowerCase().endsWith('.json')
+      ) {
+        summary = await extractStreetNetworkFromShpOrGeoJson(uploadedFile, cadSourceCrs);
+      } else {
+        throw new Error(lang === 'ar' ? 'نوع الملف غير مدعوم. يرجى اختيار ملف .DXF أو .ZIP (Shapefile) أو .GeoJSON' : 'Unsupported file type. Choose .DXF, .ZIP (Shapefile), or .GeoJSON');
+      }
+
+      setCadExtractionSummary(summary);
+      setCadSelectedLayers(summary.detectedStreetLayers.length > 0 ? summary.detectedStreetLayers : summary.availableLayers.map(l => l.name));
+      
+      setSuccess(
+        lang === 'ar'
+          ? `تمت قراءة الملف بنجاح! تم استخراج ${summary.extractedLines.length} مسار طريق من ${summary.availableLayers.length} طبقة.`
+          : `CAD file processed! Extracted ${summary.extractedLines.length} street axes from ${summary.availableLayers.length} layers.`
+      );
+    } catch (err: any) {
+      console.error('CAD Extraction Error:', err);
+      setError(err?.message || (lang === 'ar' ? 'فشل تحليل ملف المخطط.' : 'Failed to parse CAD file.'));
+    } finally {
+      setCadLoading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleApplyCadCrsOrLayersChange = async () => {
+    if (!cadExtractionSummary) return;
+    setCadLoading(true);
+    setError(null);
+    try {
+      // Re-filter lines according to selected layers
+      const targetLayerSet = new Set(cadSelectedLayers);
+      const filtered = cadExtractionSummary.extractedLines.filter(l => targetLayerSet.has(l.layer));
+      
+      setSuccess(
+        lang === 'ar' 
+          ? `تم تحديث التصفية: ${filtered.length} مسار معتمد لتوليد الشبكة.` 
+          : `Filter updated: ${filtered.length} lines selected for generation.`
+      );
+    } catch (err: any) {
+      setError(err?.message || 'Error updating layers');
+    } finally {
+      setCadLoading(false);
+    }
+  };
+
+  const handleBatchGenerateNetworkPipes = () => {
+    if (!cadExtractionSummary || cadExtractionSummary.extractedLines.length === 0) {
+      setError(lang === 'ar' ? 'لا توجد خطوط مستخرجة للتوليد.' : 'No extracted lines found.');
+      return;
+    }
+
+    const targetLayerSet = new Set(cadSelectedLayers);
+    const activeLines = cadExtractionSummary.extractedLines.filter(l => targetLayerSet.has(l.layer));
+
+    if (activeLines.length === 0) {
+      setError(lang === 'ar' ? 'يرجى تحديد طبقة واحدة على الأقل من طبقات الشوارع.' : 'Please select at least one layer.');
+      return;
+    }
+
+    const generatedPipes = generateNetworkPipesFromStreets(activeLines, cadAutoPipeConfig);
+
+    setDrawnLines(prev => {
+      const updated = [...prev, ...generatedPipes];
+      try {
+        localStorage.setItem('DRAWN_MAP_LINES', JSON.stringify(updated));
+      } catch (err) {
+        console.warn('Storage quota reached or error saving lines locally:', err);
+      }
+      return updated;
+    });
+
+    if (setGlobalPoints) {
+      setGlobalPoints(prev => [...prev, ...generatedPipes]);
+    }
+
+    setSuccess(
+      lang === 'ar'
+        ? `✅ تم بنجاح توليد ${generatedPipes.length} خط أنبوب وإسقاطها فوراً على خريطة المخطط وإضافتها إلى سجل الشبكة!`
+        : `✅ Successfully generated ${generatedPipes.length} pipe segments and projected to map!`
+    );
+
+    // Switch to log view to inspect generated lines
+    setActiveMode('lines-inventory');
+  };
+
   const handleFinishLineAction = () => {
     if (onFinishCurrentLine) {
       onFinishCurrentLine();
@@ -587,7 +713,7 @@ export const LineDrawerTab: React.FC<Props> = ({
         <div className="absolute inset-0 bg-gradient-to-br from-white/[0.03] to-transparent pointer-events-none" />
 
         {/* Top Header */}
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 relative z-10">
+        <div className="flex flex-col gap-4 mb-6 relative z-10">
           <div className="flex items-center gap-3.5">
             <div className="p-3 bg-accent/20 border border-accent/40 rounded-2xl text-accent shadow-lg shrink-0">
               <PenTool className="w-6 h-6" />
@@ -601,7 +727,7 @@ export const LineDrawerTab: React.FC<Props> = ({
                   {lang === 'ar' ? 'مباشر على الخريطة' : 'Direct on Map'}
                 </span>
               </div>
-              <p className="text-xs sm:text-sm text-white/70 mt-1 max-w-2xl leading-relaxed">
+              <p className="text-xs sm:text-sm text-white/70 mt-1 leading-relaxed">
                 {lang === 'ar' 
                   ? 'ارسم الخطوط مباشرة بالنقر على الخريطة الرئيسية المجاورة، أو استوردها من ملف إكسل بكامل الخصائص والبيانات.' 
                   : 'Draw lines directly by clicking on the main map, or import from Excel with complete attributes and properties.'}
@@ -609,60 +735,76 @@ export const LineDrawerTab: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Mode Switcher Navigation Tabs */}
-          <div className="flex items-center bg-[#071c27] p-1.5 rounded-2xl border border-white/10 shrink-0 self-start lg:self-auto gap-1 overflow-x-auto max-w-full">
+          {/* Mode Switcher Navigation Tabs - Clean 5-Tab Grid with prominent CAD extraction */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 bg-[#071c27] p-2 rounded-2xl border border-white/15 w-full shadow-inner">
+            <button
+              onClick={() => { setActiveMode('cad-network-auto'); setError(null); }}
+              className={cn(
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center col-span-2 sm:col-span-1 border",
+                activeMode === 'cad-network-auto' 
+                  ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02] border-accent" 
+                  : "text-amber-300/90 hover:text-white hover:bg-white/5 border-amber-400/20 bg-amber-400/5"
+              )}
+            >
+              <Sparkles className="w-4 h-4 shrink-0 text-amber-400 animate-pulse" />
+              <span className="leading-tight">{lang === 'ar' ? 'توليد من CAD/Shapefile' : 'Auto CAD Network'}</span>
+            </button>
+
             <button
               onClick={() => { setActiveMode('map-interactive'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center",
                 activeMode === 'map-interactive' 
-                  ? "bg-accent text-primary shadow-md" 
+                  ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02]" 
                   : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
-              <PenTool className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'الرسم المباشر' : 'Direct Map Draw'}</span>
+              <PenTool className="w-4 h-4 shrink-0" />
+              <span className="leading-tight">{lang === 'ar' ? 'الرسم المباشر' : 'Direct Draw'}</span>
             </button>
 
             <button
               onClick={() => { setActiveMode('file-import'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center",
                 activeMode === 'file-import' 
-                  ? "bg-accent text-primary shadow-md" 
+                  ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02]" 
                   : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'استيراد إكسل' : 'Excel Import'}</span>
+              <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              <span className="leading-tight">{lang === 'ar' ? 'استيراد إكسل' : 'Excel Import'}</span>
             </button>
 
             <button
               onClick={() => { setActiveMode('manual-coords'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center",
                 activeMode === 'manual-coords' 
-                  ? "bg-accent text-primary shadow-md" 
+                  ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02]" 
                   : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
-              <Navigation className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'إحداثيات يدوية' : 'Manual Coords'}</span>
+              <Navigation className="w-4 h-4 shrink-0" />
+              <span className="leading-tight">{lang === 'ar' ? 'إحداثيات يدوية' : 'Manual Coords'}</span>
             </button>
 
             <button
               onClick={() => { setActiveMode('lines-inventory'); setError(null); }}
               className={cn(
-                "px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 whitespace-nowrap",
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center relative",
                 activeMode === 'lines-inventory' 
-                  ? "bg-accent text-primary shadow-md" 
+                  ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02]" 
                   : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>{lang === 'ar' ? 'السجل والتصدير' : 'Inventory & Export'}</span>
+              <Layers className="w-4 h-4 shrink-0" />
+              <span className="leading-tight">{lang === 'ar' ? 'سجل الخطوط' : 'Drawn Log'}</span>
               {drawnLines.length > 0 && (
-                <span className="bg-white/20 text-white text-[10px] px-1.5 py-0.5 rounded-full font-mono font-bold">
+                <span className={cn(
+                  "text-[10px] px-1.5 py-0.2 rounded-full font-mono font-black",
+                  activeMode === 'lines-inventory' ? "bg-primary text-accent" : "bg-accent text-primary"
+                )}>
                   {drawnLines.length}
                 </span>
               )}
@@ -1369,28 +1511,307 @@ export const LineDrawerTab: React.FC<Props> = ({
         )}
 
         {/* ======================================================== */}
+        {/* MODE: CAD / GIS STREET NETWORK AUTO-EXTRACTION & VECTORIZATION */}
+        {/* ======================================================== */}
+        {activeMode === 'cad-network-auto' && (
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Header info badge */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-accent/10 to-primary border border-amber-400/30 flex items-start gap-3">
+              <Sparkles className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h4 className="text-xs sm:text-sm font-black text-white">
+                  {lang === 'ar' 
+                    ? 'استخلاص محاور الشوارع آلياً من ملفات CAD / GIS وإسقاطها جغرافياً' 
+                    : 'Auto-Extract Street Centerlines from CAD/GIS & Georeference'}
+                </h4>
+                <p className="text-[11px] text-white/70 leading-relaxed">
+                  {lang === 'ar'
+                    ? 'يدعم قراءة طبقات محاور الطرق والسناتر وتصفية عناصر LINE و LWPOLYLINE وتجاهل النصوص، مع تحويل إحداثيات UTM Zone 37N/38N/39N إلى WGS84 وتوليد شبكة الأنابيب دفعة واحدة.'
+                    : 'Filters street centerline layers (LINE/LWPOLYLINE), transforms UTM coordinates to WGS84, and batch generates network pipes.'}
+                </p>
+              </div>
+            </div>
+
+            {/* Step 1: Upload and Projection Setup */}
+            <div className="p-5 sm:p-6 bg-[#0b2d3d] rounded-3xl border border-white/10 space-y-5">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">1</span>
+                  <span>{lang === 'ar' ? 'رفع المخطط ونظام الإسقاط' : 'Upload CAD File & Set CRS'}</span>
+                </h4>
+                <span className="text-[10px] text-white/50 font-mono">DXF / SHP.ZIP / GeoJSON</span>
+              </div>
+
+              {/* Coordinate System Selector */}
+              <div className="space-y-2">
+                <label className="text-[11px] font-bold text-white/80 block">
+                  {lang === 'ar' ? 'نظام إحداثيات ملف الـ CAD المصدر (Coordinate System):' : 'Source CAD Coordinate System (CRS):'}
+                </label>
+                <select
+                  value={cadSourceCrs}
+                  onChange={(e) => setCadSourceCrs(e.target.value)}
+                  className="w-full bg-[#071c27] border border-white/15 rounded-xl px-3 py-2.5 text-xs text-white focus:border-accent outline-none font-medium"
+                >
+                  {Object.entries(COMMON_UTM_CRS).map(([key, item]) => (
+                    <option key={key} value={key} className="bg-[#0b2d3d] text-white">
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Upload Drop Area */}
+              <div className="border-2 border-dashed border-white/20 hover:border-accent/60 rounded-2xl p-6 sm:p-8 text-center transition-all bg-[#071c27]/60 group">
+                <input
+                  type="file"
+                  id="cad-network-file-input"
+                  accept=".dxf,.zip,.geojson,.json"
+                  onChange={handleCadFileUpload}
+                  className="hidden"
+                />
+                <label htmlFor="cad-network-file-input" className="cursor-pointer flex flex-col items-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
+                    {cadLoading ? (
+                      <RefreshCw className="w-6 h-6 animate-spin text-accent" />
+                    ) : (
+                      <Upload className="w-6 h-6" />
+                    )}
+                  </div>
+                  <div>
+                    <span className="text-xs sm:text-sm font-black text-white block">
+                      {cadLoading
+                        ? (lang === 'ar' ? 'جاري قراءة وتصفية المخطط وتحويل الإحداثيات...' : 'Processing CAD lines & transforming coords...')
+                        : (lang === 'ar' ? 'انقر أو اسحب ملف المخطط هنا (.DXF أو .ZIP)' : 'Click or drop CAD plan (.DXF or .ZIP)')}
+                    </span>
+                    <span className="text-[10px] sm:text-xs text-white/50 mt-1 block">
+                      {lang === 'ar' ? 'يتم استخراج خطوط السناتر وتجاهل النصوص والبلوكات تلقائياً' : 'Auto-filters LINE/LWPOLYLINE, ignores texts & blocks'}
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Step 2: Layer Filtering & Inspection (Shown when summary available) */}
+            {cadExtractionSummary && (
+              <div className="p-5 sm:p-6 bg-[#0b2d3d] rounded-3xl border border-white/10 space-y-5 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">2</span>
+                    <span>{lang === 'ar' ? 'تصفية واختيار طبقات الشوارع (Layer Filter)' : 'Filter Street Layers'}</span>
+                  </h4>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold">
+                    {cadExtractionSummary.extractedLines.length} {lang === 'ar' ? 'خط تم استخراجه' : 'lines extracted'}
+                  </span>
+                </div>
+
+                {/* Detected Street Layer List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px] text-white/70">
+                    <span>{lang === 'ar' ? 'الطبقات المكتشفة في الملف:' : 'Available Layers in File:'}</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCadSelectedLayers(cadExtractionSummary.availableLayers.map(l => l.name))}
+                        className="text-[10px] text-accent hover:underline"
+                      >
+                        {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
+                      </button>
+                      <span>•</span>
+                      <button
+                        type="button"
+                        onClick={() => setCadSelectedLayers(cadExtractionSummary.detectedStreetLayers)}
+                        className="text-[10px] text-amber-300 hover:underline"
+                      >
+                        {lang === 'ar' ? 'طبقات الطرق المقترحة فقط' : 'Street Layers Only'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-[#071c27] rounded-xl border border-white/10">
+                    {cadExtractionSummary.availableLayers.map((layer) => {
+                      const isSelected = cadSelectedLayers.includes(layer.name);
+                      return (
+                        <label
+                          key={layer.name}
+                          className={cn(
+                            "flex items-center justify-between p-2 rounded-lg cursor-pointer text-xs transition-colors border",
+                            isSelected
+                              ? "bg-accent/15 border-accent/40 text-white"
+                              : "bg-white/5 border-transparent text-white/60 hover:bg-white/10"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setCadSelectedLayers([...cadSelectedLayers, layer.name]);
+                                } else {
+                                  setCadSelectedLayers(cadSelectedLayers.filter(l => l !== layer.name));
+                                }
+                              }}
+                              className="rounded accent-amber-400"
+                            />
+                            <span className="font-mono font-medium">{layer.name}</span>
+                            {layer.isLikelyStreet && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                                {lang === 'ar' ? 'محور طريق/شارع' : 'Street Axis'}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-white/50 font-mono">{layer.lineCount} {lang === 'ar' ? 'عنصر' : 'elements'}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Step 3: Batch Network Generation Configuration */}
+                <div className="pt-4 border-t border-white/10 space-y-4">
+                  <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">3</span>
+                    <span>{lang === 'ar' ? 'تحديد مواصفات وتوليد شبكة الأنابيب' : 'Batch Generate Network Pipes'}</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'نوع الشبكة' : 'Network Type'}</label>
+                      <input
+                        type="text"
+                        value={cadAutoPipeConfig.networkType}
+                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, networkType: e.target.value })}
+                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'تصنيف الخط' : 'Pipe Category'}</label>
+                      <select
+                        value={cadAutoPipeConfig.pipeHierarchy}
+                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, pipeHierarchy: e.target.value })}
+                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                      >
+                        <option value="main">{lang === 'ar' ? 'ماسورة رئيسية (Main Pipe)' : 'Main Pipe'}</option>
+                        <option value="sub">{lang === 'ar' ? 'ماسورة فرعية / توزيع (Branch Pipe)' : 'Branch Pipe'}</option>
+                        <option value="service">{lang === 'ar' ? 'وصلة خدمة (Service Connection)' : 'Service Line'}</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'قطر الأنبوب (مم)' : 'Diameter (mm)'}</label>
+                      <input
+                        type="text"
+                        value={cadAutoPipeConfig.diameter}
+                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, diameter: e.target.value })}
+                        placeholder="160"
+                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-mono"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'مادة الأنبوب' : 'Material'}</label>
+                      <input
+                        type="text"
+                        value={cadAutoPipeConfig.material}
+                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, material: e.target.value })}
+                        placeholder="HDPE"
+                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'رقم التصريح / العقد' : 'Permit / Contract No'}</label>
+                      <input
+                        type="text"
+                        value={cadAutoPipeConfig.permitNo}
+                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, permitNo: e.target.value })}
+                        placeholder="PERMIT-2026-X"
+                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'بادئة معرف الشريحة (Segment Prefix)' : 'Segment Prefix'}</label>
+                      <input
+                        type="text"
+                        value={cadAutoPipeConfig.segmentPrefix}
+                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, segmentPrefix: e.target.value })}
+                        placeholder="SEG"
+                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Batch Action Button */}
+                  <button
+                    type="button"
+                    onClick={handleBatchGenerateNetworkPipes}
+                    disabled={cadSelectedLayers.length === 0}
+                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 to-accent text-primary font-black flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] transition-all text-xs sm:text-sm shadow-xl shadow-accent/20 disabled:opacity-50 mt-2"
+                  >
+                    <Sparkles className="w-5 h-5 text-primary" />
+                    <span>
+                      {lang === 'ar'
+                        ? `تطبيق وتوليد كامل شبكة الأنابيب (${cadSelectedLayers.length} طبقة معتمدة) بنقرة واحدة`
+                        : `Generate Network Pipes on Full Street Layout`}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ======================================================== */}
         {/* MODE 4: LINES INVENTORY & UNIVERSAL EXPORT SUITE */}
         {/* ======================================================== */}
         {activeMode === 'lines-inventory' && (
           <div className="space-y-6 animate-in fade-in duration-200">
             {drawnLines.length === 0 ? (
-              <div className="p-8 sm:p-12 text-center bg-[#0b2d3d] rounded-3xl border border-white/10 space-y-3">
-                <PenTool className="w-12 h-12 text-white/30 mx-auto" />
-                <h3 className="text-base font-bold text-white">
-                  {lang === 'ar' ? 'لا توجد خطوط مرسومة حالياً' : 'No drawn lines currently'}
-                </h3>
-                <p className="text-xs text-white/50 max-w-md mx-auto">
-                  {lang === 'ar' 
-                    ? 'يمكنك البدء برسم الخطوط مباشرة بالنقر على الخريطة أو استيرادها من ملف إكسل لتظهر هنا في جدول السجل مع جميع خيارات التصدير.'
-                    : 'Start drawing lines on the map or import from Excel to see them listed here with export tools.'}
-                </p>
-                <button
-                  onClick={() => setActiveMode('map-interactive')}
-                  className="px-5 py-2.5 bg-accent text-primary font-black text-xs rounded-xl shadow-lg hover:bg-accent/90 transition-all inline-flex items-center gap-2"
-                >
-                  <PenTool className="w-3.5 h-3.5" />
-                  <span>{lang === 'ar' ? 'انتقل إلى الرسم المباشر' : 'Go to Direct Drawing'}</span>
-                </button>
+              <div className="p-6 sm:p-10 text-center bg-[#0b2d3d] rounded-3xl border border-white/10 space-y-5">
+                <div className="w-16 h-16 rounded-3xl bg-accent/10 border border-accent/30 flex items-center justify-center text-accent mx-auto shadow-xl">
+                  <Layers className="w-8 h-8" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-white">
+                    {lang === 'ar' ? 'لا توجد خطوط في السجل حالياً' : 'No drawn lines in the log'}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-white/60 max-w-md mx-auto mt-1.5 leading-relaxed">
+                    {lang === 'ar' 
+                      ? 'يمكنك إضافة الخطوط بالرسم المباشر على الخريطة، أو إرفاق ملف إكسل مباشرة لاستيراد الخطوط، أو استرجاع الخطوط المحفوظة سابقاً بذاكرة جهازك.'
+                      : 'You can add lines by drawing on the map, uploading an Excel file, or loading previously saved lines from your device memory.'}
+                  </p>
+                </div>
+
+                {/* Direct Action Options in Empty State */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-lg mx-auto pt-2">
+                  <button
+                    onClick={() => setActiveMode('file-import')}
+                    className="p-4 bg-[#071c27] hover:bg-accent/10 border border-white/15 hover:border-accent/40 rounded-2xl transition-all flex items-center gap-3 text-start group"
+                  >
+                    <div className="p-2.5 rounded-xl bg-accent/20 text-accent group-hover:scale-110 transition-transform">
+                      <FileSpreadsheet className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black text-white block">{lang === 'ar' ? 'إرفاق واستيراد ملف إكسل' : 'Upload Excel File'}</span>
+                      <span className="text-[10px] text-white/50">{lang === 'ar' ? 'استيراد فوري للخطوط والإحداثيات' : 'Import lines & coordinates'}</span>
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveMode('map-interactive')}
+                    className="p-4 bg-[#071c27] hover:bg-accent/10 border border-white/15 hover:border-accent/40 rounded-2xl transition-all flex items-center gap-3 text-start group"
+                  >
+                    <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 group-hover:scale-110 transition-transform">
+                      <PenTool className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black text-white block">{lang === 'ar' ? 'بدء الرسم التفاعلي' : 'Start Map Drawing'}</span>
+                      <span className="text-[10px] text-white/50">{lang === 'ar' ? 'الرسم بالنقر على الخريطة' : 'Click on the map to draw'}</span>
+                    </div>
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="space-y-6">
