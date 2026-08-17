@@ -5,6 +5,15 @@ import { matchStatusByColor } from './colorUtils';
 
 const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule && (JSZipModule as any).default) ? (JSZipModule as any).default : JSZipModule;
 
+export const getColorGroupName = (colorHex: string): string => {
+    const cleanHex = String(colorHex || '#3B82F6').trim().toUpperCase();
+    const status = matchStatusByColor(cleanHex);
+    if (status && status.nameAr) {
+        return `${status.nameAr} (${cleanHex})`;
+    }
+    return `Color_${cleanHex.replace('#', '')}`;
+};
+
 export const getEffectiveColor = (pt: GeoPoint, options?: KmlExportOptions): string => {
     let colorHex = pt.color;
     const type = pt.type || 'Point';
@@ -504,7 +513,8 @@ ${stylesXML}`;
               }
           } else if (options.groupByAttribute === 'color') {
               const originalColor = String(pt.color || '#3b82f6').toUpperCase();
-              key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
+              const canonical = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
+              key = getColorGroupName(canonical);
           } else if (options.groupByAttribute === 'geometry') {
               const t = pt.type || 'Point';
               key = t === 'Polygon' ? 'مضلعات (Polygons)' : t === 'LineString' ? 'مسارات وخطوط (Lines)' : 'نقاط وعلامات (Points)';
@@ -647,7 +657,8 @@ export const downloadKMZGroupedZip = async (points: GeoPoint[], docName: string,
                 }
             } else if (options.groupByAttribute === 'color') {
                 const originalColor = String(pt.color || '#3b82f6').toUpperCase();
-                key = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
+                const canonical = options.canonicalColorMap ? (options.canonicalColorMap[originalColor] || originalColor) : originalColor;
+                key = getColorGroupName(canonical);
             } else if (options.groupByAttribute === 'geometry') {
                 const t = pt.type || 'Point';
                 key = t === 'Polygon' ? 'مضلعات (Polygons)' : t === 'LineString' ? 'مسارات وخطوط (Lines)' : 'نقاط وعلامات (Points)';

@@ -84,7 +84,7 @@ export type KmlSplitMode = 'none' | 'count' | 'attribute' | 'spatial';
 export interface KmlExportOptions {
   mode: KmlSplitMode;
   splitCount?: number;
-  groupByAttribute?: 'layer' | 'attr1' | 'attr2' | 'color' | 'street';
+  groupByAttribute?: 'layer' | 'attr1' | 'attr2' | 'color' | 'street' | 'geometry';
   groupByColumn?: string;
   canonicalColorMap?: Record<string, string>; // Mapping for merging colors
   standardizeColors?: boolean;

@@ -1,4 +1,5 @@
 
+import * as turf from '@turf/turf';
 import { GeoPoint } from '../types';
 
 /**
@@ -1580,5 +1581,472 @@ export const resolveSpatialOverlaps = async (
   });
   return { cleanedPoints, removedCount, trimmedCount };
 };
+
+/**
+ * بنية بيانات لتمثيل حدود العقار المستكشف
+ */
+export interface DetectedPropertyBoundary {
+  id: string | number;
+  polygon: { x: number; y: number }[];
+  areaM2: number;
+  perimeterM: number;
+  center: { x: number; y: number };
+}
+
+/**
+ * 1. اكتشاف حدود العقارات والمباني تلقائياً من النقاط والمضلعات
+ * Automatically detects property polygons and closed lot boundaries from GeoPoint data
+ */
+export const detectPropertyPolygons = (
+  points: GeoPoint[]
+): DetectedPropertyBoundary[] => {
+  if (!points || points.length === 0) return [];
+
+  const detected: DetectedPropertyBoundary[] = [];
+
+  points.forEach((pt, index) => {
+    let vertices: { x: number; y: number }[] = [];
+
+    if (pt.type === 'Polygon' && pt.path && pt.path.length >= 3) {
+      vertices = [...pt.path];
+    } else if (pt.type === 'LineString' && pt.path && pt.path.length >= 3) {
+      // Check if the line forms a closed loop (start and end vertices match)
+      const pFirst = pt.path[0];
+      const pLast = pt.path[pt.path.length - 1];
+      const distStartEnd = getPointDistanceMeters(pFirst, pLast);
+      if (distStartEnd < 2.0 || pt.path.length >= 4) {
+        vertices = [...pt.path];
+      }
+    }
+
+    if (vertices.length < 3) return;
+
+    // Close polygon ring if needed
+    const first = vertices[0];
+    const last = vertices[vertices.length - 1];
+    if (Math.abs(first.x - last.x) > 1e-7 || Math.abs(first.y - last.y) > 1e-7) {
+      vertices.push({ x: first.x, y: first.y });
+    }
+
+    // Calculate metric area
+    let areaM2 = 0;
+    try {
+      const turfPoly = turf.polygon([vertices.map(v => [v.x, v.y])]);
+      areaM2 = turf.area(turfPoly);
+    } catch {
+      // Fallback rough area
+      const avgLat = vertices[0].y;
+      const degLat = 111320;
+      const degLng = 111320 * Math.cos((avgLat * Math.PI) / 180);
+      let signedArea = 0;
+      for (let i = 0; i < vertices.length - 1; i++) {
+        const x1 = vertices[i].x * degLng;
+        const y1 = vertices[i].y * degLat;
+        const x2 = vertices[i + 1].x * degLng;
+        const y2 = vertices[i + 1].y * degLat;
+        signedArea += (x1 * y2 - x2 * y1);
+      }
+      areaM2 = Math.abs(signedArea) / 2;
+    }
+
+    // Properties typically have areas between 25 m² and 250,000 m²
+    if (areaM2 >= 20 && areaM2 <= 500000) {
+      const perimeterM = calculatePathLength(vertices);
+      let sumX = 0, sumY = 0;
+      const n = vertices.length - 1;
+      for (let i = 0; i < n; i++) {
+        sumX += vertices[i].x;
+        sumY += vertices[i].y;
+      }
+      detected.push({
+        id: pt.id || `PROP_${index + 1}`,
+        polygon: vertices,
+        areaM2: Math.round(areaM2 * 100) / 100,
+        perimeterM: Math.round(perimeterM * 100) / 100,
+        center: { x: sumX / n, y: sumY / n }
+      });
+    }
+  });
+
+  return detected;
+};
+
+/**
+ * 2. توليد ورسم مسارات الشبكة الهندسية في منتصف الشوارع المحيطة بالعقارات
+ * Generates street network centerlines in the middle of streets surrounding properties
+ * without intersecting or overlapping property boundaries.
+ */
+export const generateStreetCenterlinesFromProperties = (options: {
+  points?: GeoPoint[];
+  propertyPolygons?: { x: number; y: number }[][];
+  streetWidthMeters?: number;
+  layerName?: string;
+  color?: string;
+  linePrefix?: string;
+}): GeoPoint[] => {
+  const {
+    points = [],
+    propertyPolygons = [],
+    streetWidthMeters = 12.0,
+    layerName = 'Street Network (Centerline)',
+    color = '#0284c7',
+    linePrefix = 'ST_CENTER'
+  } = options;
+
+  // 1. Gather all property polygons
+  const polygonsToProcess: { x: number; y: number }[][] = [];
+
+  if (propertyPolygons.length > 0) {
+    propertyPolygons.forEach(p => {
+      if (p && p.length >= 3) polygonsToProcess.push(p);
+    });
+  }
+
+  if (points.length > 0) {
+    const detected = detectPropertyPolygons(points);
+    detected.forEach(d => {
+      polygonsToProcess.push(d.polygon);
+    });
+  }
+
+  if (polygonsToProcess.length === 0) return [];
+
+  const avgLat = polygonsToProcess[0][0]?.y || 24.7;
+  const degLat = 111320;
+  const degLng = 111320 * Math.cos((avgLat * Math.PI) / 180);
+
+  // 2. Convert to Turf Polygons and dissolve adjacent lots into unified urban blocks
+  const turfPolys: turf.Feature<turf.Polygon>[] = [];
+  polygonsToProcess.forEach((ring, idx) => {
+    const coords = ring.map(pt => [pt.x, pt.y]);
+    if (coords.length >= 3) {
+      const first = coords[0];
+      const last = coords[coords.length - 1];
+      if (Math.abs(first[0] - last[0]) > 1e-7 || Math.abs(first[1] - last[1]) > 1e-7) {
+        coords.push([first[0], first[1]]);
+      }
+      if (coords.length >= 4) {
+        try {
+          const poly = turf.polygon([coords], { id: idx });
+          if (turf.area(poly) > 5) {
+            turfPolys.push(poly);
+          }
+        } catch {}
+      }
+    }
+  });
+
+  if (turfPolys.length === 0) return [];
+
+  // 3. Union adjacent lots into macro-blocks to eliminate internal lot dividing lines
+  const blockPerimeters: { x: number; y: number }[][] = [];
+
+  try {
+    const bufferedPolys: turf.Feature<turf.Polygon | turf.MultiPolygon>[] = [];
+    turfPolys.forEach(tp => {
+      try {
+        const buf = turf.buffer(tp, 0.0002, { units: 'kilometers' }); // 0.2m buffer to close drafting seams
+        if (buf) bufferedPolys.push(buf as any);
+      } catch {
+        bufferedPolys.push(tp);
+      }
+    });
+
+    let unioned: turf.Feature<turf.Polygon | turf.MultiPolygon> | null = null;
+    if (bufferedPolys.length === 1) {
+      unioned = bufferedPolys[0];
+    } else if (bufferedPolys.length > 1) {
+      try {
+        unioned = turf.union(turf.featureCollection(bufferedPolys as any));
+      } catch {
+        let cur = bufferedPolys[0];
+        for (let i = 1; i < bufferedPolys.length; i++) {
+          try {
+            const u = turf.union(turf.featureCollection([cur, bufferedPolys[i]]));
+            if (u) cur = u;
+          } catch {}
+        }
+        unioned = cur;
+      }
+    }
+
+    if (unioned && unioned.geometry) {
+      const geom = unioned.geometry;
+      if (geom.type === 'Polygon') {
+        blockPerimeters.push(geom.coordinates[0].map(c => ({ x: c[0], y: c[1] })));
+      } else if (geom.type === 'MultiPolygon') {
+        geom.coordinates.forEach(polyCoords => {
+          blockPerimeters.push(polyCoords[0].map(c => ({ x: c[0], y: c[1] })));
+        });
+      }
+    }
+  } catch (err) {
+    console.warn('Turf union fallback for properties:', err);
+  }
+
+  // Fallback if union was empty: use individual property polygons
+  if (blockPerimeters.length === 0) {
+    polygonsToProcess.forEach(p => blockPerimeters.push(p));
+  }
+
+  // 4. Extract Block Frontage Edges facing streets
+  interface FrontageEdge {
+    p1: { x: number; y: number };
+    p2: { x: number; y: number };
+    mid: { x: number; y: number };
+    lenM: number;
+    angle: number;
+    nx: number; // Unit outward normal
+    ny: number;
+  }
+
+  const frontageEdges: FrontageEdge[] = [];
+
+  blockPerimeters.forEach(perimeter => {
+    if (perimeter.length < 3) return;
+
+    // Calculate signed area to determine winding order (CCW vs CW)
+    let signedArea = 0;
+    const n = perimeter.length;
+    for (let i = 0; i < n - 1; i++) {
+      signedArea += (perimeter[i].x * perimeter[i + 1].y - perimeter[i + 1].x * perimeter[i].y);
+    }
+    const isCCW = signedArea > 0;
+
+    for (let i = 0; i < n - 1; i++) {
+      const p1 = perimeter[i];
+      const p2 = perimeter[i + 1];
+      const dxM = (p2.x - p1.x) * degLng;
+      const dyM = (p2.y - p1.y) * degLat;
+      const lenM = Math.hypot(dxM, dyM);
+
+      if (lenM < 3.0) continue; // Skip micro edges
+
+      // Unit outward normal
+      const nx = isCCW ? dyM / lenM : -dyM / lenM;
+      const ny = isCCW ? -dxM / lenM : dxM / lenM;
+
+      let ang = Math.atan2(dyM, dxM);
+      if (ang < 0) ang += Math.PI;
+
+      frontageEdges.push({
+        p1,
+        p2,
+        mid: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 },
+        lenM,
+        angle: ang,
+        nx,
+        ny
+      });
+    }
+  });
+
+  if (frontageEdges.length === 0) return [];
+
+  // 5. Synthesize Street Centerlines between facing property blocks or by outward offset
+  // Half the street width places the pipeline right in the center of the road corridor
+  const halfStreetWidth = streetWidthMeters / 2;
+  const rawCenterlineSegments: { p1: { x: number; y: number }; p2: { x: number; y: number } }[] = [];
+
+  const matchedPairs = new Set<number>();
+
+  // Check if two frontages face each other across a street (distance 8m - 40m and opposing normals)
+  for (let i = 0; i < frontageEdges.length; i++) {
+    const e1 = frontageEdges[i];
+    let bestMatch = -1;
+    let minStreetDist = Infinity;
+
+    for (let j = i + 1; j < frontageEdges.length; j++) {
+      if (matchedPairs.has(j)) continue;
+      const e2 = frontageEdges[j];
+
+      // Angle difference between edges
+      let diffAng = Math.abs(e1.angle - e2.angle);
+      if (diffAng > Math.PI / 2) diffAng = Math.PI - diffAng;
+
+      // Must be roughly parallel (< 25 degrees)
+      if (diffAng < (25 * Math.PI) / 180) {
+        const dMid = Math.hypot((e1.mid.x - e2.mid.x) * degLng, (e1.mid.y - e2.mid.y) * degLat);
+        // Opposing normals dot product < -0.3 (facing each other)
+        const normalDot = e1.nx * e2.nx + e1.ny * e2.ny;
+
+        if (dMid >= 6.0 && dMid <= 45.0 && normalDot < -0.3) {
+          if (dMid < minStreetDist) {
+            minStreetDist = dMid;
+            bestMatch = j;
+          }
+        }
+      }
+    }
+
+    if (bestMatch !== -1) {
+      // Compute true street centerline midway between the two opposing block frontages
+      const e2 = frontageEdges[bestMatch];
+      matchedPairs.add(i);
+      matchedPairs.add(bestMatch);
+
+      const midP1 = { x: (e1.p1.x + e2.p2.x) / 2, y: (e1.p1.y + e2.p2.y) / 2 };
+      const midP2 = { x: (e1.p2.x + e2.p1.x) / 2, y: (e1.p2.y + e2.p1.y) / 2 };
+      rawCenterlineSegments.push({ p1: midP1, p2: midP2 });
+    } else if (!matchedPairs.has(i)) {
+      // Outer peripheral frontage facing open road: offset outward into middle of the street corridor
+      const shiftLng = (e1.nx * halfStreetWidth) / degLng;
+      const shiftLat = (e1.ny * halfStreetWidth) / degLat;
+
+      const shiftedP1 = { x: e1.p1.x + shiftLng, y: e1.p1.y + shiftLat };
+      const shiftedP2 = { x: e1.p2.x + shiftLng, y: e1.p2.y + shiftLat };
+      rawCenterlineSegments.push({ p1: shiftedP1, p2: shiftedP2 });
+    }
+  }
+
+  // 6. Filter out any centerline segment points that fall inside any property polygon
+  const validCenterlines: { p1: { x: number; y: number }; p2: { x: number; y: number } }[] = [];
+
+  rawCenterlineSegments.forEach(seg => {
+    let p1Inside = false;
+    let p2Inside = false;
+
+    for (const poly of polygonsToProcess) {
+      if (!p1Inside && isPointInPolygon(seg.p1, poly)) p1Inside = true;
+      if (!p2Inside && isPointInPolygon(seg.p2, poly)) p2Inside = true;
+      if (p1Inside && p2Inside) break;
+    }
+
+    // Only keep segments that reside purely in the street outside properties
+    if (!p1Inside && !p2Inside) {
+      validCenterlines.push(seg);
+    }
+  });
+
+  // 7. Topological Chaining into Continuous Street Lines
+  const snapTolM = 5.0; // 5m snapping tolerance for street intersections
+  interface CNode {
+    id: number;
+    x: number;
+    y: number;
+    edges: number[];
+  }
+
+  const nodes: CNode[] = [];
+  const getNode = (pt: { x: number; y: number }): CNode => {
+    for (const n of nodes) {
+      const d = Math.hypot((n.x - pt.x) * degLng, (n.y - pt.y) * degLat);
+      if (d <= snapTolM) return n;
+    }
+    const newNode: CNode = { id: nodes.length, x: pt.x, y: pt.y, edges: [] };
+    nodes.push(newNode);
+    return newNode;
+  };
+
+  interface CEdge {
+    id: number;
+    u: number;
+    v: number;
+    lenM: number;
+    angle: number;
+    used: boolean;
+  }
+
+  const cEdges: CEdge[] = [];
+  validCenterlines.forEach(seg => {
+    const nA = getNode(seg.p1);
+    const nB = getNode(seg.p2);
+    if (nA.id !== nB.id) {
+      const exists = cEdges.find(e => (e.u === nA.id && e.v === nB.id) || (e.u === nB.id && e.v === nA.id));
+      if (!exists) {
+        const eId = cEdges.length;
+        const dx = (nB.x - nA.x) * degLng;
+        const dy = (nB.y - nA.y) * degLat;
+        let ang = Math.atan2(dy, dx);
+        if (ang < 0) ang += Math.PI;
+
+        const ce: CEdge = {
+          id: eId,
+          u: nA.id,
+          v: nB.id,
+          lenM: Math.hypot(dx, dy),
+          angle: ang,
+          used: false
+        };
+        cEdges.push(ce);
+        nA.edges.push(eId);
+        nB.edges.push(eId);
+      }
+    }
+  });
+
+  const continuousStreetChains: { x: number; y: number }[][] = [];
+
+  cEdges.forEach(startEdge => {
+    if (startEdge.used) return;
+
+    const pathNodes: number[] = [startEdge.u, startEdge.v];
+    startEdge.used = true;
+    let currentAng = startEdge.angle;
+
+    // Extend forward
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const lastId = pathNodes[pathNodes.length - 1];
+      const prevId = pathNodes[pathNodes.length - 2];
+      const candidates = nodes[lastId].edges.map(eid => cEdges[eid]).filter(e => !e.used);
+
+      let bestEdge: CEdge | null = null;
+      let minDiff = Infinity;
+
+      for (const cand of candidates) {
+        const nextId = cand.u === lastId ? cand.v : cand.u;
+        if (nextId === prevId || pathNodes.includes(nextId)) continue;
+
+        let diff = Math.abs(cand.angle - currentAng);
+        if (diff > Math.PI / 2) diff = Math.PI - diff;
+
+        if (diff < (55 * Math.PI) / 180 && diff < minDiff) {
+          minDiff = diff;
+          bestEdge = cand;
+        }
+      }
+
+      if (bestEdge) {
+        bestEdge.used = true;
+        currentAng = bestEdge.angle;
+        const nextId = bestEdge.u === lastId ? bestEdge.v : bestEdge.u;
+        pathNodes.push(nextId);
+        extended = true;
+      }
+    }
+
+    if (pathNodes.length >= 2) {
+      const pathPts = pathNodes.map(nid => ({ x: nodes[nid].x, y: nodes[nid].y }));
+      const totalLen = calculatePathLength(pathPts);
+      if (totalLen >= 10.0) {
+        continuousStreetChains.push(pathPts);
+      }
+    }
+  });
+
+  // 8. Output as GeoPoint array
+  const outputNetwork: GeoPoint[] = continuousStreetChains.map((path, idx) => {
+    const num = String(idx + 1).padStart(3, '0');
+    const pathLen = calculatePathLength(path);
+    return {
+      id: `${linePrefix}_${num}`,
+      x: path[0].x,
+      y: path[0].y,
+      type: 'LineString',
+      layer: layerName,
+      path: path,
+      originalLength: Math.round(pathLen * 100) / 100,
+      color: color,
+      description: `مسار شبكة في منتصف الشارع - طول ${pathLen.toFixed(1)}م`,
+      diameterMm: 200,
+      material: 'uPVC'
+    };
+  });
+
+  return outputNetwork;
+};
+
 
 
