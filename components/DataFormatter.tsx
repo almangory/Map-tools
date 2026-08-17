@@ -110,7 +110,7 @@ interface Props {
   points: GeoPoint[];
   headers?: string[];
   lang: 'ar' | 'en';
-  fetchStreets?: (points: GeoPoint[], headers: string[]) => Promise<GeoPoint[]>;
+  fetchStreets?: (points: GeoPoint[], headers: string[], callback?: (pts: GeoPoint[]) => void | Promise<void>, forceFetch?: boolean) => Promise<GeoPoint[]>;
   overlapResults?: import('../services/geometryService').OverlapResult[] | null;
   geocodingMode?: 'accurate' | 'fast';
   onVerifyMissingAttributes?: () => void;
@@ -452,7 +452,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [pendingAction, setPendingAction] = useState<((overridePoints?: GeoPoint[]) => void | Promise<void>) | null>(null);
+  const isExecutingRef = useRef(false);
   const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
   const currentGeocodingMode = geocodingMode || localGeocodingMode;
   const [targetTemplate, setTargetTemplate] = useState<'all' | 'pipes' | 'points' | 'stations' | 'polygons' | 'boundaries' | 'violations' | 'grids' | 'stowage_sites'>('all');
@@ -588,13 +588,13 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
               'segmentid', 'segment_id', 'segment id', 'segment', 'segmentno', 'segment_no', 'segment no',
               'segid', 'seg_id', 'seg id', 'seg', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'شريحة', 'شريحه', 'قطاع'
             ]);
-          } else if (field === 'STREETNAME' || field === 'Street' || field === 'STREET_NAME') {
-            matchedList = findAllMatchingSources(['streetname', 'street', 'الشارع', 'اسم_الشارع', 'الشارع (مسترجع)']);
+          } else if (field === 'STREETNAME' || field === 'Street' || field === 'STREET_NAME' || field === 'اسم الشارع' || field === 'الشارع') {
+            matchedList = findAllMatchingSources(['streetname', 'street', 'الشارع', 'اسم_الشارع', 'اسم الشارع', 'الشارع (مسترجع)']);
             if (matchedList.length === 0) {
               matchedList = ['الشارع (مسترجع)'];
             }
-          } else if (field === 'DISTRICT' || field === 'District') {
-            matchedList = findAllMatchingSources(['district', 'الحي', 'اسم_الحي', 'الحي (مسترجع)']);
+          } else if (field === 'DISTRICT' || field === 'District' || field === 'الحي' || field === 'اسم الحي') {
+            matchedList = findAllMatchingSources(['district', 'الحي', 'اسم_الحي', 'اسم الحي', 'الحي (مسترجع)']);
             if (matchedList.length === 0) {
               matchedList = ['الحي (مسترجع)'];
             }
@@ -670,12 +670,12 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
     const isStreetTarget = (fName: string) => {
       const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
-      return lower === 'streetname' || lower === 'street' || lower === 'street_name' || lower === 'اسمالشارع' || lower === 'الشارع';
+      return lower === 'streetname' || lower === 'street' || lower === 'street_name' || lower === 'اسمالشارع' || lower === 'الشارع' || lower === 'شارع';
     };
 
     const isDistrictTarget = (fName: string) => {
       const lower = fName.toLowerCase().replace(/[\s_#-]/g, '');
-      return lower === 'district' || lower === 'اسمالحي' || lower === 'الحي';
+      return lower === 'district' || lower === 'اسمالحي' || lower === 'الحي' || lower === 'حي';
     };
 
     const processedPoints = pts.map(p => {
@@ -702,14 +702,16 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
               break;
             }
           } else if (sf === 'الشارع (مسترجع)') {
-            if (p.street) {
-              val = p.street;
+            const st = p.street || (p.attributes && (p.attributes['STREETNAME'] || p.attributes['الشارع'] || p.attributes['اسم الشارع'] || p.attributes['اسم_الشارع'])) || '';
+            if (st && st !== 'غير متوفر' && st !== 'Unknown' && st !== 'غير معروف') {
+              val = st;
               mappedSourceFields.add(sf);
               break;
             }
           } else if (sf === 'الحي (مسترجع)') {
-            if (p.district) {
-              val = p.district;
+            const dist = p.district || (p.attributes && (p.attributes['DISTRICT'] || p.attributes['الحي'] || p.attributes['اسم الحي'] || p.attributes['اسم_الحي'])) || '';
+            if (dist && dist !== 'غير متوفر' && dist !== 'Unknown' && dist !== 'غير معروف') {
+              val = dist;
               mappedSourceFields.add(sf);
               break;
             }
@@ -762,10 +764,16 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
 
         // Fallback: If val is empty and this is a street or district field, auto-fill from reverse geocoded map data
         if (!val && isStreetTarget(field)) {
-            val = p.street || '';
+            const st = p.street || (p.attributes && (p.attributes['STREETNAME'] || p.attributes['الشارع'] || p.attributes['اسم الشارع'] || p.attributes['اسم_الشارع'])) || '';
+            if (st && st !== 'غير متوفر' && st !== 'Unknown' && st !== 'غير معروف') {
+                val = st;
+            }
         }
         if (!val && isDistrictTarget(field)) {
-            val = p.district || '';
+            const dist = p.district || (p.attributes && (p.attributes['DISTRICT'] || p.attributes['الحي'] || p.attributes['اسم الحي'] || p.attributes['اسم_الحي'])) || '';
+            if (dist && dist !== 'غير متوفر' && dist !== 'Unknown' && dist !== 'غير معروف') {
+                val = dist;
+            }
         }
 
         if (!val && mapRules?.defaultValue) val = mapRules.defaultValue;
@@ -899,6 +907,11 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   };
 
   const wrapLoading = async (msg: string, task: () => void | Promise<void>) => {
+    if (isExecutingRef.current) {
+      if (setGlobalStatus) setGlobalStatus(msg);
+      await task();
+      return;
+    }
     if (runWithLoading) {
       await runWithLoading(msg, task);
     } else if (setGlobalLoading) {
@@ -1045,51 +1058,46 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   };
 
 
-  useEffect(() => {
-    if (isExecuting && pendingAction) {
-      const run = async () => {
-        try {
-            let updatedPoints = points;
-            if (autoFetchStreets && fetchStreets) {
-               if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري جلب أسماء الشوارع والأحياء...' : 'Fetching street and district names...');
-               updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
-            }
-            if (setGlobalProgress) setGlobalProgress(85);
-            if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري إنشاء وتصدير الملف النهائي...' : 'Generating final export file...');
-            await pendingAction(updatedPoints);
-            if (setGlobalProgress) setGlobalProgress(100);
-            if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'تمت العملية بنجاح! 🗺️' : 'Completed successfully! 🗺️');
-            await new Promise(r => setTimeout(r, 500));
-        } catch (err: any) {
-            console.error("Export Action Error:", err);
-            setActionError((lang === 'ar' ? "حدث خطأ أثناء التصدير: " : "Export error: ") + (err?.message || String(err)));
-        } finally {
-            setIsExecuting(false);
-            setPendingAction(null);
-            if (setGlobalLoading) setGlobalLoading(false);
-            if (setGlobalProgress) setGlobalProgress(null);
-        }
-      };
-      // Yield to browser to ensure modal is painted before heavy work
-      setTimeout(run, 100);
-    }
-  }, [isExecuting, pendingAction, points, autoFetchStreets, fetchStreets, lang, setGlobalLoading, setGlobalProgress, setGlobalStatus]);
-
-  const executeAction = (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
-    setActionError(null);
-    setSuccessMessage(null);
+  const executeAction = async (action: (overridePoints?: GeoPoint[]) => void | Promise<void>) => {
+    if (isExecutingRef.current) return;
     if (!points || points.length === 0) {
       setActionError(lang === 'ar' ? 'لا توجد عناصر مجهزة لتنسيقها أو تصديرها. يرجى رفع ملف أو اختيار طبقة بيانات أولاً.' : 'No data points available.');
       return;
     }
-    
-    // 1. Trigger loading UI
+
+    isExecutingRef.current = true;
+    setIsExecuting(true);
+    setActionError(null);
+    setSuccessMessage(null);
+
     if (setGlobalLoading) setGlobalLoading(true);
     if (setGlobalProgress) setGlobalProgress(15);
     if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري تجهيز وتنسيق البيانات...' : 'Preparing formatted data...');
-    setIsExecuting(true);
-    // 2. Queue the action
-    setPendingAction(() => action);
+
+    try {
+      let updatedPoints = points;
+      if (autoFetchStreets && fetchStreets) {
+        if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري جلب أسماء الشوارع والأحياء من الخريطة...' : 'Fetching street and district names from map...');
+        if (setGlobalProgress) setGlobalProgress(25);
+        updatedPoints = await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], undefined, true);
+      }
+      if (setGlobalProgress) setGlobalProgress(80);
+      if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري إنشاء وتصدير الملف النهائي...' : 'Generating final export file...');
+      
+      await action(updatedPoints);
+      
+      if (setGlobalProgress) setGlobalProgress(100);
+      if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'تمت العملية وتنزيل الملف بنجاح! 🗺️' : 'Completed and downloaded successfully! 🗺️');
+      await new Promise(r => setTimeout(r, 400));
+    } catch (err: any) {
+      console.error("Export Action Error:", err);
+      setActionError((lang === 'ar' ? "حدث خطأ أثناء التصدير: " : "Export error: ") + (err?.message || String(err)));
+    } finally {
+      isExecutingRef.current = false;
+      setIsExecuting(false);
+      if (setGlobalLoading) setGlobalLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
+    }
   };
 
   return (
@@ -1276,19 +1284,22 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                   type="button"
                   disabled={isExecuting}
                   onClick={async () => {
+                    if (isExecutingRef.current) return;
                     if (!points || points.length === 0) {
                       setActionError(lang === 'ar' ? 'لا توجد عناصر مجهزة لجلب الشوارع. يرجى رفع ملف أو اختيار طبقة أولاً.' : 'No elements available.');
                       return;
                     }
+                    isExecutingRef.current = true;
+                    setIsExecuting(true);
                     setActionError(null);
                     setSuccessMessage(null);
-                    setIsExecuting(true);
                     try {
-                      await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي']);
+                      await fetchStreets(points, ['STREETNAME', 'اسم الشارع', 'DISTRICT', 'الحي'], undefined, true);
                       setSuccessMessage(lang === 'ar' ? 'تم جلب وتحديث أسماء الشوارع والأحياء بنجاح! 🗺️' : 'Streets and districts fetched successfully! 🗺️');
                     } catch (e: any) {
                       setActionError((lang === 'ar' ? 'حدث خطأ أثناء جلب الشوارع: ' : 'Error fetching streets: ') + (e?.message || String(e)));
                     } finally {
+                      isExecutingRef.current = false;
                       setIsExecuting(false);
                     }
                   }}

@@ -432,11 +432,15 @@ const UniversalExportBar = ({
   onKmzExport: () => void;
   runWithLoading?: (msg: string, task: () => void | Promise<void>) => Promise<void>;
 }) => {
-  const handleWrapper = (msg: string, task: () => void | Promise<void>) => {
+  const handleWrapper = async (msg: string, task: () => void | Promise<void>) => {
+    if (!data || data.length === 0) {
+      alert(lang === 'ar' ? 'لا توجد بيانات متاحة للتصدير. يرجى اختيار أو رفع طبقة بيانات أولاً.' : 'No data available for export.');
+      return;
+    }
     if (runWithLoading) {
-      runWithLoading(msg, task);
+      await runWithLoading(msg, task);
     } else {
-      task();
+      await task();
     }
   };
 
@@ -784,9 +788,20 @@ const App: React.FC = () => {
   const handleRemoveOutfallTarget = (id: string) => {
     setOutfallTargets(prev => {
       const next = prev.filter(o => o.id !== id);
-      setTimeout(() => {
-        handleOrientNetworkTowardsMultiOutfalls(next);
-      }, 50);
+      if (next.length === 0) {
+        // If all outfalls were deleted, clear outfall nodes from flow analysis and re-analyze cleanly
+        setFlowAnalysis(fPrev => fPrev ? { ...fPrev, outfallNodes: [] } : null);
+        import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
+          analyzeNetworkFlowDirections(globalPoints).then(res => {
+            setFlowAnalysis(res);
+          });
+        });
+        setDataId(`clear-outfalls-${Date.now()}`);
+      } else {
+        setTimeout(() => {
+          handleOrientNetworkTowardsMultiOutfalls(next);
+        }, 50);
+      }
       return next;
     });
     setStatusMessage(
@@ -796,8 +811,24 @@ const App: React.FC = () => {
 
   const handleClearOutfallTargets = () => {
     setOutfallTargets([]);
+    // Immediately clear outfall nodes from flow analysis
+    setFlowAnalysis(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        outfallNodes: []
+      };
+    });
+    // Re-run fresh flow direction analysis without explicit outfall targets
+    import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
+      analyzeNetworkFlowDirections(globalPoints).then(res => {
+        setFlowAnalysis(res);
+      });
+    });
+    // Trigger map update
+    setDataId(`clear-outfalls-${Date.now()}`);
     setStatusMessage(
-      lang === 'ar' ? 'تم مسح نقاط المصب المخصصة.' : 'Cleared custom outfall targets.'
+      lang === 'ar' ? 'تم مسح كافة المصبات المحددة وإزالتها من الخريطة.' : 'Cleared all custom outfall targets from the map.'
     );
   };
 
@@ -5001,7 +5032,8 @@ const App: React.FC = () => {
   const executeWithStreetFetching = async (
     points: GeoPoint[],
     headers: string[] | undefined,
-    callback?: (pts: GeoPoint[]) => void | Promise<void>
+    callback?: (pts: GeoPoint[]) => void | Promise<void>,
+    forceFetch: boolean = false
   ): Promise<GeoPoint[]> => {
     if (!points || points.length === 0) {
       setError(lang === 'ar' ? 'لا توجد عناصر مجهزة لجلب الشوارع. يرجى رفع ملف أو اختيار طبقة بيانات أولاً.' : 'No elements available to fetch streets.');
@@ -5010,19 +5042,17 @@ const App: React.FC = () => {
 
     let newGlobalPoints = points.map(p => ({ ...p, attributes: { ...(p.attributes || {}) } }));
 
-    if (skipStreetFetching) {
-      if (callback) {
-        setLoading(true);
-        setStatusMessage(lang === 'ar' ? 'جاري تجهيز البيانات للتصدير...' : 'Preparing data for export...');
-        await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
-        try {
-          await callback(newGlobalPoints);
-        } catch (e: any) {
-          setError(e.message || String(e));
-        } finally {
-          setLoading(false);
-          setStatusMessage('');
-        }
+    if (skipStreetFetching && callback && !forceFetch) {
+      setLoading(true);
+      setStatusMessage(lang === 'ar' ? 'جاري تجهيز البيانات للتصدير...' : 'Preparing data for export...');
+      await new Promise(r => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))); });
+      try {
+        await callback(newGlobalPoints);
+      } catch (e: any) {
+        setError(e.message || String(e));
+      } finally {
+        setLoading(false);
+        setStatusMessage('');
       }
       return newGlobalPoints;
     }
@@ -5030,15 +5060,15 @@ const App: React.FC = () => {
     setLoading(true);
     setProgressPercent(5);
     setStatusMessage(lang === 'ar'
-        ? `جاري بدء جلب أسماء الشوارع (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'})...`
-        : `Starting Street Name Fetching (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'})...`
+        ? `جاري بدء جلب أسماء الشوارع والأحياء (${geocodingMode === 'accurate' ? 'نمط دقيق جداً 🎯' : 'نمط سريع ⚡'})...`
+        : `Starting Street & District Fetching (${geocodingMode === 'accurate' ? 'Accurate Mode 🎯' : 'Fast Mode ⚡'})...`
     );
     await new Promise<void>(r => setTimeout(r, 120)); // Force UI to paint modal overlay
 
     try {
       const total = newGlobalPoints.length;
       if (total > 0) {
-        const batchSize = geocodingMode === 'accurate' ? 2 : 5;
+        const batchSize = geocodingMode === 'accurate' ? 3 : 6;
         let lastResolvedDetail = "";
 
         for (let i = 0; i < total; i += batchSize) {
@@ -5051,18 +5081,22 @@ const App: React.FC = () => {
                 let street = pt.street;
                 let district = pt.district;
 
-                if (!street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف" || street === "شارع غير معروف") {
+                const isStreetMissing = !street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف" || street === "شارع غير معروف" || street.trim() === "";
+                const isDistrictMissing = !district || district === "غير متوفر" || district === "Unknown" || district === "غير معروف" || district.trim() === "";
+
+                if (isStreetMissing || isDistrictMissing) {
                     try {
                         let targetY = pt.y;
                         let targetX = pt.x;
-                        if ((!targetY || !targetX) && pt.path && pt.path.length > 0) {
-                          targetY = pt.path[0].y;
-                          targetX = pt.path[0].x;
+                        if ((targetY === undefined || targetX === undefined || isNaN(targetY) || isNaN(targetX) || (targetY === 0 && targetX === 0)) && pt.path && pt.path.length > 0) {
+                          const midIdx = Math.floor(pt.path.length / 2);
+                          targetY = pt.path[midIdx]?.y ?? pt.path[0]?.y;
+                          targetX = pt.path[midIdx]?.x ?? pt.path[0]?.x;
                         }
 
-                        if (targetY && targetX) {
+                        if (targetY !== undefined && targetX !== undefined && !isNaN(targetY) && !isNaN(targetX) && (targetY !== 0 || targetX !== 0)) {
                           const timeoutPromise = new Promise<{street: string, district: string}>((resolve) => {
-                            setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 2500);
+                            setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 3500);
                           });
                           const geoData = await Promise.race([
                             getReverseGeocode(targetY, targetX, geocodingMode),
@@ -5091,15 +5125,19 @@ const App: React.FC = () => {
                 const finalStreet = street && street !== "غير متوفر" ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
                 const finalDistrict = district && district !== "غير متوفر" ? district : (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
+                pt.street = finalStreet;
+                pt.district = finalDistrict;
+
                 if (streetMappingCol) {
                     pt.attributes[streetMappingCol] = finalStreet;
                 } else {
                     pt.attributes['STREETNAME'] = finalStreet;
                     pt.attributes['الشارع'] = finalStreet;
                     pt.attributes['اسم الشارع'] = finalStreet;
+                    pt.attributes['اسم_الشارع'] = finalStreet;
                     safeHeaders.forEach(h => {
                       const lowerH = String(h || '').toLowerCase();
-                      if (['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
+                      if (['street', 'streetname', 'اسم الشارع', 'الشارع', 'اسم_الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
                         pt.attributes[h] = finalStreet;
                       }
                     });
@@ -5110,9 +5148,11 @@ const App: React.FC = () => {
                 } else {
                     pt.attributes['DISTRICT'] = finalDistrict;
                     pt.attributes['الحي'] = finalDistrict;
+                    pt.attributes['اسم الحي'] = finalDistrict;
+                    pt.attributes['اسم_الحي'] = finalDistrict;
                     safeHeaders.forEach(h => {
                       const lowerH = String(h || '').toLowerCase();
-                      if (['district', 'الحي'].includes(lowerH) || h === 'الحي') {
+                      if (['district', 'الحي', 'اسم الحي', 'اسم_الحي'].includes(lowerH) || h === 'الحي' || h === 'اسم الحي') {
                         pt.attributes[h] = finalDistrict;
                       }
                     });
@@ -5129,7 +5169,7 @@ const App: React.FC = () => {
             );
 
             // Small delay between batches to respect network rate limits & yield to UI thread
-            await new Promise(res => setTimeout(res, 25));
+            await new Promise(res => setTimeout(res, 20));
         }
         setGlobalPoints(prev => {
            const next = [...prev];

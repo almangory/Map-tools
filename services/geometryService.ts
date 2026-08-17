@@ -427,7 +427,34 @@ export const getReverseGeocode = async (
         }
     }
 
-    // 3. Fallback: Photon API & Nominatim if street or district is still incomplete
+    // 3. Fallback: BigDataCloud & Photon API & Nominatim if street or district is still incomplete
+    if (!street || street.length <= 2 || !district) {
+        try {
+            const bdcUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${queryLat}&longitude=${queryLon}&localityLanguage=ar`;
+            const bdcRes = await fetchWithTimeout(bdcUrl, {}, 2200);
+            if (bdcRes && bdcRes.ok) {
+                const bdcData = await bdcRes.json();
+                if (bdcData) {
+                    if (!district) {
+                        district = bdcData.locality || bdcData.city || bdcData.principalSubdivision || "";
+                    }
+                    if (!street || street.length <= 2) {
+                        const info = bdcData.localityInfo?.informative || [];
+                        const streetObj = info.find((it: any) => 
+                            (it.description && (it.description.toLowerCase().includes('road') || it.description.toLowerCase().includes('street'))) || 
+                            (it.order && it.order >= 8)
+                        );
+                        if (streetObj?.name) {
+                            street = streetObj.name;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignore
+        }
+    }
+
     if (!street || street.length <= 2 || !district) {
         try {
             // Photon reverse geocoding (fast & CORS open)

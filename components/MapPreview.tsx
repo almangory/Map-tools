@@ -364,10 +364,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           });
         }
       });
-    }
-
-    if (flowAnalysis?.outfallNodes) {
+    } else if (flowAnalysis?.outfallNodes && (!outfallTargets || outfallTargets.length === 0)) {
       flowAnalysis.outfallNodes.forEach(n => {
+        // Skip stale target outfalls when targets have been cleared
+        if ((n as any).isTarget || (n as any).isExplicitTarget || n.id?.startsWith('OUTFALL_') || n.id?.startsWith('target-')) return;
         const nodeFurthest = (n as any).furthestPipe as OutfallFurthestPipeInfo | undefined;
         if (((n as any).isDistanceExceeded || nodeFurthest?.exceedsStandard) && nodeFurthest && nodeFurthest.furthestPoint) {
           if (!list.some(item => item.id === n.id)) {
@@ -1418,12 +1418,12 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             isDistanceExceeded: t.isDistanceExceeded || t.furthestPipe?.exceedsStandard
           });
         });
-      }
-
-      // 2. Add or merge engine detected outfalls
-      if (flowAnalysis?.outfallNodes) {
+      } else if (flowAnalysis?.outfallNodes && (!outfallTargets || outfallTargets.length === 0)) {
+        // 2. Add or merge engine detected outfalls (only natural network sinks if no custom targets or cleared)
         flowAnalysis.outfallNodes.forEach((node, idx) => {
           if (!isValidLatLng(node.y, node.x)) return;
+          // Skip if this was an explicit custom target that has been cleared
+          if ((node as any).isTarget || (node as any).isExplicitTarget || node.id?.startsWith('OUTFALL_') || node.id?.startsWith('target-')) return;
           const key = node.id || `outfall-${idx}`;
           const existing = combinedOutfallsMap.get(key);
           const nodeFurthest = (node as any).furthestPipe as OutfallFurthestPipeInfo | undefined;
@@ -1733,7 +1733,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showOutfalls, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis, activeColorMode, activeHydraulicSummary]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showOutfalls, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis, activeColorMode, activeHydraulicSummary, outfallTargets]);
 
   const toggleDrawing = () => {
     if (isDrawing) {
@@ -2265,8 +2265,11 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                                   {onRemoveOutfallTarget && (
                                     <button
                                       type="button"
-                                      onClick={() => onRemoveOutfallTarget(of.id)}
-                                      className="p-1 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-all"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onRemoveOutfallTarget(of.id);
+                                      }}
+                                      className="p-1 hover:bg-red-500/20 text-slate-400 hover:text-red-400 rounded-lg transition-all cursor-pointer"
                                       title={lang === 'ar' ? 'حذف هذا المصب' : 'Remove this outfall'}
                                     >
                                       <Trash2 className="w-3 h-3" />
@@ -2292,7 +2295,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                                   {fur.furthestPoint && (
                                     <button
                                       type="button"
-                                      onClick={() => (window as any).__focusFurthestPipe?.(fur.furthestPoint.x, fur.furthestPoint.y, of.x, of.y)}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        (window as any).__focusFurthestPipe?.(fur.furthestPoint.x, fur.furthestPoint.y, of.x, of.y);
+                                      }}
                                       className="text-cyan-300 hover:text-cyan-100 underline text-[8.5px] cursor-pointer"
                                     >
                                       {lang === 'ar' ? 'عرض المسار' : 'View Ray'}
@@ -2306,10 +2312,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                         {onClearOutfallTargets && (
                           <button
                             type="button"
-                            onClick={onClearOutfallTargets}
-                            className="w-full py-1 text-[9px] text-rose-400/80 hover:text-rose-300 transition-all text-center"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onClearOutfallTargets();
+                            }}
+                            className="w-full py-1.5 px-2 text-[9.5px] font-bold text-rose-400 hover:text-rose-200 hover:bg-red-500/10 rounded-lg border border-transparent hover:border-red-500/20 transition-all text-center cursor-pointer flex items-center justify-center gap-1"
                           >
-                            {lang === 'ar' ? 'مسح كافة المصبات المحددة' : 'Clear all custom outfalls'}
+                            <Trash2 className="w-3 h-3 text-rose-400" />
+                            <span>{lang === 'ar' ? 'مسح كافة المصبات المحددة' : 'Clear all custom outfalls'}</span>
                           </button>
                         )}
                       </div>
