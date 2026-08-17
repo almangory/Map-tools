@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Database, Download, AlertTriangle, AlertOctagon, ArrowRight, ArrowLeft, RefreshCw, Layers, CheckCircle2, CloudDownload, PenTool, FileSpreadsheet, FileText, Target, Zap, Check, ChevronDown, X, Search, Plus, ShieldCheck, FolderArchive, Loader2, Map as MapIcon, AlertCircle } from 'lucide-react';
 import { GeoPoint } from '../types';
 import { OverlapResult } from '../services/geometryService';
-import { downloadKMZ } from '../services/kmlService';
+import { downloadKMZ, downloadKMZGroupedZip } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
 import { downloadShapefile } from '../services/shapefileExportService';
@@ -466,6 +466,8 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
   const [standardizeColors, setStandardizeColors] = useState(false);
   const [standardizePolygonColors, setStandardizePolygonColors] = useState(false);
   const [keepOriginalGridStyle, setKeepOriginalGridStyle] = useState(false);
+  const [colorExportMode, setColorExportMode] = useState<'none' | 'folders' | 'separate_zip'>('none');
+  const [kmlLineWidth, setKmlLineWidth] = useState<number>(3);
   const [nameSourceField, setNameSourceField] = useState<string>('');
   
   // Collect all unique attributes from current points
@@ -937,22 +939,34 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
       async () => {
         try {
           const { processedPoints, templateFields } = getProcessedPoints(pts);
-          await downloadKMZ(processedPoints, getBaseFilename(), { 
-            mode: keepFolders ? 'layer' : 'none', 
-            groupByAttribute: keepFolders ? 'layer' : undefined,
+          const isColorGrouped = colorExportMode === 'folders' || colorExportMode === 'separate_zip';
+          const exportOpts: any = { 
+            mode: colorExportMode === 'folders' ? 'attribute' : (keepFolders ? 'layer' : 'none'), 
+            groupByAttribute: isColorGrouped ? 'color' : (keepFolders ? 'layer' : undefined),
             optimizeForMyMaps: optimizeForMyMaps,
             keepOriginalDescription: keepOriginalDescription,
             removeImagesOnly: removeImagesOnly,
             standardizeColors: standardizeColors,
-            lineStyle: { width: 3 },
+            lineStyle: { width: kmlLineWidth },
             ...((targetTemplate === 'polygons' || targetTemplate === 'boundaries') ? {
                 polygonStyle: {
                     ...(standardizePolygonColors ? { colorHex: '#0288d1', opacityHex: '4d' } : {}),
-                    ...(optimizeForMyMaps || standardizePolygonColors ? { outline: 0, width: 0 } : {})
+                    ...(optimizeForMyMaps || standardizePolygonColors ? { outline: 0, width: 0 } : { width: Math.min(kmlLineWidth, 4) })
                 }
             } : {})
-        }, templateFields, templateFields);
-          setSuccessMessage("تم تصدير ملف KMZ بنجاح!");
+          };
+
+          if (colorExportMode === 'separate_zip') {
+            await downloadKMZGroupedZip(processedPoints, getBaseFilename(), exportOpts, templateFields, templateFields);
+            setSuccessMessage(lang === 'ar' ? "تم تصدير ملفات KMZ مفصولة حسب الألوان بمجلد مضغوط (ZIP) بنجاح!" : "KMZ files separated by color exported in ZIP successfully!");
+          } else {
+            await downloadKMZ(processedPoints, getBaseFilename(), exportOpts, templateFields, templateFields);
+            setSuccessMessage(
+              colorExportMode === 'folders'
+                ? (lang === 'ar' ? "تم تصدير ملف KMZ بمجلدات مفصولة حسب الألوان بنجاح!" : "KMZ with folders by color exported successfully!")
+                : (lang === 'ar' ? "تم تصدير ملف KMZ بنجاح!" : "KMZ exported successfully!")
+            );
+          }
         } catch (e: any) { setActionError("Error exporting KMZ: " + e.message); console.error(e); }
       }
     );
@@ -1633,10 +1647,171 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             </div>
           </div>
 
+          {/* إعدادات وتخصيص تصدير KMZ (فصل الألوان وضبط عرض الخط) */}
+          <div className="bg-[#051c27]/90 p-5 rounded-3xl border border-cyan-500/30 shadow-2xl space-y-5 mt-6">
+            <div className="flex items-center justify-between pb-3 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-cyan-500/20 rounded-xl border border-cyan-500/40 text-cyan-300">
+                  <MapIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-white font-black text-sm">
+                    {lang === 'ar' ? 'خيارات متقدمة لتصدير KMZ (فصل الألوان وسماكة الخط)' : 'KMZ Advanced Options (Color Separation & Line Width)'}
+                  </h4>
+                  <p className="text-cyan-200/60 text-[11px]">
+                    {lang === 'ar' ? 'فصل الطبقات حسب الألوان في مجلدات أو ملفات مضغوطة مع تحديد عرض الخط من 1 إلى 10' : 'Separate layers by color in folders or ZIP, with line width 1-10'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 1. خاصية فصل الألوان */}
+            <div className="space-y-2.5">
+              <label className="text-xs font-black text-white flex items-center gap-2">
+                <Layers className="w-4 h-4 text-amber-400" />
+                <span>{lang === 'ar' ? '1. خاصية فصل الألوان:' : '1. Color Separation Mode:'}</span>
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setColorExportMode('none')}
+                  className={cn(
+                    "p-3 rounded-2xl border text-start transition-all flex flex-col justify-between gap-2",
+                    colorExportMode === 'none'
+                      ? "bg-cyan-500/20 border-cyan-400 text-white shadow-lg ring-1 ring-cyan-400/50"
+                      : "bg-black/20 border-white/5 text-white/70 hover:bg-white/5 hover:text-white"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-xs">{lang === 'ar' ? 'ملف موحد عادي' : 'Single Unified KMZ'}</span>
+                    {colorExportMode === 'none' && <Check className="w-4 h-4 text-cyan-400" />}
+                  </div>
+                  <span className="text-[10px] text-white/50 leading-relaxed">
+                    {lang === 'ar' ? 'تصدير كامل العناصر في ملف KMZ واحد موحد بالهيكل الأصلي' : 'Export all elements in one single standard KMZ'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setColorExportMode('folders')}
+                  className={cn(
+                    "p-3 rounded-2xl border text-start transition-all flex flex-col justify-between gap-2",
+                    colorExportMode === 'folders'
+                      ? "bg-amber-500/20 border-amber-400 text-white shadow-lg ring-1 ring-amber-400/50"
+                      : "bg-black/20 border-white/5 text-white/70 hover:bg-white/5 hover:text-white"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-xs text-amber-300">{lang === 'ar' ? 'مجلدات حسب الألوان' : 'Folders by Color'}</span>
+                    {colorExportMode === 'folders' && <Check className="w-4 h-4 text-amber-400" />}
+                  </div>
+                  <span className="text-[10px] text-white/50 leading-relaxed">
+                    {lang === 'ar' ? 'ملف KMZ واحد مقسم لمجلدات فرعية لكل لون وأطواله' : 'Single KMZ with sub-folders grouped by color'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setColorExportMode('separate_zip')}
+                  className={cn(
+                    "p-3 rounded-2xl border text-start transition-all flex flex-col justify-between gap-2",
+                    colorExportMode === 'separate_zip'
+                      ? "bg-emerald-500/20 border-emerald-400 text-white shadow-lg ring-1 ring-emerald-400/50"
+                      : "bg-black/20 border-white/5 text-white/70 hover:bg-white/5 hover:text-white"
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-xs text-emerald-300">{lang === 'ar' ? 'ملفات متفرقة (ZIP)' : 'Separate KMZs in ZIP'}</span>
+                    {colorExportMode === 'separate_zip' && <Check className="w-4 h-4 text-emerald-400" />}
+                  </div>
+                  <span className="text-[10px] text-white/50 leading-relaxed">
+                    {lang === 'ar' ? 'ملف KMZ مستقل لكل لون مجمعة داخل ملف مضغوط ZIP' : 'Individual KMZ per color packaged into a ZIP archive'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* 2. ضبط عرض الخط 1-10 */}
+            <div className="space-y-3 pt-3 border-t border-white/5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-white flex items-center gap-2">
+                  <PenTool className="w-4 h-4 text-cyan-400" />
+                  <span>{lang === 'ar' ? '2. ضبط عرض الخط (Line Width) من 1 إلى 10:' : '2. Set Line Width (1 - 10):'}</span>
+                </label>
+                <span className="text-xs font-mono font-bold bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 px-3 py-1 rounded-xl shadow-sm">
+                  {kmlLineWidth} px
+                </span>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center gap-4">
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={kmlLineWidth}
+                  onChange={(e) => setKmlLineWidth(parseInt(e.target.value) || 1)}
+                  className="w-full h-2 bg-black/40 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                />
+                <div className="flex items-center gap-1 shrink-0 overflow-x-auto max-w-full pb-1 sm:pb-0">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
+                    <button
+                      key={num}
+                      type="button"
+                      onClick={() => setKmlLineWidth(num)}
+                      className={cn(
+                        "w-7 h-7 rounded-lg text-[11px] font-mono font-black transition-all flex items-center justify-center",
+                        kmlLineWidth === num
+                          ? "bg-cyan-400 text-black scale-110 shadow-md font-black"
+                          : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+                      )}
+                    >
+                      {num}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* معاينة حية لسماكة الخط */}
+              <div className="p-3 bg-black/40 rounded-2xl border border-white/5 flex items-center justify-between gap-4">
+                <span className="text-[10px] text-white/60 font-bold shrink-0">{lang === 'ar' ? 'معاينة سماكة الخط:' : 'Line Stroke Preview:'}</span>
+                <div className="flex-1 flex items-center justify-center">
+                  <div 
+                    className="bg-cyan-400 rounded-full transition-all duration-200 shadow-sm"
+                    style={{ height: `${kmlLineWidth * 2}px`, width: '100%', maxWidth: '260px' }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-cyan-300 font-bold shrink-0">{kmlLineWidth} px</span>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mt-4">
-            <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportKMZ)} className="bg-white/5 border border-white/10 hover:bg-white/10 rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
-              {isExecuting ? <Loader2 className="w-5 h-5 text-blue-400 animate-spin" /> : <CloudDownload className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />}
-              <span className="text-white font-black text-[11px]">{lang === 'ar' ? 'KMZ' : 'KMZ'}</span>
+            <button 
+              disabled={isExecuting} 
+              onClick={() => executeAction(handleApplyExportKMZ)} 
+              className={cn(
+                "border rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-all group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-95",
+                colorExportMode === 'separate_zip'
+                  ? "bg-emerald-950/70 border-emerald-500/40 hover:bg-emerald-600/30"
+                  : colorExportMode === 'folders'
+                    ? "bg-amber-950/70 border-amber-500/40 hover:bg-amber-600/30"
+                    : "bg-blue-950/60 border-blue-500/40 hover:bg-blue-600/30"
+              )}
+            >
+              {isExecuting ? <Loader2 className="w-5 h-5 text-cyan-400 animate-spin" /> : <CloudDownload className="w-5 h-5 text-cyan-400 group-hover:scale-110 transition-transform" />}
+              <div className="flex flex-col items-center leading-tight">
+                <span className="text-white font-black text-[11px]">
+                  {colorExportMode === 'separate_zip'
+                    ? (lang === 'ar' ? 'KMZ (ملفات ZIP)' : 'KMZ (ZIP)')
+                    : colorExportMode === 'folders'
+                      ? (lang === 'ar' ? 'KMZ (مجلدات)' : 'KMZ (Folders)')
+                      : 'KMZ'}
+                </span>
+                <span className="text-[9px] text-cyan-300/80 font-mono font-bold">
+                  {kmlLineWidth}px
+                </span>
+              </div>
             </button>
             <button disabled={isExecuting} onClick={() => executeAction(handleApplyExportShapefile)} className="bg-emerald-950/80 border border-emerald-500/40 hover:bg-emerald-500 hover:text-white rounded-2xl py-4 flex flex-col items-center justify-center gap-2 transition-colors group shadow-inner disabled:opacity-50 disabled:cursor-not-allowed">
               {isExecuting ? <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" /> : <FolderArchive className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />}
