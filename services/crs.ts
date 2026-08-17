@@ -27,12 +27,14 @@ const isInsideSaudi = (lat: number, lon: number) => {
 export const identifyPotentialCRS = (points: GeoPoint[]): string | null => {
   if (points.length === 0) return null;
 
-  // نأخذ عينة من النقاط لتسريع العملية
-  const samples = points.slice(0, 10).filter(p => p.x !== 0 && p.y !== 0);
-  if (samples.length === 0) return null;
+  const validSamples = points
+    .filter(p => typeof p.x === 'number' && Number.isFinite(p.x) && typeof p.y === 'number' && Number.isFinite(p.y))
+    .slice(0, 10)
+    .filter(p => p.x !== 0 && p.y !== 0);
+  if (validSamples.length === 0) return null;
 
   // إذا كانت الأرقام صغيرة جداً فهي غالباً Lat/Lon WGS84
-  if (Math.abs(samples[0].x) <= 180 && Math.abs(samples[0].y) <= 90) {
+  if (Math.abs(validSamples[0].x) <= 180 && Math.abs(validSamples[0].y) <= 90) {
       return 'EPSG:4326';
   }
 
@@ -51,8 +53,8 @@ export const identifyPotentialCRS = (points: GeoPoint[]): string | null => {
     if (!epsg) continue;
     
     try {
-      const [lon, lat] = proj4(epsg.def, '+proj=longlat +datum=WGS84 +no_defs', [samples[0].x, samples[0].y]);
-      if (isInsideSaudi(lat, lon)) {
+      const [lon, lat] = proj4(epsg.def, '+proj=longlat +datum=WGS84 +no_defs', [validSamples[0].x, validSamples[0].y]);
+      if (typeof lat === 'number' && Number.isFinite(lat) && typeof lon === 'number' && Number.isFinite(lon) && isInsideSaudi(lat, lon)) {
         return epsg.code;
       }
     } catch (e) {
@@ -103,14 +105,25 @@ export const transformPoints = (points: GeoPoint[], sourceDef: string): GeoPoint
       let transformedPath = pt.path;
 
       if (!isSourceWGS84 && (Math.abs(pt.x) > 180 || Math.abs(pt.y) > 90)) {
-          const [lon, lat] = proj4(sourceDef, destDef, [pt.x, pt.y]);
-          finalLon = lon;
-          finalLat = lat;
+          if (typeof pt.x === 'number' && Number.isFinite(pt.x) && typeof pt.y === 'number' && Number.isFinite(pt.y)) {
+            const [lon, lat] = proj4(sourceDef, destDef, [pt.x, pt.y]);
+            if (typeof lon === 'number' && Number.isFinite(lon) && typeof lat === 'number' && Number.isFinite(lat)) {
+              finalLon = lon;
+              finalLat = lat;
+            }
+          }
           
-          if (pt.path) {
+          if (pt.path && Array.isArray(pt.path)) {
             transformedPath = pt.path.map(p => {
-               const [plon, plat] = proj4(sourceDef, destDef, [p.x, p.y]);
-               return { x: plon, y: plat, z: p.z };
+               if (typeof p.x === 'number' && Number.isFinite(p.x) && typeof p.y === 'number' && Number.isFinite(p.y)) {
+                 try {
+                   const [plon, plat] = proj4(sourceDef, destDef, [p.x, p.y]);
+                   if (typeof plon === 'number' && Number.isFinite(plon) && typeof plat === 'number' && Number.isFinite(plat)) {
+                     return { x: plon, y: plat, z: p.z };
+                   }
+                 } catch {}
+               }
+               return p;
             });
           }
       }
