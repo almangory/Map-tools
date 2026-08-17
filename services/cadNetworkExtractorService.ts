@@ -1,6 +1,5 @@
 import DxfParser from 'dxf-parser';
 import proj4 from 'proj4';
-import shp from 'shpjs';
 import { GeoPoint } from '../types';
 import { orientNetworkTowardsOutfall } from './gravitySewerEngine';
 
@@ -87,15 +86,34 @@ export const extractStreetNetworkFromDxf = async (
     throw new Error('ملف الـ DXF لا يحتوي على عناصر هندسية قابلة للقراءة.');
   }
 
-  const utmDef = COMMON_UTM_CRS[sourceCrs]?.proj4 || COMMON_UTM_CRS['EPSG:32638'].proj4;
+  const utmDef = COMMON_UTM_CRS[sourceCrs]?.proj4 || COMMON_UTM_CRS['EPSG:32638']?.proj4 || '+proj=utm +zone=38 +ellps=WGS84 +datum=WGS84 +units=m +no_defs';
   const wgs84 = 'EPSG:4326';
 
-  const transformPoint = (x: number, y: number): { x: number; y: number } => {
-    if (sourceCrs === 'EPSG:4326') {
-      return { x, y };
+  const isValidCoord = (num: any): num is number => {
+    return typeof num === 'number' && Number.isFinite(num) && !Number.isNaN(num);
+  };
+
+  const transformPoint = (x: any, y: any): { x: number; y: number } | null => {
+    const numX = typeof x === 'number' ? x : parseFloat(x);
+    const numY = typeof y === 'number' ? y : parseFloat(y);
+
+    if (!isValidCoord(numX) || !isValidCoord(numY)) {
+      return null;
     }
-    const [lng, lat] = proj4(utmDef, wgs84, [x, y]);
-    return { x: lng, y: lat };
+
+    if (sourceCrs === 'EPSG:4326') {
+      return { x: numX, y: numY };
+    }
+
+    try {
+      const [lng, lat] = proj4(utmDef, wgs84, [numX, numY]);
+      if (isValidCoord(lng) && isValidCoord(lat)) {
+        return { x: lng, y: lat };
+      }
+    } catch {
+      // Ignore proj4 calculation error for single point
+    }
+    return null;
   };
 
   const layerStats = new Map<string, number>();
@@ -139,18 +157,24 @@ export const extractStreetNetworkFromDxf = async (
 
     let rawPts: { x: number; y: number }[] = [];
 
-    // Filter ONLY LINE and LWPOLYLINE / POLYLINE / ARC, ignoring texts, dimensions, blocks
-    if (entity.type === 'LINE' && entity.vertices && entity.vertices.length >= 2) {
-      rawPts = entity.vertices.map((v: any) => ({ x: v.x, y: v.y }));
-    } else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && entity.vertices?.length >= 2) {
-      rawPts = entity.vertices.map((v: any) => ({ x: v.x, y: v.y }));
-      if (entity.shape || entity.closed) {
-        rawPts.push({ ...rawPts[0] });
+    // Filter ONLY LINE and LWPOLYLINE / POLYLINE / ARC / CIRCLE / SPLINE, ignoring texts, dimensions, blocks
+    if (entity.type === 'LINE') {
+      if (entity.vertices && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
+        rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
+      } else if (entity.start && entity.end) {
+        rawPts = [{ x: entity.start.x, y: entity.start.y }, { x: entity.end.x, y: entity.end.y }];
+      } else if (entity.startPoint && entity.endPoint) {
+        rawPts = [{ x: entity.startPoint.x, y: entity.startPoint.y }, { x: entity.endPoint.x, y: entity.endPoint.y }];
       }
-    } else if (entity.type === 'ARC' && entity.center) {
+    } else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
+      rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
+      if (entity.shape || entity.closed) {
+        if (rawPts.length >= 2) rawPts.push({ ...rawPts[0] });
+      }
+    } else if (entity.type === 'ARC' && entity.center && isValidCoord(entity.center.x) && isValidCoord(entity.center.y) && isValidCoord(entity.radius)) {
       const { center, radius, startAngle, endAngle } = entity;
-      let sAngle = startAngle;
-      let eAngle = endAngle;
+      let sAngle = isValidCoord(startAngle) ? startAngle : 0;
+      let eAngle = isValidCoord(endAngle) ? endAngle : 360;
       if (eAngle <= sAngle) eAngle += 360;
       const sweep = eAngle - sAngle;
       const numSegs = Math.max(6, Math.ceil(sweep / 15));
@@ -162,27 +186,38 @@ export const extractStreetNetworkFromDxf = async (
           y: center.y + radius * Math.sin(theta)
         });
       }
+    } else if (entity.type === 'SPLINE') {
+      const splinePts = entity.controlPoints || entity.fitPoints || entity.points || entity.vertices || [];
+      if (Array.isArray(splinePts) && splinePts.length >= 2) {
+        rawPts = splinePts.map((v: any) => ({ x: v?.x, y: v?.y }));
+      }
     }
 
-    if (rawPts.length >= 2) {
-      const geoVertices = rawPts.map(pt => {
+    const validRawPts = rawPts.filter(p => p && isValidCoord(p.x) && isValidCoord(p.y));
+    if (validRawPts.length >= 2) {
+      const geoVertices: { x: number; y: number }[] = [];
+      for (const pt of validRawPts) {
         const transformed = transformPoint(pt.x, pt.y);
-        if (transformed.y < minLat) minLat = transformed.y;
-        if (transformed.y > maxLat) maxLat = transformed.y;
-        if (transformed.x < minLng) minLng = transformed.x;
-        if (transformed.x > maxLng) maxLng = transformed.x;
-        return transformed;
-      });
+        if (transformed) {
+          if (transformed.y < minLat) minLat = transformed.y;
+          if (transformed.y > maxLat) maxLat = transformed.y;
+          if (transformed.x < minLng) minLng = transformed.x;
+          if (transformed.x > maxLng) maxLng = transformed.x;
+          geoVertices.push(transformed);
+        }
+      }
 
-      const lengthM = calculatePathLengthMeters(geoVertices);
+      if (geoVertices.length >= 2) {
+        const lengthM = calculatePathLengthMeters(geoVertices);
 
-      extractedLines.push({
-        id: entity.handle || `STREET_${lineCounter++}`,
-        layer,
-        entityType: entity.type,
-        vertices: geoVertices,
-        lengthMeters: lengthM
-      });
+        extractedLines.push({
+          id: entity.handle || `STREET_${lineCounter++}`,
+          layer,
+          entityType: entity.type,
+          vertices: geoVertices,
+          lengthMeters: lengthM
+        });
+      }
     }
   }
 
@@ -208,7 +243,9 @@ export const extractStreetNetworkFromShpOrGeoJson = async (
   let geojson: any;
 
   if (file.name.toLowerCase().endsWith('.zip')) {
-    geojson = await shp(buffer);
+    const shpModule = await import('shpjs');
+    const shpParser = (shpModule.default || shpModule) as any;
+    geojson = await shpParser(buffer);
   } else {
     const text = new TextDecoder().decode(buffer);
     geojson = JSON.parse(text);
@@ -218,13 +255,28 @@ export const extractStreetNetworkFromShpOrGeoJson = async (
     ? geojson.flatMap((g: any) => g.features || [])
     : geojson.features || [];
 
-  const utmDef = COMMON_UTM_CRS[sourceCrs]?.proj4 || COMMON_UTM_CRS['EPSG:32638'].proj4;
+  const utmDef = COMMON_UTM_CRS[sourceCrs]?.proj4 || COMMON_UTM_CRS['EPSG:32638']?.proj4 || '+proj=utm +zone=38 +ellps=WGS84 +datum=WGS84 +units=m +no_defs';
   const wgs84 = 'EPSG:4326';
 
-  const transformPoint = (x: number, y: number): { x: number; y: number } => {
-    if (sourceCrs === 'EPSG:4326') return { x, y };
-    const [lng, lat] = proj4(utmDef, wgs84, [x, y]);
-    return { x: lng, y: lat };
+  const transformPoint = (x: any, y: any): { x: number; y: number } | null => {
+    const numX = typeof x === 'number' ? x : parseFloat(x);
+    const numY = typeof y === 'number' ? y : parseFloat(y);
+
+    if (!isValidCoord(numX) || !isValidCoord(numY)) {
+      return null;
+    }
+
+    if (sourceCrs === 'EPSG:4326') return { x: numX, y: numY };
+
+    try {
+      const [lng, lat] = proj4(utmDef, wgs84, [numX, numY]);
+      if (isValidCoord(lng) && isValidCoord(lat)) {
+        return { x: lng, y: lat };
+      }
+    } catch {
+      // safe fallback
+    }
+    return null;
   };
 
   const layerStats = new Map<string, number>();
@@ -264,15 +316,22 @@ export const extractStreetNetworkFromShpOrGeoJson = async (
     if (!geom) continue;
 
     const processCoords = (coords: number[][]) => {
-      if (coords.length < 2) return;
-      const geoVertices = coords.map(c => {
-        const transformed = transformPoint(c[0], c[1]);
-        if (transformed.y < minLat) minLat = transformed.y;
-        if (transformed.y > maxLat) maxLat = transformed.y;
-        if (transformed.x < minLng) minLng = transformed.x;
-        if (transformed.x > maxLng) maxLng = transformed.x;
-        return transformed;
-      });
+      if (!Array.isArray(coords) || coords.length < 2) return;
+      const geoVertices: { x: number; y: number }[] = [];
+      for (const c of coords) {
+        if (Array.isArray(c) && c.length >= 2) {
+          const transformed = transformPoint(c[0], c[1]);
+          if (transformed) {
+            if (transformed.y < minLat) minLat = transformed.y;
+            if (transformed.y > maxLat) maxLat = transformed.y;
+            if (transformed.x < minLng) minLng = transformed.x;
+            if (transformed.x > maxLng) maxLng = transformed.x;
+            geoVertices.push(transformed);
+          }
+        }
+      }
+
+      if (geoVertices.length < 2) return;
 
       const lengthM = calculatePathLengthMeters(geoVertices);
       extractedLines.push({
@@ -321,7 +380,90 @@ export const generateNetworkPipesFromStreets = (
   config: NetworkPipeCustomConfig,
   targetOutfallCoord?: { x: number; y: number; z?: number }
 ): GeoPoint[] => {
-  const rawPipes = extractedLines.map((line, index) => {
+  if (extractedLines.length === 0) return [];
+
+  const avgLat = extractedLines[0]?.vertices?.[0]?.y || 24.7;
+  const degLat = 111320;
+  const degLng = 111320 * Math.cos((avgLat * Math.PI) / 180);
+
+  // Helper distance in meters
+  const distM = (p1: { x: number; y: number }, p2: { x: number; y: number }): number => {
+    return Math.hypot((p1.x - p2.x) * degLng, (p1.y - p2.y) * degLat);
+  };
+
+  // Build topological graph to detect and discard transverse lot dividers
+  interface NNode {
+    id: number;
+    x: number;
+    y: number;
+    edgeIndices: number[];
+  }
+
+  const nodes: NNode[] = [];
+  const getNode = (pt: { x: number; y: number }): NNode => {
+    for (const n of nodes) {
+      if (distM(n, pt) <= 4.0) return n;
+    }
+    const newNode: NNode = { id: nodes.length, x: pt.x, y: pt.y, edgeIndices: [] };
+    nodes.push(newNode);
+    return newNode;
+  };
+
+  interface NEdge {
+    id: number;
+    line: ExtractedCadLine;
+    u: number;
+    v: number;
+    lenM: number;
+    angle: number;
+    isDivider: boolean;
+  }
+
+  const getAng = (p1: { x: number; y: number }, p2: { x: number; y: number }): number => {
+    let a = Math.atan2((p2.y - p1.y) * degLat, (p2.x - p1.x) * degLng);
+    if (a < 0) a += Math.PI;
+    return a;
+  };
+
+  const edges: NEdge[] = [];
+  extractedLines.forEach(line => {
+    if (!line.vertices || line.vertices.length < 2) return;
+    const nA = getNode(line.vertices[0]);
+    const nB = getNode(line.vertices[line.vertices.length - 1]);
+    const eId = edges.length;
+    const ang = getAng(line.vertices[0], line.vertices[line.vertices.length - 1]);
+    const e: NEdge = {
+      id: eId,
+      line,
+      u: nA.id,
+      v: nB.id,
+      lenM: line.lengthMeters,
+      angle: ang,
+      isDivider: false
+    };
+    edges.push(e);
+    nA.edgeIndices.push(eId);
+    nB.edgeIndices.push(eId);
+  });
+
+  // Identify transverse lot dividers (short dead-end segments < 45m or perpendicular T-junctions)
+  const isSubdivisionWithLots = edges.some(e => e.lenM < 45.0 && (nodes[e.u].edgeIndices.length === 1 || nodes[e.v].edgeIndices.length === 1));
+
+  if (isSubdivisionWithLots && edges.length > 5) {
+    edges.forEach(e => {
+      if (e.lenM > 50.0) return;
+      const degU = nodes[e.u].edgeIndices.length;
+      const degV = nodes[e.v].edgeIndices.length;
+      if ((degU === 1 || degV === 1) && e.lenM < 45.0) {
+        e.isDivider = true;
+      }
+    });
+  }
+
+  const validLines = edges.filter(e => !e.isDivider).map(e => e.line);
+  const linesToUse = validLines.length > 0 ? validLines : extractedLines;
+
+  const rawPipes = linesToUse.map((line, index) => {
     const numStr = String(index + 1).padStart(3, '0');
     const lineId = `${config.linePrefix}_${numStr}`;
     const segmentId = `${config.segmentPrefix}-${numStr}`;
