@@ -5,7 +5,9 @@ import {
   Layers, MapPin, Sparkles, RefreshCw, Trash2, ArrowRight, MousePointer,
   Undo2, Check, X, Search, Navigation, Eye, Maximize2, Map as MapIcon,
   Square, Sliders, Palette, Info, ListOrdered, Hash, Ruler, Tag,
-  FileCheck, ShieldAlert, CheckCircle2, ChevronRight, CornerDownLeft
+  FileCheck, ShieldAlert, CheckCircle2, ChevronRight, CornerDownLeft,
+  Building2, Home, Route, Split, SlidersHorizontal, Layers3, Box, HelpCircle,
+  Loader2, Activity, Cpu, Clock
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -25,6 +27,13 @@ import {
   CadExtractionSummary,
   ExtractedCadLine
 } from '../services/cadNetworkExtractorService';
+import {
+  analyzeSubdivisionDxf,
+  generateSubdivisionUtilities,
+  SubdivisionAnalysisResult,
+  UtilityPipelineOptions,
+  DetectedStreetWidthAnnotation
+} from '../services/cadSubdivisionService';
 import {
   Point2D,
   findNearestPerpendicularPoint,
@@ -187,11 +196,31 @@ export const LineDrawerTab: React.FC<Props> = ({
   const [manualEndX, setManualEndX] = useState<string>('');
   const [manualEndY, setManualEndY] = useState<string>('');
 
-  // --- CAD / GIS Street Network Auto-Extraction State ---
+  // --- CAD / GIS Street & Property Subdivision Intelligence State ---
   const [cadExtractionSummary, setCadExtractionSummary] = useState<CadExtractionSummary | null>(null);
+  const [subdivisionAnalysis, setSubdivisionAnalysis] = useState<SubdivisionAnalysisResult | null>(null);
   const [cadSourceCrs, setCadSourceCrs] = useState<string>('EPSG:32638');
   const [cadSelectedLayers, setCadSelectedLayers] = useState<string[]>([]);
   const [cadLoading, setCadLoading] = useState(false);
+  const [cadSubdivisionView, setCadSubdivisionView] = useState<'dissection' | 'generation' | 'layers' | 'widths'>('dissection');
+  
+  // Property Frontage & Street Utility Generation Configuration
+  const [subdivisionConfig, setSubdivisionConfig] = useState<UtilityPipelineOptions>({
+    networkType: 'both', // 'both' | 'sewer' | 'water'
+    placementMode: 'connected_frontage', // 'connected_frontage' (شبكة متصلة أمام واجهات العقارات وتنتهي بمصبات) | 'street_centerline' | 'dual_sidewalk' | 'property_perimeter_loop'
+    offsetMeters: 2.0,
+    sewerColor: '#ef4444', // Red as in the user's uploaded photo!
+    waterColor: '#3b82f6', // Blue
+    sewerDiameter: '200',
+    waterDiameter: '160',
+    material: 'HDPE',
+    permitNo: 'PERMIT-2026-X',
+    generateManholes: true,
+    generateOutfalls: true,
+    selectedParcelLayers: [],
+    selectedStreetLayers: []
+  });
+
   const [cadAutoPipeConfig, setCadAutoPipeConfig] = useState({
     networkType: 'مياه صالحة للشرب (Potable Water)',
     pipeHierarchy: 'main', // 'main' | 'sub'
@@ -202,6 +231,22 @@ export const LineDrawerTab: React.FC<Props> = ({
     linePrefix: 'PIPE',
     layerName: 'شبكة المياه الرئيسية',
     color: '#3b82f6'
+  });
+
+  // --- Real-time Generation Progress & Non-Freezing State ---
+  const [generationProgress, setGenerationProgress] = useState<{
+    active: boolean;
+    title: string;
+    stage: string;
+    percent: number;
+    subDetails?: string;
+    stepIndex?: number;
+    totalSteps?: number;
+  }>({
+    active: false,
+    title: '',
+    stage: '',
+    percent: 0
   });
 
   // Listen to coordinate pick events from main map
@@ -599,7 +644,7 @@ export const LineDrawerTab: React.FC<Props> = ({
     URL.revokeObjectURL(url);
   };
 
-  // --- CAD Street Extraction Handlers ---
+  // --- CAD Street & Subdivision Extraction Handlers ---
   const handleCadFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
@@ -608,33 +653,106 @@ export const LineDrawerTab: React.FC<Props> = ({
     setError(null);
     setSuccess(null);
 
+    setGenerationProgress({
+      active: true,
+      title: lang === 'ar' ? 'جاري تحليل وتفكيك ملف المخطط...' : 'Analyzing CAD Subdivision File...',
+      stage: lang === 'ar' ? 'قراءة محتوى الملف وفك الترميز الهندسي...' : 'Reading file contents & decoding CAD entities...',
+      percent: 15,
+      stepIndex: 1,
+      totalSteps: 4
+    });
+
     try {
-      let summary: CadExtractionSummary;
+      await new Promise(r => setTimeout(r, 60));
+
+      let summary: CadExtractionSummary | null = null;
+      let analysis: SubdivisionAnalysisResult | null = null;
+
       if (uploadedFile.name.toLowerCase().endsWith('.dxf')) {
+        setGenerationProgress(prev => ({
+          ...prev,
+          stage: lang === 'ar' ? 'تحليل طبقات العقارات والشوارع ولافتات العروض...' : 'Analyzing parcels, streets & width dimensions...',
+          percent: 45,
+          stepIndex: 2
+        }));
+        await new Promise(r => setTimeout(r, 60));
+
+        // Run comprehensive subdivision dissection
+        analysis = await analyzeSubdivisionDxf(uploadedFile, cadSourceCrs);
+
+        setGenerationProgress(prev => ({
+          ...prev,
+          stage: lang === 'ar' ? 'استخراج خطوط ومحاور الشوارع وإسقاط الإحداثيات...' : 'Extracting street axes & projecting UTM coordinates...',
+          percent: 75,
+          stepIndex: 3
+        }));
+        await new Promise(r => setTimeout(r, 60));
+
         summary = await extractStreetNetworkFromDxf(uploadedFile, cadSourceCrs);
       } else if (
         uploadedFile.name.toLowerCase().endsWith('.zip') || 
         uploadedFile.name.toLowerCase().endsWith('.geojson') || 
         uploadedFile.name.toLowerCase().endsWith('.json')
       ) {
+        setGenerationProgress(prev => ({
+          ...prev,
+          stage: lang === 'ar' ? 'استخراج شبكة الشوارع من ملف GIS/Shapefile...' : 'Extracting street network from GIS/Shapefile...',
+          percent: 60,
+          stepIndex: 2
+        }));
+        await new Promise(r => setTimeout(r, 60));
+
         summary = await extractStreetNetworkFromShpOrGeoJson(uploadedFile, cadSourceCrs);
       } else {
         throw new Error(lang === 'ar' ? 'نوع الملف غير مدعوم. يرجى اختيار ملف .DXF أو .ZIP (Shapefile) أو .GeoJSON' : 'Unsupported file type. Choose .DXF, .ZIP (Shapefile), or .GeoJSON');
       }
 
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' ? 'إعداد تصنيفات الطبقات وإتمام التحليل...' : 'Finalizing layer classifications...',
+        percent: 95,
+        stepIndex: 4
+      }));
+      await new Promise(r => setTimeout(r, 60));
+
       setCadExtractionSummary(summary);
-      setCadSelectedLayers(summary.detectedStreetLayers.length > 0 ? summary.detectedStreetLayers : summary.availableLayers.map(l => l.name));
+      setSubdivisionAnalysis(analysis);
+
+      if (analysis) {
+        const parcelLayers = analysis.layers.filter(l => l.category === 'parcels').map(l => l.name);
+        const streetLayers = analysis.layers.filter(l => l.category === 'streets').map(l => l.name);
+        
+        setSubdivisionConfig(prev => ({
+          ...prev,
+          selectedParcelLayers: parcelLayers.length > 0 ? parcelLayers : analysis!.layers.map(l => l.name),
+          selectedStreetLayers: streetLayers.length > 0 ? streetLayers : analysis!.layers.map(l => l.name)
+        }));
+      }
+
+      if (summary) {
+        setCadSelectedLayers(summary.detectedStreetLayers.length > 0 ? summary.detectedStreetLayers : summary.availableLayers.map(l => l.name));
+      }
       
+      const parcelsMsg = analysis ? ` [🏡 ${analysis.detectedParcelsCount} عقار وبلوك | 🛣️ ${analysis.detectedStreetsCount} شارع | 📏 ${analysis.streetWidths.length} لافتات عرض الشوارع]` : '';
+      
+      setGenerationProgress(prev => ({
+        ...prev,
+        percent: 100,
+        stage: lang === 'ar' ? 'اكتمل تحليل المخطط بنجاح!' : 'Plan analysis complete!'
+      }));
+      await new Promise(r => setTimeout(r, 120));
+
       setSuccess(
         lang === 'ar'
-          ? `تمت قراءة الملف بنجاح! تم استخراج ${summary.extractedLines.length} مسار طريق من ${summary.availableLayers.length} طبقة.`
-          : `CAD file processed! Extracted ${summary.extractedLines.length} street axes from ${summary.availableLayers.length} layers.`
+          ? `تم تحليل وتفكيك المخطط بنجاح!${parcelsMsg}`
+          : `CAD plan analyzed successfully!${parcelsMsg}`
       );
     } catch (err: any) {
       console.error('CAD Extraction Error:', err);
       setError(err?.message || (lang === 'ar' ? 'فشل تحليل ملف المخطط.' : 'Failed to parse CAD file.'));
     } finally {
       setCadLoading(false);
+      setGenerationProgress(prev => ({ ...prev, active: false }));
       e.target.value = '';
     }
   };
@@ -644,7 +762,6 @@ export const LineDrawerTab: React.FC<Props> = ({
     setCadLoading(true);
     setError(null);
     try {
-      // Re-filter lines according to selected layers
       const targetLayerSet = new Set(cadSelectedLayers);
       const filtered = cadExtractionSummary.extractedLines.filter(l => targetLayerSet.has(l.layer));
       
@@ -660,7 +777,7 @@ export const LineDrawerTab: React.FC<Props> = ({
     }
   };
 
-  const handleBatchGenerateNetworkPipes = () => {
+  const handleBatchGenerateNetworkPipes = async () => {
     if (!cadExtractionSummary || cadExtractionSummary.extractedLines.length === 0) {
       setError(lang === 'ar' ? 'لا توجد خطوط مستخرجة للتوليد.' : 'No extracted lines found.');
       return;
@@ -674,40 +791,204 @@ export const LineDrawerTab: React.FC<Props> = ({
       return;
     }
 
-    const generatedPipes = generateNetworkPipesFromStreets(activeLines, cadAutoPipeConfig);
-
-    setDrawnLines(prev => {
-      const updated = [...prev, ...generatedPipes];
-      try {
-        localStorage.setItem('DRAWN_MAP_LINES', JSON.stringify(updated));
-      } catch (err) {
-        console.warn('Storage quota reached or error saving lines locally:', err);
-      }
-      return updated;
+    setGenerationProgress({
+      active: true,
+      title: lang === 'ar' ? 'جاري توليد خطوط الشبكة من محاور الشوارع...' : 'Generating Network Pipes from Streets...',
+      stage: lang === 'ar' ? 'تجهيز مسارات الشوارع المحددة...' : 'Preparing street lines...',
+      percent: 25,
+      stepIndex: 1,
+      totalSteps: 3
     });
 
-    if (setGlobalPoints) {
-      setGlobalPoints(prev => [...prev, ...generatedPipes]);
+    try {
+      await new Promise(r => setTimeout(r, 60));
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' ? `توليد ${activeLines.length} خط أنبوب وتطبيق الأقطار والمواصفات...` : `Generating ${activeLines.length} pipes with diameters & specs...`,
+        percent: 65,
+        stepIndex: 2
+      }));
+      await new Promise(r => setTimeout(r, 60));
+
+      const generatedPipes = generateNetworkPipesFromStreets(activeLines, cadAutoPipeConfig);
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' ? 'إسقاط الأنابيب على الخريطة وحفظ البيانات بالسجل...' : 'Projecting pipes onto map & saving to local store...',
+        percent: 90,
+        stepIndex: 3
+      }));
+      await new Promise(r => setTimeout(r, 60));
+
+      setDrawnLines(prev => {
+        const updated = [...prev, ...generatedPipes];
+        try {
+          localStorage.setItem('DRAWN_MAP_LINES', JSON.stringify(updated));
+        } catch (err) {
+          console.warn('Storage quota reached or error saving lines locally:', err);
+        }
+        return updated;
+      });
+
+      if (setGlobalPoints) {
+        setGlobalPoints(prev => [...prev, ...generatedPipes]);
+      }
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        percent: 100,
+        stage: lang === 'ar' ? 'اكتمل التوليد بنجاح!' : 'Generation completed successfully!'
+      }));
+      await new Promise(r => setTimeout(r, 100));
+
+      setSuccess(
+        lang === 'ar'
+          ? `✅ تم بنجاح توليد ${generatedPipes.length} خط أنبوب وإسقاطها فوراً على خريطة المخطط وإضافتها إلى سجل الشبكة!`
+          : `✅ Successfully generated ${generatedPipes.length} pipe segments and projected to map!`
+      );
+
+      setActiveMode('lines-inventory');
+    } catch (err: any) {
+      console.error('Generation Error:', err);
+      setError(err?.message || (lang === 'ar' ? 'حدث خطأ أثناء توليد خطوط الشبكة.' : 'Error generating network pipes.'));
+    } finally {
+      setGenerationProgress(prev => ({ ...prev, active: false }));
     }
-
-    setSuccess(
-      lang === 'ar'
-        ? `✅ تم بنجاح توليد ${generatedPipes.length} خط أنبوب وإسقاطها فوراً على خريطة المخطط وإضافتها إلى سجل الشبكة!`
-        : `✅ Successfully generated ${generatedPipes.length} pipe segments and projected to map!`
-    );
-
-    // Switch to log view to inspect generated lines
-    setActiveMode('lines-inventory');
   };
 
-  const handleOrientDrawnLinesTowardsOutfall = () => {
+  const handleBatchGenerateSubdivisionPipes = async () => {
+    if (!subdivisionAnalysis) {
+      setError(lang === 'ar' ? 'يرجى رفع ملف DXF لتحليل العقارات والشوارع أولاً.' : 'Please upload a DXF file first.');
+      return;
+    }
+
+    setGenerationProgress({
+      active: true,
+      title: lang === 'ar' ? '⚡ جاري توليد ورسم شبكات الخدمات أمام العقارات...' : '⚡ Generating Utility Networks in Front of Parcels...',
+      stage: lang === 'ar' ? 'تحليل مضلعات البلوكات والعقارات واستبعاد الجدران المشتركة بين الجيران...' : 'Analyzing parcels & identifying true street frontages...',
+      percent: 20,
+      subDetails: lang === 'ar' ? `فحص ${subdivisionAnalysis.detectedParcelsCount} عقار وبلوك و ${subdivisionAnalysis.detectedStreetsCount} شارع...` : `Scanning ${subdivisionAnalysis.detectedParcelsCount} properties...`,
+      stepIndex: 1,
+      totalSteps: 4
+    });
+
+    try {
+      // Step 1: Yield so browser can paint progress overlay
+      await new Promise(r => setTimeout(r, 70));
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' 
+          ? `تطبيق مسارات الإزاحة (${subdivisionConfig.offsetMeters || 2.0}م) وتوليد أنابيب ${subdivisionConfig.networkType === 'both' ? 'الصرف الصحي ومياه الشرب' : subdivisionConfig.networkType}...`
+          : `Applying frontage offsets (${subdivisionConfig.offsetMeters || 2.0}m) & routing utility lines...`,
+        percent: 48,
+        stepIndex: 2
+      }));
+
+      // Step 2: Yield so UI updates
+      await new Promise(r => setTimeout(r, 70));
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' 
+          ? 'اللحام التوبولوجي لتقاطعات الشوارع وتوجيه فلو الصرف نحو المصبات وتوليد المناهل...'
+          : 'Topological welding, hydraulic outfall orientation & manhole generation...',
+        percent: 78,
+        stepIndex: 3
+      }));
+
+      // Step 3: Run the calculation
+      await new Promise(r => setTimeout(r, 70));
+      const generatedPipes = generateSubdivisionUtilities(subdivisionAnalysis, subdivisionConfig);
+
+      if (generatedPipes.length === 0) {
+        setError(lang === 'ar' ? 'لم يتم توليد أي خطوط. يرجى التأكد من تحديد طبقات العقارات أو الشوارع في المخطط.' : 'No pipes generated. Please select at least one parcel/street layer.');
+        return;
+      }
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' ? `إسقاط ${generatedPipes.length} عنصر شبكة على الخريطة وحفظ السجلات...` : `Projecting ${generatedPipes.length} network items onto map...`,
+        percent: 94,
+        stepIndex: 4
+      }));
+
+      await new Promise(r => setTimeout(r, 70));
+
+      setDrawnLines(prev => {
+        const updated = [...prev, ...generatedPipes];
+        try {
+          localStorage.setItem('DRAWN_MAP_LINES', JSON.stringify(updated));
+        } catch (err) {
+          console.warn('Storage quota notice:', err);
+        }
+        return updated;
+      });
+
+      if (setGlobalPoints) {
+        setGlobalPoints(prev => [...prev, ...generatedPipes]);
+      }
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' ? 'اكتمل التوليد بنجاح!' : 'Generation completed successfully!',
+        percent: 100
+      }));
+
+      await new Promise(r => setTimeout(r, 120));
+
+      const totalM = generatedPipes.reduce((acc, p) => acc + (p.path ? calculatePathLength(p.path) : 0), 0);
+      const modeLabel = subdivisionConfig.placementMode === 'connected_frontage' 
+        ? (lang === 'ar' ? 'أمام واجهات العقارات وفي الشوارع متصلة بالمصبات' : 'in front of properties ending at outfalls')
+        : subdivisionConfig.placementMode === 'street_centerline'
+        ? (lang === 'ar' ? 'بمحاور الشوارع' : 'along street centerlines')
+        : (lang === 'ar' ? 'بجوار واجهات العقارات' : 'along property frontages');
+
+      setSuccess(
+        lang === 'ar'
+          ? `⚡ تم بنجاح رسم وتوليد ${generatedPipes.length} خط وعنصر شبكة (${(totalM / 1000).toFixed(2)} كم) ${modeLabel} وإسقاطها فوراً على الخريطة!`
+          : `⚡ Successfully generated and drawn ${generatedPipes.length} pipeline items (${(totalM / 1000).toFixed(2)} km) ${modeLabel} on map!`
+      );
+
+      setActiveMode('lines-inventory');
+    } catch (err: any) {
+      console.error('Generation Error:', err);
+      setError(err?.message || (lang === 'ar' ? 'حدث خطأ أثناء توليد خطوط الشبكة.' : 'Error generating network pipes.'));
+    } finally {
+      setGenerationProgress(prev => ({ ...prev, active: false }));
+    }
+  };
+
+  const handleOrientDrawnLinesTowardsOutfall = async () => {
     if (!drawnLines || drawnLines.length === 0) {
       setError(lang === 'ar' ? 'لا توجد خطوط في السجل لتوجيهها.' : 'No lines to orient.');
       return;
     }
 
+    setGenerationProgress({
+      active: true,
+      title: lang === 'ar' ? 'جاري توجيه الشبكة هيدروليكياً نحو المصب...' : 'Orienting Network to Outfall...',
+      stage: lang === 'ar' ? 'تحليل اتجاه التدفق والمناسيب وتحديد نقطة المصب...' : 'Analyzing flow directions, GL/IL levels & outfall node...',
+      percent: 35,
+      stepIndex: 1,
+      totalSteps: 2
+    });
+
     try {
+      await new Promise(r => setTimeout(r, 70));
+
       const result = orientNetworkTowardsOutfall(drawnLines);
+
+      setGenerationProgress(prev => ({
+        ...prev,
+        stage: lang === 'ar' ? `تحديث ${result.totalPipesOriented} خط وحساب الميول وسرعات مانينغ...` : `Updating ${result.totalPipesOriented} lines with Manning velocities...`,
+        percent: 85,
+        stepIndex: 2
+      }));
+
+      await new Promise(r => setTimeout(r, 70));
+
       setDrawnLines(result.orientedPoints);
       if (setGlobalPoints) {
         setGlobalPoints(prev => {
@@ -721,6 +1002,14 @@ export const LineDrawerTab: React.FC<Props> = ({
         console.warn('Storage quota notice:', e);
       }
 
+      setGenerationProgress(prev => ({
+        ...prev,
+        percent: 100,
+        stage: lang === 'ar' ? 'اكتمل التوجيه الهيدروليكي!' : 'Hydraulic orientation complete!'
+      }));
+
+      await new Promise(r => setTimeout(r, 100));
+
       setSuccess(
         lang === 'ar'
           ? `🌊 تم بنجاح توجيه فلو ${result.totalPipesOriented} خط نحو المصب (${result.outfallNode.id}) وضبط المناسيب والميلان الهيدروليكي وسرعات مانينغ تلقائياً!`
@@ -728,6 +1017,8 @@ export const LineDrawerTab: React.FC<Props> = ({
       );
     } catch (err: any) {
       setError(err.message || 'Error orienting network to outfall');
+    } finally {
+      setGenerationProgress(prev => ({ ...prev, active: false }));
     }
   };
 
@@ -1676,25 +1967,45 @@ export const LineDrawerTab: React.FC<Props> = ({
         )}
 
         {/* ======================================================== */}
-        {/* MODE: CAD / GIS STREET NETWORK AUTO-EXTRACTION & VECTORIZATION */}
+        {/* ======================================================== */}
+        {/* MODE: CAD / GIS SUBDIVISION, PARCEL & STREET UTILITIES SUITE */}
         {/* ======================================================== */}
         {activeMode === 'cad-network-auto' && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            {/* Header info badge */}
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/10 via-accent/10 to-primary border border-amber-400/30 flex items-start gap-3">
-              <Sparkles className="w-6 h-6 text-amber-400 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <h4 className="text-xs sm:text-sm font-black text-white">
-                  {lang === 'ar' 
-                    ? 'استخلاص محاور الشوارع آلياً من ملفات CAD / GIS وإسقاطها جغرافياً' 
-                    : 'Auto-Extract Street Centerlines from CAD/GIS & Georeference'}
-                </h4>
-                <p className="text-[11px] text-white/70 leading-relaxed">
-                  {lang === 'ar'
-                    ? 'يدعم قراءة طبقات محاور الطرق والسناتر وتصفية عناصر LINE و LWPOLYLINE وتجاهل النصوص، مع تحويل إحداثيات UTM Zone 37N/38N/39N إلى WGS84 وتوليد شبكة الأنابيب دفعة واحدة.'
-                    : 'Filters street centerline layers (LINE/LWPOLYLINE), transforms UTM coordinates to WGS84, and batch generates network pipes.'}
-                </p>
+            {/* Hero info banner */}
+            <div className="p-5 rounded-3xl bg-gradient-to-r from-amber-500/15 via-accent/15 to-primary border border-amber-400/40 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-amber-400/20 border border-amber-400/40 flex items-center justify-center text-amber-400 shrink-0 shadow-lg">
+                  <Building2 className="w-6 h-6 animate-pulse" />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                      AutoCAD 2000 DXF Engine
+                    </span>
+                    <span className="text-[10px] font-bold text-white/50">GIS & Cadastral Intelligence</span>
+                  </div>
+                  <h4 className="text-sm sm:text-base font-black text-white">
+                    {lang === 'ar' 
+                      ? 'تبيان العقارات والشوارع وتوليد خطوط المياه والصرف الصحي بجوار العقارات' 
+                      : 'Subdivision Cadastral Dissection & Property Utilities Generator'}
+                  </h4>
+                  <p className="text-[11px] sm:text-xs text-white/70 leading-relaxed max-w-2xl">
+                    {lang === 'ar'
+                      ? 'يقوم النظام تلقائياً بتحليل ملف الـ DXF وتبيان مضلعات العقارات والبلوكات السكنية والتجارية، واستخلاص عروض الشوارع واللافتات (30م، 18م...)، وتوليد شبكتي الصرف الصحي (باللون الأحمر) ومياه الشرب (باللون الأزرق) بجوار واجهات العقارات على مسافة إزاحة محددة.'
+                      : 'Automatically dissects parcels and street corridors from CAD DXF, extracts street widths and annotations, and generates water & sewer lines adjacent to properties with customizable offsets.'}
+                  </p>
+                </div>
               </div>
+
+              {subdivisionAnalysis && (
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs px-3 py-1.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-black flex items-center gap-1.5 shadow-sm">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>{subdivisionAnalysis.detectedParcelsCount} {lang === 'ar' ? 'عقار وبلوك' : 'parcels'}</span>
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Step 1: Upload and Projection Setup */}
@@ -1702,15 +2013,18 @@ export const LineDrawerTab: React.FC<Props> = ({
               <div className="flex items-center justify-between">
                 <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
                   <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">1</span>
-                  <span>{lang === 'ar' ? 'رفع المخطط ونظام الإسقاط' : 'Upload CAD File & Set CRS'}</span>
+                  <span>{lang === 'ar' ? 'رفع مخطط الـ CAD وتحديد نظام الإسقاط الجغرافي' : 'Upload CAD File & Select Coordinate System'}</span>
                 </h4>
-                <span className="text-[10px] text-white/50 font-mono">DXF / SHP.ZIP / GeoJSON</span>
+                <span className="text-[10px] text-accent/90 font-mono font-bold bg-accent/10 px-2 py-0.5 rounded-lg border border-accent/20">
+                  AutoCAD DXF / SHP.ZIP / GeoJSON
+                </span>
               </div>
 
               {/* Coordinate System Selector */}
               <div className="space-y-2">
-                <label className="text-[11px] font-bold text-white/80 block">
-                  {lang === 'ar' ? 'نظام إحداثيات ملف الـ CAD المصدر (Coordinate System):' : 'Source CAD Coordinate System (CRS):'}
+                <label className="text-[11px] font-bold text-white/80 flex items-center justify-between">
+                  <span>{lang === 'ar' ? 'نظام إحداثيات ملف الـ CAD المصدر (Coordinate System):' : 'Source CAD Coordinate System (CRS):'}</span>
+                  <span className="text-[10px] text-amber-300">{lang === 'ar' ? 'التحويل التلقائي إلى WGS84' : 'Auto-project to WGS84'}</span>
                 </label>
                 <select
                   value={cadSourceCrs}
@@ -1726,16 +2040,16 @@ export const LineDrawerTab: React.FC<Props> = ({
               </div>
 
               {/* Upload Drop Area */}
-              <div className="border-2 border-dashed border-white/20 hover:border-accent/60 rounded-2xl p-6 sm:p-8 text-center transition-all bg-[#071c27]/60 group">
+              <div className="border-2 border-dashed border-white/20 hover:border-accent/60 rounded-2xl p-6 sm:p-8 text-center transition-all bg-[#071c27]/60 group relative overflow-hidden">
                 <input
                   type="file"
-                  id="cad-network-file-input"
+                  id="cad-subdivision-file-input"
                   accept=".dxf,.zip,.geojson,.json"
                   onChange={handleCadFileUpload}
                   className="hidden"
                 />
-                <label htmlFor="cad-network-file-input" className="cursor-pointer flex flex-col items-center gap-3">
-                  <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
+                <label htmlFor="cad-subdivision-file-input" className="cursor-pointer flex flex-col items-center gap-3">
+                  <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform shadow-lg">
                     {cadLoading ? (
                       <RefreshCw className="w-6 h-6 animate-spin text-accent" />
                     ) : (
@@ -1745,184 +2059,548 @@ export const LineDrawerTab: React.FC<Props> = ({
                   <div>
                     <span className="text-xs sm:text-sm font-black text-white block">
                       {cadLoading
-                        ? (lang === 'ar' ? 'جاري قراءة وتصفية المخطط وتحويل الإحداثيات...' : 'Processing CAD lines & transforming coords...')
-                        : (lang === 'ar' ? 'انقر أو اسحب ملف المخطط هنا (.DXF أو .ZIP)' : 'Click or drop CAD plan (.DXF or .ZIP)')}
+                        ? (lang === 'ar' ? 'جاري تفكيك المخطط وتمييز العقارات والشوارع وتوليد الشبكات...' : 'Dissecting CAD elements & transforming coords...')
+                        : (lang === 'ar' ? 'انقر هنا أو اسحب ملف الـ DXF لمخطط التقسيم المعتمد' : 'Click or drop CAD plan (.DXF or .ZIP)')}
                     </span>
                     <span className="text-[10px] sm:text-xs text-white/50 mt-1 block">
-                      {lang === 'ar' ? 'يتم استخراج خطوط السناتر وتجاهل النصوص والبلوكات تلقائياً' : 'Auto-filters LINE/LWPOLYLINE, ignores texts & blocks'}
+                      {lang === 'ar' 
+                        ? 'يدعم استخلاص البلوكات السكنية والتجارية، وعروض الشوارع، والمرافق كالمسجد والحديقة والمدارس' 
+                        : 'Identifies residential/commercial blocks, street widths, parks, mosques & facilities'}
                     </span>
                   </div>
                 </label>
               </div>
             </div>
 
-            {/* Step 2: Layer Filtering & Inspection (Shown when summary available) */}
-            {cadExtractionSummary && (
-              <div className="p-5 sm:p-6 bg-[#0b2d3d] rounded-3xl border border-white/10 space-y-5 animate-in fade-in">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">2</span>
-                    <span>{lang === 'ar' ? 'تصفية واختيار طبقات الشوارع (Layer Filter)' : 'Filter Street Layers'}</span>
-                  </h4>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold">
-                    {cadExtractionSummary.extractedLines.length} {lang === 'ar' ? 'خط تم استخراجه' : 'lines extracted'}
-                  </span>
-                </div>
-
-                {/* Detected Street Layer List */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-[11px] text-white/70">
-                    <span>{lang === 'ar' ? 'الطبقات المكتشفة في الملف:' : 'Available Layers in File:'}</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setCadSelectedLayers(cadExtractionSummary.availableLayers.map(l => l.name))}
-                        className="text-[10px] text-accent hover:underline"
-                      >
-                        {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
-                      </button>
-                      <span>•</span>
-                      <button
-                        type="button"
-                        onClick={() => setCadSelectedLayers(cadExtractionSummary.detectedStreetLayers)}
-                        className="text-[10px] text-amber-300 hover:underline"
-                      >
-                        {lang === 'ar' ? 'طبقات الطرق المقترحة فقط' : 'Street Layers Only'}
-                      </button>
-                    </div>
+            {/* Step 2: Interactive Subdivision Dissection Dashboard (When Analysis Available) */}
+            {subdivisionAnalysis && (
+              <div className="p-5 sm:p-6 bg-[#0b2d3d] rounded-3xl border border-white/10 space-y-6 animate-in fade-in">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-white/10">
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">2</span>
+                      <span>{lang === 'ar' ? 'لوحة تبيان وتفكيك عناصر المخطط المكتشفة' : 'Subdivision Dissection & Inspection'}</span>
+                    </h4>
+                    <p className="text-[11px] text-white/50 mt-0.5">
+                      {lang === 'ar' ? `الملف: ${subdivisionAnalysis.filename} (${subdivisionAnalysis.totalEntities} عنصر هندسي)` : `File: ${subdivisionAnalysis.filename}`}
+                    </p>
                   </div>
 
-                  <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 bg-[#071c27] rounded-xl border border-white/10">
-                    {cadExtractionSummary.availableLayers.map((layer) => {
-                      const isSelected = cadSelectedLayers.includes(layer.name);
-                      return (
-                        <label
-                          key={layer.name}
+                  {/* Subtabs for Inspection */}
+                  <div className="flex items-center gap-1.5 p-1 bg-[#071c27] rounded-xl border border-white/10 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setCadSubdivisionView('dissection')}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg font-bold transition-all text-[11px]",
+                        cadSubdivisionView === 'dissection' ? "bg-accent text-primary" : "text-white/60 hover:text-white"
+                      )}
+                    >
+                      {lang === 'ar' ? 'تبيان العناصر' : 'Overview'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCadSubdivisionView('generation')}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1",
+                        cadSubdivisionView === 'generation' ? "bg-amber-400 text-primary" : "text-amber-300 hover:text-white"
+                      )}
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>{lang === 'ar' ? 'إعدادات التوليد' : 'Generation'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCadSubdivisionView('layers')}
+                      className={cn(
+                        "px-2.5 py-1 rounded-lg font-bold transition-all text-[11px]",
+                        cadSubdivisionView === 'layers' ? "bg-accent text-primary" : "text-white/60 hover:text-white"
+                      )}
+                    >
+                      {lang === 'ar' ? 'تصفية الطبقات' : 'Layers'}
+                    </button>
+                    {subdivisionAnalysis.streetWidths.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setCadSubdivisionView('widths')}
+                        className={cn(
+                          "px-2.5 py-1 rounded-lg font-bold transition-all text-[11px] flex items-center gap-1",
+                          cadSubdivisionView === 'widths' ? "bg-accent text-primary" : "text-white/60 hover:text-white"
+                        )}
+                      >
+                        <Ruler className="w-3 h-3" />
+                        <span>{lang === 'ar' ? `عروض الشوارع (${subdivisionAnalysis.streetWidths.length})` : 'Street Widths'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Subview 1: Overview Breakdown Cards */}
+                {cadSubdivisionView === 'dissection' && (
+                  <div className="space-y-4 animate-in fade-in">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {/* Parcels Card */}
+                      <div className="p-3.5 bg-[#071c27] rounded-2xl border border-emerald-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-emerald-400">
+                          <Home className="w-4 h-4" />
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15">مضلعات مغلقة</span>
+                        </div>
+                        <div className="text-xl font-black text-white font-mono">{subdivisionAnalysis.detectedParcelsCount}</div>
+                        <div className="text-[10px] text-white/60 font-medium">{lang === 'ar' ? 'العقارات والقطع السكنية' : 'Detected Parcels & Lots'}</div>
+                      </div>
+
+                      {/* Blocks Card */}
+                      <div className="p-3.5 bg-[#071c27] rounded-2xl border border-blue-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-blue-400">
+                          <Building2 className="w-4 h-4" />
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15">بلوكات ومرافق</span>
+                        </div>
+                        <div className="text-xl font-black text-white font-mono">{subdivisionAnalysis.detectedBlocksCount}</div>
+                        <div className="text-[10px] text-white/60 font-medium">{lang === 'ar' ? 'البلوكات والمجمعات الكبرى' : 'Blocks & Facilities'}</div>
+                      </div>
+
+                      {/* Streets Card */}
+                      <div className="p-3.5 bg-[#071c27] rounded-2xl border border-amber-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-amber-400">
+                          <Route className="w-4 h-4" />
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15">محاور وتنظيم</span>
+                        </div>
+                        <div className="text-xl font-black text-white font-mono">{subdivisionAnalysis.detectedStreetsCount}</div>
+                        <div className="text-[10px] text-white/60 font-medium">{lang === 'ar' ? 'مسارات ومحاور الشوارع' : 'Street Axes'}</div>
+                      </div>
+
+                      {/* Widths Card */}
+                      <div className="p-3.5 bg-[#071c27] rounded-2xl border border-purple-500/30 space-y-1">
+                        <div className="flex items-center justify-between text-purple-400">
+                          <Ruler className="w-4 h-4" />
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15">لافتات وأبعاد</span>
+                        </div>
+                        <div className="text-xl font-black text-white font-mono">{subdivisionAnalysis.streetWidths.length}</div>
+                        <div className="text-[10px] text-white/60 font-medium">{lang === 'ar' ? 'عروض الشوارع المكتشفة' : 'Street Width Labels'}</div>
+                      </div>
+                    </div>
+
+                    {/* Visual Explanation of Property Frontage Pipeline Placement */}
+                    <div className="p-4 bg-gradient-to-r from-red-500/10 via-blue-500/10 to-primary/40 rounded-2xl border border-red-500/30 space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-black text-white">
+                        <span className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+                        <span>{lang === 'ar' ? 'آلية التمديد الذكي بجوار العقارات (المطابقة للصورة المرفقة):' : 'Smart Property Frontage Utility Alignment:'}</span>
+                      </div>
+                      <p className="text-[11px] text-white/80 leading-relaxed">
+                        {lang === 'ar'
+                          ? 'يقوم التطبيق بحساب المتجه العمودي الخارجي (Outward Normal Bisector) لكل ضلع من أضلاع البلوكات والعقارات المكتشفة، ورسم خطوط أنابيب الصرف الصحي (باللون الأحمر) ومياه الشرب (باللون الأزرق) محاذية لواجهات العقار من جهة الشارع بمسافة إزاحة هندسية تمنع التداخل مع المباني وحرم الشارع.'
+                          : 'Calculates the outward normal bisector along block and parcel perimeter edges, generating red sewer collection pipelines and blue water distribution lines parallel to property frontages.'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Subview 2: Generation Setup (Core feature requested by user) */}
+                {(cadSubdivisionView === 'generation' || cadSubdivisionView === 'dissection') && (
+                  <div className="p-5 bg-[#071c27] rounded-2xl border border-amber-400/30 space-y-5 animate-in fade-in">
+                    <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-5 h-5 text-amber-400" />
+                        <h4 className="text-xs sm:text-sm font-black text-white">
+                          {lang === 'ar' ? 'إعدادات رسم خطوط المياه والصرف الصحي بجوار العقارات' : 'Pipeline Generation Setup'}
+                        </h4>
+                      </div>
+                      <span className="text-[10px] text-amber-300 font-bold">
+                        {subdivisionConfig.networkType === 'both' ? '🔴 صرف صحي + 🔵 مياه شرب' : subdivisionConfig.networkType === 'sewer' ? '🔴 صرف صحي فقط' : '🔵 مياه شرب فقط'}
+                      </span>
+                    </div>
+
+                    {/* Mode 1: Placement Strategy */}
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-black text-white flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Route className="w-4 h-4 text-accent" />
+                          <span>{lang === 'ar' ? 'استراتيجية وموقع رسم الخطوط:' : 'Pipeline Placement Strategy:'}</span>
+                        </span>
+                        <span className="text-[10px] text-emerald-400 font-bold">
+                          {lang === 'ar' ? '✨ شبكات متصلة تنتهي بمصبات' : 'Connected to Outfalls'}
+                        </span>
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        {/* Option 1: Connected Frontage in Streets ending at Outfalls */}
+                        <button
+                          type="button"
+                          onClick={() => setSubdivisionConfig(prev => ({ ...prev, placementMode: 'connected_frontage' }))}
                           className={cn(
-                            "flex items-center justify-between p-2 rounded-lg cursor-pointer text-xs transition-colors border",
-                            isSelected
-                              ? "bg-accent/15 border-accent/40 text-white"
-                              : "bg-white/5 border-transparent text-white/60 hover:bg-white/10"
+                            "p-3 rounded-xl border text-xs font-black text-start transition-all space-y-1 relative overflow-hidden",
+                            subdivisionConfig.placementMode === 'connected_frontage'
+                              ? "bg-emerald-500/20 border-emerald-400 text-white shadow-lg ring-1 ring-emerald-400/40"
+                              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
                           )}
                         >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setCadSelectedLayers([...cadSelectedLayers, layer.name]);
-                                } else {
-                                  setCadSelectedLayers(cadSelectedLayers.filter(l => l !== layer.name));
-                                }
-                              }}
-                              className="rounded accent-amber-400"
-                            />
-                            <span className="font-mono font-medium">{layer.name}</span>
-                            {layer.isLikelyStreet && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                                {lang === 'ar' ? 'محور طريق/شارع' : 'Street Axis'}
-                              </span>
-                            )}
+                          <div className="flex items-center justify-between">
+                            <span className="text-emerald-400 font-black flex items-center gap-1">
+                              <span>🟢</span>
+                              <span>{lang === 'ar' ? 'أمام واجهات العقارات' : 'In Front of Parcels'}</span>
+                            </span>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/30 text-emerald-200 font-bold">{lang === 'ar' ? 'موصى به' : 'Standard'}</span>
                           </div>
-                          <span className="text-[10px] text-white/50 font-mono">{layer.lineCount} {lang === 'ar' ? 'عنصر' : 'elements'}</span>
-                        </label>
-                      );
-                    })}
+                          <p className="text-[10px] text-white/70 font-normal leading-tight">
+                            {lang === 'ar' ? 'رسم خطوط الشوارع أمام العقارات بشكل متصل هندسياً وتنتهي بمصبات' : 'Connected street lines in front of properties flowing down to outfalls'}
+                          </p>
+                        </button>
+
+                        {/* Option 2: Street Centerlines */}
+                        <button
+                          type="button"
+                          onClick={() => setSubdivisionConfig(prev => ({ ...prev, placementMode: 'street_centerline' }))}
+                          className={cn(
+                            "p-3 rounded-xl border text-xs font-black text-start transition-all space-y-1",
+                            subdivisionConfig.placementMode === 'street_centerline'
+                              ? "bg-blue-500/20 border-blue-400 text-white shadow-lg ring-1 ring-blue-500/40"
+                              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
+                          )}
+                        >
+                          <span className="text-blue-400 font-black flex items-center gap-1">
+                            <span>🔵</span>
+                            <span>{lang === 'ar' ? 'محاور وسناتر الشوارع' : 'Street Centerlines'}</span>
+                          </span>
+                          <p className="text-[10px] text-white/70 font-normal leading-tight">
+                            {lang === 'ar' ? 'رسم خط رئيسي على منتصف مسار الشارع متصل بالمصب' : 'Main transmission lines along road axes'}
+                          </p>
+                        </button>
+
+                        {/* Option 3: Dual Sidewalks */}
+                        <button
+                          type="button"
+                          onClick={() => setSubdivisionConfig(prev => ({ ...prev, placementMode: 'dual_sidewalk' }))}
+                          className={cn(
+                            "p-3 rounded-xl border text-xs font-black text-start transition-all space-y-1",
+                            subdivisionConfig.placementMode === 'dual_sidewalk'
+                              ? "bg-purple-500/20 border-purple-400 text-white shadow-lg ring-1 ring-purple-500/40"
+                              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
+                          )}
+                        >
+                          <span className="text-purple-400 font-black flex items-center gap-1">
+                            <span>🟣</span>
+                            <span>{lang === 'ar' ? 'خط مزدوج على الرصيفين' : 'Dual Sidewalks'}</span>
+                          </span>
+                          <p className="text-[10px] text-white/70 font-normal leading-tight">
+                            {lang === 'ar' ? 'خط مياه يمين وخط صرف صحي يسار الشارع' : 'Separate lines along both sidewalks'}
+                          </p>
+                        </button>
+
+                        {/* Option 4: Perimeter Loops */}
+                        <button
+                          type="button"
+                          onClick={() => setSubdivisionConfig(prev => ({ ...prev, placementMode: 'property_perimeter_loop' }))}
+                          className={cn(
+                            "p-3 rounded-xl border text-xs font-black text-start transition-all space-y-1",
+                            subdivisionConfig.placementMode === 'property_perimeter_loop'
+                              ? "bg-red-500/20 border-red-400 text-white shadow-lg ring-1 ring-red-500/40"
+                              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
+                          )}
+                        >
+                          <span className="text-red-400 font-black flex items-center gap-1">
+                            <span>🔴</span>
+                            <span>{lang === 'ar' ? 'محيط البلوك بحلقات' : 'Perimeter Loops'}</span>
+                          </span>
+                          <p className="text-[10px] text-white/70 font-normal leading-tight">
+                            {lang === 'ar' ? 'إحاطة كامل محيط البلوك بحلقة أنبوب مغلقة' : 'Closed polygon loops around entire block'}
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Network Outfalls & Manholes Hydraulic Setup */}
+                    <div className="p-3.5 bg-[#0b2d3d]/90 rounded-xl border border-emerald-500/30 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <span className="text-xs font-black text-white flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>{lang === 'ar' ? 'خيارات الربط الهيدروليكي والمصبات والمناهل:' : 'Hydraulic Continuity & Outfall Options:'}</span>
+                        </span>
+                        <span className="text-[10px] text-emerald-300 font-mono">
+                          {lang === 'ar' ? 'توجيه تلقائي من الرؤوس إلى المصبات' : 'Auto Cascade Direction'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {/* Outfalls Toggle */}
+                        <div className="flex items-center justify-between p-2.5 bg-[#071c27] rounded-xl border border-white/10">
+                          <div>
+                            <span className="text-xs font-bold text-white block">
+                              🎯 {lang === 'ar' ? 'توليد نقاط المصبات الرئيسية (Outfalls)' : 'Generate Outfall Points'}
+                            </span>
+                            <span className="text-[10px] text-white/50 block">
+                              {lang === 'ar' ? 'تحديد وتثبيت نقاط تفريغ الشبكة في أوطى منسوب' : 'Creates terminal discharge nodes at low elevation'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSubdivisionConfig(prev => ({ ...prev, generateOutfalls: !prev.generateOutfalls }))}
+                            className={cn(
+                              "px-3 py-1 rounded-lg text-xs font-bold transition-all border",
+                              subdivisionConfig.generateOutfalls !== false
+                                ? "bg-emerald-500 text-white border-emerald-400 shadow-md"
+                                : "bg-white/10 text-white/50 border-white/10"
+                            )}
+                          >
+                            {subdivisionConfig.generateOutfalls !== false ? (lang === 'ar' ? 'مفعّل' : 'ON') : (lang === 'ar' ? 'معطّل' : 'OFF')}
+                          </button>
+                        </div>
+
+                        {/* Manholes Toggle */}
+                        <div className="flex items-center justify-between p-2.5 bg-[#071c27] rounded-xl border border-white/10">
+                          <div>
+                            <span className="text-xs font-bold text-white block">
+                              🔘 {lang === 'ar' ? 'توليد مناهل وغرف التفتيش (Manholes)' : 'Generate Manhole Nodes'}
+                            </span>
+                            <span className="text-[10px] text-white/50 block">
+                              {lang === 'ar' ? 'غرف تفتيش عند التقاطعات وبدايات الخطوط' : 'Creates inspection chambers at junctions'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSubdivisionConfig(prev => ({ ...prev, generateManholes: !prev.generateManholes }))}
+                            className={cn(
+                              "px-3 py-1 rounded-lg text-xs font-bold transition-all border",
+                              subdivisionConfig.generateManholes
+                                ? "bg-amber-500 text-primary border-amber-400 shadow-md"
+                                : "bg-white/10 text-white/50 border-white/10"
+                            )}
+                          >
+                            {subdivisionConfig.generateManholes ? (lang === 'ar' ? 'مفعّل' : 'ON') : (lang === 'ar' ? 'معطّل' : 'OFF')}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Network Type & Offset Distance */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Network Type */}
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-bold text-white/80">{lang === 'ar' ? 'نوع الشبكة المطلوب رسمها:' : 'Network Type:'}</label>
+                        <select
+                          value={subdivisionConfig.networkType}
+                          onChange={(e) => setSubdivisionConfig(prev => ({ ...prev, networkType: e.target.value as any }))}
+                          className="w-full bg-[#0b2d3d] border border-white/15 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-bold"
+                        >
+                          <option value="both">{lang === 'ar' ? '⚡ الشبكتين معاً (صرف صحي أحمر + مياه شرب زرقاء)' : 'Both Sewer & Water'}</option>
+                          <option value="sewer">{lang === 'ar' ? '🔴 شبكة الصرف الصحي فقط (باللون الأحمر - كما في الصورة)' : 'Sewer Lines Only (Red)'}</option>
+                          <option value="water">{lang === 'ar' ? '🔵 شبكة مياه الشرب فقط (باللون الأزرق)' : 'Water Lines Only (Blue)'}</option>
+                        </select>
+                      </div>
+
+                      {/* Offset Distance (Meters) */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-bold text-white/80">{lang === 'ar' ? 'مسافة الإزاحة عن حد العقار (Offset):' : 'Frontage Offset (m):'}</label>
+                          <span className="text-[10px] text-accent font-mono font-bold">{subdivisionConfig.offsetMeters} {lang === 'ar' ? 'متر' : 'm'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {[1.0, 1.5, 2.0, 2.5, 3.0].map((dist) => (
+                            <button
+                              key={dist}
+                              type="button"
+                              onClick={() => setSubdivisionConfig(prev => ({ ...prev, offsetMeters: dist }))}
+                              className={cn(
+                                "flex-1 py-1.5 rounded-lg text-xs font-mono font-black transition-all border",
+                                subdivisionConfig.offsetMeters === dist
+                                  ? "bg-accent text-primary border-accent shadow-md"
+                                  : "bg-[#0b2d3d] text-white/70 border-white/10 hover:text-white"
+                              )}
+                            >
+                              {dist}م
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Engineering Specs (Diameters, Materials, Permit) */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-white/10">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'قطر الصرف (مم)' : 'Sewer Dia (mm)'}</label>
+                        <input
+                          type="text"
+                          value={subdivisionConfig.sewerDiameter}
+                          onChange={(e) => setSubdivisionConfig(prev => ({ ...prev, sewerDiameter: e.target.value }))}
+                          placeholder="200"
+                          className="w-full bg-[#0b2d3d] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-mono"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'قطر المياه (مم)' : 'Water Dia (mm)'}</label>
+                        <input
+                          type="text"
+                          value={subdivisionConfig.waterDiameter}
+                          onChange={(e) => setSubdivisionConfig(prev => ({ ...prev, waterDiameter: e.target.value }))}
+                          placeholder="160"
+                          className="w-full bg-[#0b2d3d] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-mono"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'مادة الأنابيب' : 'Material'}</label>
+                        <input
+                          type="text"
+                          value={subdivisionConfig.material}
+                          onChange={(e) => setSubdivisionConfig(prev => ({ ...prev, material: e.target.value }))}
+                          placeholder="HDPE"
+                          className="w-full bg-[#0b2d3d] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'رقم التصريح / العقد' : 'Permit No'}</label>
+                        <input
+                          type="text"
+                          value={subdivisionConfig.permitNo}
+                          onChange={(e) => setSubdivisionConfig(prev => ({ ...prev, permitNo: e.target.value }))}
+                          placeholder="PERMIT-2026-X"
+                          className="w-full bg-[#0b2d3d] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Big Action Generation Button */}
+                    <button
+                      type="button"
+                      onClick={handleBatchGenerateSubdivisionPipes}
+                      className="w-full py-4 rounded-2xl bg-gradient-to-r from-red-500 via-amber-400 to-accent text-primary font-black flex items-center justify-center gap-2.5 hover:opacity-95 active:scale-[0.99] transition-all text-xs sm:text-sm shadow-xl shadow-red-500/20 mt-2"
+                    >
+                      <Sparkles className="w-5 h-5 text-primary" />
+                      <span>
+                        {lang === 'ar'
+                          ? `⚡ توليد ورسم خطوط المياه والصرف الصحي بجوار العقارات (${subdivisionAnalysis.detectedParcelsCount} عقار وبلوك) فوراً`
+                          : `Generate & Draw Utility Lines beside ${subdivisionAnalysis.detectedParcelsCount} Properties Now`}
+                      </span>
+                    </button>
                   </div>
-                </div>
+                )}
 
-                {/* Step 3: Batch Network Generation Configuration */}
-                <div className="pt-4 border-t border-white/10 space-y-4">
-                  <h4 className="text-xs sm:text-sm font-black text-white flex items-center gap-2">
-                    <span className="w-6 h-6 rounded-full bg-accent text-primary text-xs flex items-center justify-center font-black">3</span>
-                    <span>{lang === 'ar' ? 'تحديد مواصفات وتوليد شبكة الأنابيب' : 'Batch Generate Network Pipes'}</span>
-                  </h4>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'نوع الشبكة' : 'Network Type'}</label>
-                      <input
-                        type="text"
-                        value={cadAutoPipeConfig.networkType}
-                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, networkType: e.target.value })}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
-                      />
+                {/* Subview 3: Layers Inspection & Toggle */}
+                {cadSubdivisionView === 'layers' && (
+                  <div className="space-y-3 animate-in fade-in">
+                    <div className="flex items-center justify-between text-xs text-white/70">
+                      <span>{lang === 'ar' ? 'الطبقات المكتشفة وتصنيفها الهندسي:' : 'Dissected Layers & Classification:'}</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSubdivisionConfig(prev => ({
+                              ...prev,
+                              selectedParcelLayers: subdivisionAnalysis.layers.map(l => l.name),
+                              selectedStreetLayers: subdivisionAnalysis.layers.map(l => l.name)
+                            }));
+                          }}
+                          className="text-[10px] text-accent hover:underline"
+                        >
+                          {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
+                        </button>
+                        <span>•</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const parcelOnly = subdivisionAnalysis.layers.filter(l => l.category === 'parcels').map(l => l.name);
+                            setSubdivisionConfig(prev => ({
+                              ...prev,
+                              selectedParcelLayers: parcelOnly
+                            }));
+                          }}
+                          className="text-[10px] text-emerald-300 hover:underline"
+                        >
+                          {lang === 'ar' ? 'العقارات فقط' : 'Parcels Only'}
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'تصنيف الخط' : 'Pipe Category'}</label>
-                      <select
-                        value={cadAutoPipeConfig.pipeHierarchy}
-                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, pipeHierarchy: e.target.value })}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="main">{lang === 'ar' ? 'ماسورة رئيسية (Main Pipe)' : 'Main Pipe'}</option>
-                        <option value="sub">{lang === 'ar' ? 'ماسورة فرعية / توزيع (Branch Pipe)' : 'Branch Pipe'}</option>
-                        <option value="service">{lang === 'ar' ? 'وصلة خدمة (Service Connection)' : 'Service Line'}</option>
-                      </select>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'قطر الأنبوب (مم)' : 'Diameter (mm)'}</label>
-                      <input
-                        type="text"
-                        value={cadAutoPipeConfig.diameter}
-                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, diameter: e.target.value })}
-                        placeholder="160"
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-mono"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'مادة الأنبوب' : 'Material'}</label>
-                      <input
-                        type="text"
-                        value={cadAutoPipeConfig.material}
-                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, material: e.target.value })}
-                        placeholder="HDPE"
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'رقم التصريح / العقد' : 'Permit / Contract No'}</label>
-                      <input
-                        type="text"
-                        value={cadAutoPipeConfig.permitNo}
-                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, permitNo: e.target.value })}
-                        placeholder="PERMIT-2026-X"
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'بادئة معرف الشريحة (Segment Prefix)' : 'Segment Prefix'}</label>
-                      <input
-                        type="text"
-                        value={cadAutoPipeConfig.segmentPrefix}
-                        onChange={(e) => setCadAutoPipeConfig({ ...cadAutoPipeConfig, segmentPrefix: e.target.value })}
-                        placeholder="SEG"
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none font-mono"
-                      />
+                    <div className="max-h-60 overflow-y-auto space-y-2 p-2 bg-[#071c27] rounded-2xl border border-white/10">
+                      {subdivisionAnalysis.layers.map((layer) => {
+                        const isParcelSelected = (subdivisionConfig.selectedParcelLayers || []).includes(layer.name);
+                        return (
+                          <div
+                            key={layer.name}
+                            className={cn(
+                              "flex items-center justify-between p-2.5 rounded-xl border transition-colors text-xs",
+                              isParcelSelected
+                                ? "bg-accent/15 border-accent/40 text-white"
+                                : "bg-white/5 border-transparent text-white/60 hover:bg-white/10"
+                            )}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <input
+                                type="checkbox"
+                                checked={isParcelSelected}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSubdivisionConfig(prev => ({
+                                      ...prev,
+                                      selectedParcelLayers: [...(prev.selectedParcelLayers || []), layer.name],
+                                      selectedStreetLayers: [...(prev.selectedStreetLayers || []), layer.name]
+                                    }));
+                                  } else {
+                                    setSubdivisionConfig(prev => ({
+                                      ...prev,
+                                      selectedParcelLayers: (prev.selectedParcelLayers || []).filter(l => l !== layer.name),
+                                      selectedStreetLayers: (prev.selectedStreetLayers || []).filter(l => l !== layer.name)
+                                    }));
+                                  }
+                                }}
+                                className="rounded accent-amber-400"
+                              />
+                              <div>
+                                <div className="font-mono font-bold flex items-center gap-1.5">
+                                  <span>{layer.name}</span>
+                                  {layer.category === 'parcels' && (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                      {lang === 'ar' ? '🏡 عقارات / بلوكات' : 'Parcels'}
+                                    </span>
+                                  )}
+                                  {layer.category === 'streets' && (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                                      {lang === 'ar' ? '🛣️ شوارع / تنظيم' : 'Streets'}
+                                    </span>
+                                  )}
+                                  {layer.category === 'texts' && (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-400/20 text-purple-300 border border-purple-400/30">
+                                      {lang === 'ar' ? '📝 نصوص وأبعاد' : 'Texts'}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-white/50">{layer.reason}</div>
+                              </div>
+                            </div>
+                            <span className="text-[11px] font-mono text-white/60">{layer.count} عنصر</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
+                )}
 
-                  {/* Batch Action Button */}
-                  <button
-                    type="button"
-                    onClick={handleBatchGenerateNetworkPipes}
-                    disabled={cadSelectedLayers.length === 0}
-                    className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 to-accent text-primary font-black flex items-center justify-center gap-2 hover:opacity-95 active:scale-[0.99] transition-all text-xs sm:text-sm shadow-xl shadow-accent/20 disabled:opacity-50 mt-2"
-                  >
-                    <Sparkles className="w-5 h-5 text-primary" />
-                    <span>
-                      {lang === 'ar'
-                        ? `تطبيق وتوليد كامل شبكة الأنابيب (${cadSelectedLayers.length} طبقة معتمدة) بنقرة واحدة`
-                        : `Generate Network Pipes on Full Street Layout`}
-                    </span>
-                  </button>
-                </div>
+                {/* Subview 4: Street Widths & Annotations Inspection */}
+                {cadSubdivisionView === 'widths' && (
+                  <div className="space-y-3 animate-in fade-in">
+                    <div className="flex items-center justify-between text-xs text-white/70">
+                      <span>{lang === 'ar' ? 'عروض الشوارع واللافتات المكتشفة في المخطط:' : 'Detected Street Widths & Annotations:'}</span>
+                      <span className="text-[10px] text-accent font-bold">{subdivisionAnalysis.streetWidths.length} لافتة</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto p-2 bg-[#071c27] rounded-2xl border border-white/10">
+                      {subdivisionAnalysis.streetWidths.map((w, idx) => (
+                        <div key={idx} className="p-2.5 bg-white/5 rounded-xl border border-white/10 flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <Ruler className="w-4 h-4 text-amber-400" />
+                            <div>
+                              <div className="font-bold text-white">{w.text}</div>
+                              <div className="text-[10px] text-white/50">{lang === 'ar' ? `الطبقة: ${w.layer}` : `Layer: ${w.layer}`}</div>
+                            </div>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-lg bg-amber-400/20 text-amber-300 font-mono font-bold text-xs border border-amber-400/30">
+                            {w.widthMeters} م
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2206,6 +2884,104 @@ export const LineDrawerTab: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* --- Real-Time Non-Freezing Generation Progress Modal --- */}
+      {generationProgress.active && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#071c27] border-2 border-accent/40 rounded-3xl p-6 sm:p-7 shadow-2xl shadow-accent/20 relative overflow-hidden space-y-5">
+            {/* Top glowing ambient effect */}
+            <div className="absolute -top-24 -left-24 w-48 h-48 bg-accent/20 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-emerald-500/20 rounded-full blur-3xl pointer-events-none" />
+
+            {/* Header with animated spinner and title */}
+            <div className="flex items-start gap-4 relative z-10">
+              <div className="w-12 h-12 rounded-2xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0 shadow-lg">
+                <Loader2 className="w-6 h-6 text-accent animate-spin" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base sm:text-lg font-black text-white leading-tight">
+                  {generationProgress.title || (lang === 'ar' ? 'جاري معالجة وتوليد الشبكة...' : 'Processing & Generating Network...')}
+                </h3>
+                <p className="text-xs text-white/70 font-medium leading-relaxed">
+                  {generationProgress.stage}
+                </p>
+                {generationProgress.subDetails && (
+                  <p className="text-[11px] text-cyan-300 font-mono">
+                    {generationProgress.subDetails}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Progress Bar & Percentage */}
+            <div className="space-y-2 relative z-10">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-white/60 font-bold flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-accent animate-pulse" />
+                  <span>{lang === 'ar' ? 'مستوى الإنجاز' : 'Progress'}</span>
+                </span>
+                <span className="text-accent font-black text-sm">
+                  {generationProgress.percent}%
+                </span>
+              </div>
+              
+              <div className="w-full h-3 bg-black/50 rounded-full overflow-hidden p-0.5 border border-white/10">
+                <div 
+                  className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-accent to-emerald-400 transition-all duration-300 shadow-md shadow-accent/50"
+                  style={{ width: `${Math.min(100, Math.max(5, generationProgress.percent))}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Step Checkpoints */}
+            {generationProgress.totalSteps && (
+              <div className="grid grid-cols-4 gap-2 pt-2 border-t border-white/10 relative z-10 text-center">
+                {Array.from({ length: generationProgress.totalSteps }).map((_, idx) => {
+                  const stepNum = idx + 1;
+                  const isDone = (generationProgress.stepIndex || 1) > stepNum || generationProgress.percent === 100;
+                  const isCurrent = (generationProgress.stepIndex || 1) === stepNum && generationProgress.percent < 100;
+
+                  return (
+                    <div 
+                      key={`progress-step-${stepNum}`}
+                      className={cn(
+                        "p-2 rounded-xl border text-[10px] font-black transition-all flex flex-col items-center gap-1",
+                        isDone 
+                          ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
+                          : isCurrent
+                          ? "bg-accent/20 border-accent text-accent shadow-sm animate-pulse"
+                          : "bg-white/5 border-white/5 text-white/30"
+                      )}
+                    >
+                      <div className="flex items-center gap-1">
+                        {isDone ? (
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        ) : isCurrent ? (
+                          <Loader2 className="w-3 h-3 text-accent animate-spin" />
+                        ) : (
+                          <Clock className="w-3 h-3 text-white/30" />
+                        )}
+                        <span>{lang === 'ar' ? `المرحلة ${stepNum}` : `Step ${stepNum}`}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Live Reassurance Footer */}
+            <div className="flex items-center justify-between p-3 bg-white/5 rounded-2xl border border-white/10 relative z-10">
+              <div className="flex items-center gap-2 text-[11px] text-white/70">
+                <Cpu className="w-4 h-4 text-cyan-400 animate-pulse" />
+                <span>{lang === 'ar' ? 'معالجة هندسية فورية غير متزامنة (بدون تجميد)' : 'Non-blocking async geometric processing active'}</span>
+              </div>
+              <span className="text-[10px] font-mono font-bold text-accent px-2 py-0.5 rounded-md bg-accent/10 border border-accent/20">
+                LIVE
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
