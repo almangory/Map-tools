@@ -3205,9 +3205,10 @@ const App: React.FC = () => {
   const [selectedHeaders, setSelectedHeaders] = useState<string[]>([]);
   const [streetMappingCol, setStreetMappingCol] = useState<string>('');
   const [districtMappingCol, setDistrictMappingCol] = useState<string>('');
-  const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'column'>(() => loadSavedPreference('groupingMode', 'layer'));
+  const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'color' | 'column' | 'geometry'>(() => loadSavedPreference('groupingMode', 'layer'));
   const [groupByColumnSelect, setGroupByColumnSelect] = useState<string>('');
   const [converterExportAsZip, setConverterExportAsZip] = useState<boolean>(() => loadSavedPreference('converterExportAsZip', false));
+  const [converterLineWidth, setConverterLineWidth] = useState<number>(() => loadSavedPreference('converterLineWidth', 3));
   const [optimizeForMyMaps, setOptimizeForMyMaps] = useState<boolean>(() => loadSavedPreference('optimizeForMyMaps', false));
   const [keepOriginalDescription, setKeepOriginalDescription] = useState<boolean>(() => loadSavedPreference('keepOriginalDescription', false));
   const [removeImagesOnly, setRemoveImagesOnly] = useState<boolean>(() => loadSavedPreference('removeImagesOnly', false));
@@ -3222,6 +3223,7 @@ const App: React.FC = () => {
   useEffect(() => { savePreference('sourceEPSG', sourceEPSG); }, [sourceEPSG]);
   useEffect(() => { savePreference('exportStyle', exportStyle); }, [exportStyle]);
   useEffect(() => { savePreference('converterExportAsZip', converterExportAsZip); }, [converterExportAsZip]);
+  useEffect(() => { savePreference('converterLineWidth', converterLineWidth); }, [converterLineWidth]);
   useEffect(() => { savePreference('optimizeForMyMaps', optimizeForMyMaps); }, [optimizeForMyMaps]);
   useEffect(() => { savePreference('keepOriginalDescription', keepOriginalDescription); }, [keepOriginalDescription]);
   useEffect(() => { savePreference('removeImagesOnly', removeImagesOnly); }, [removeImagesOnly]);
@@ -3251,6 +3253,7 @@ const App: React.FC = () => {
       setSourceEPSG('EPSG:32638');
       setExportStyle('single');
       setConverterExportAsZip(false);
+      setConverterLineWidth(3);
       setOptimizeForMyMaps(false);
       setKeepOriginalDescription(false);
       setRemoveImagesOnly(false);
@@ -5958,14 +5961,14 @@ const App: React.FC = () => {
                                             {lang === 'ar' ? 'اختر طريقة لتجميع العناصر وتقسيمها داخل ملف الـ KMZ كـ مجلدات منفصلة.' : 'Choose how to group and catalog elements into separate folders within the KMZ file.'}
                                         </p>
 
-                                        <div className="grid grid-cols-3 gap-2">
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => setGroupingMode('none')}
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
                                                     groupingMode === 'none'
-                                                        ? "bg-accent text-primary border-accent"
+                                                        ? "bg-accent text-primary border-accent shadow-sm"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
@@ -5977,11 +5980,24 @@ const App: React.FC = () => {
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
                                                     groupingMode === 'layer'
-                                                        ? "bg-accent text-primary border-accent"
+                                                        ? "bg-accent text-primary border-accent shadow-sm"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
-                                                {lang === 'ar' ? 'تصدير المجلدات كما في الملف المصدر' : 'Folders As Source'}
+                                                {lang === 'ar' ? 'مجلدات المصدر' : 'Folders As Source'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setGroupingMode('color')}
+                                                className={cn(
+                                                    "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border flex items-center justify-center gap-1.5",
+                                                    groupingMode === 'color'
+                                                        ? "bg-accent text-primary border-accent shadow-sm"
+                                                        : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
+                                                )}
+                                            >
+                                                <Palette className="w-3.5 h-3.5" />
+                                                {lang === 'ar' ? 'حسب اللون' : 'By Color'}
                                             </button>
                                             <button
                                                 type="button"
@@ -5989,7 +6005,7 @@ const App: React.FC = () => {
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
                                                     groupingMode === 'column'
-                                                        ? "bg-accent text-primary border-accent"
+                                                        ? "bg-accent text-primary border-accent shadow-sm"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
@@ -6001,7 +6017,7 @@ const App: React.FC = () => {
                                                 className={cn(
                                                     "px-2.5 py-3 rounded-xl text-[10px] font-black transition-all border",
                                                     groupingMode === 'geometry'
-                                                        ? "bg-accent text-primary border-accent"
+                                                        ? "bg-accent text-primary border-accent shadow-sm"
                                                         : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
                                                 )}
                                             >
@@ -6061,6 +6077,60 @@ const App: React.FC = () => {
                                                 </div>
                                             </div>
                                         )}
+
+                                        {/* ضبط سماكة الخط (Line Width) 1-10 لملف KMZ */}
+                                        <div className="bg-white/5 p-4 rounded-2xl border border-white/5 space-y-3 mt-3 animate-in fade-in duration-200">
+                                            <div className="flex items-center justify-between">
+                                                <label className="text-xs font-black text-white flex items-center gap-2">
+                                                    <PenTool className="w-4 h-4 text-accent" />
+                                                    <span>{lang === 'ar' ? 'سماكة الخط (Line Width) لملف KMZ من 1 إلى 10:' : 'KMZ Line Width (1 to 10):'}</span>
+                                                </label>
+                                                <span className="text-xs font-mono font-bold bg-accent/20 text-accent border border-accent/40 px-3 py-1 rounded-xl shadow-sm">
+                                                    {converterLineWidth} px
+                                                </span>
+                                            </div>
+
+                                            <div className="flex flex-col sm:flex-row items-center gap-4">
+                                                <input
+                                                    type="range"
+                                                    min={1}
+                                                    max={10}
+                                                    step={1}
+                                                    value={converterLineWidth}
+                                                    onChange={(e) => setConverterLineWidth(parseInt(e.target.value) || 1)}
+                                                    className="w-full h-2 bg-black/40 rounded-lg appearance-none cursor-pointer accent-accent"
+                                                />
+                                                <div className="flex items-center gap-1 shrink-0 overflow-x-auto max-w-full pb-1 sm:pb-0">
+                                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((num) => (
+                                                        <button
+                                                            key={num}
+                                                            type="button"
+                                                            onClick={() => setConverterLineWidth(num)}
+                                                            className={cn(
+                                                                "w-7 h-7 rounded-lg text-[11px] font-mono font-black transition-all flex items-center justify-center",
+                                                                converterLineWidth === num
+                                                                    ? "bg-accent text-primary scale-110 shadow-md font-black"
+                                                                    : "bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+                                                            )}
+                                                        >
+                                                            {num}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* معاينة حية لسماكة الخط */}
+                                            <div className="p-2.5 bg-black/40 rounded-xl border border-white/5 flex items-center justify-between gap-4">
+                                                <span className="text-[10px] text-white/60 font-bold shrink-0">{lang === 'ar' ? 'معاينة سماكة الخط:' : 'Line Stroke Preview:'}</span>
+                                                <div className="flex-1 flex items-center justify-center">
+                                                    <div 
+                                                        className="bg-accent rounded-full transition-all duration-200 shadow-sm"
+                                                        style={{ height: `${converterLineWidth * 2}px`, width: '100%', maxWidth: '240px' }}
+                                                    />
+                                                </div>
+                                                <span className="text-[10px] font-mono text-accent font-bold shrink-0">{converterLineWidth} px</span>
+                                            </div>
+                                        </div>
 
                                         {/* خيار تحسين خرائط جوجل My Maps لمنع التكرار */}
                                         <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex items-center justify-between mt-3 animate-in fade-in duration-200">
@@ -6191,10 +6261,20 @@ const App: React.FC = () => {
                                       onExcelExport={() => executeWithStreetFetching(filteredPoints, selectedHeaders, downloadExcelAnalysis)}
                                       onKmzExport={() => {
                                           executeWithStreetFetching(filteredPoints, selectedHeaders, () => {
+                                              const exportOpts: KmlExportOptions = {
+                                                  mode: 'none',
+                                                  groupByAttribute: groupingMode === 'layer' ? 'layer' : groupingMode === 'color' ? 'color' : groupingMode === 'geometry' ? 'geometry' : undefined,
+                                                  groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined,
+                                                  optimizeForMyMaps: optimizeForMyMaps,
+                                                  keepOriginalDescription: keepOriginalDescription,
+                                                  removeImagesOnly: removeImagesOnly,
+                                                  canonicalColorMap: canonicalColorMap,
+                                                  lineStyle: { width: converterLineWidth }
+                                              };
                                               if (converterExportAsZip && groupingMode !== 'none') {
-                                                  downloadKMZGroupedZip(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : groupingMode === 'geometry' ? 'geometry' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
+                                                  downloadKMZGroupedZip(filteredPoints, activeFile.filename, exportOpts, activeFile.headers, selectedHeaders);
                                               } else {
-                                                  downloadKMZ(filteredPoints, activeFile.filename, { mode: 'none', groupByAttribute: groupingMode === 'layer' ? 'layer' : groupingMode === 'geometry' ? 'geometry' : undefined, groupByColumn: groupingMode === 'column' ? groupByColumnSelect : undefined, optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly, canonicalColorMap: canonicalColorMap, lineStyle: { width: 3 } }, activeFile.headers, selectedHeaders);
+                                                  downloadKMZ(filteredPoints, activeFile.filename, exportOpts, activeFile.headers, selectedHeaders);
                                               }
                                           });
                                       }}
