@@ -138,17 +138,44 @@ export const EarthworkBoqModal: React.FC<EarthworkBoqModalProps> = ({
               <span className="text-[10px] text-white/50 block font-bold">{lang === 'ar' ? 'إجمالي حجم الردم' : 'Total Backfill'}</span>
               <span className="font-mono text-lg font-black text-emerald-400">{boq.totalBackfillM3.toLocaleString()} <span className="text-xs font-normal">م³</span></span>
             </div>
-            <div className="bg-[#05131b] p-3.5 rounded-2xl border border-white/5 flex flex-col justify-between">
-              <span className="text-[10px] text-white/50 block font-bold">{lang === 'ar' ? 'قطع وإعادة سفلتة' : 'Asphalt Area'}</span>
-              <span className="font-mono text-lg font-black text-cyan-400">{boq.totalAsphaltAreaM2.toLocaleString()} <span className="text-xs font-normal">م²</span></span>
+            <div className="bg-[#05131b] p-3.5 rounded-2xl border border-cyan-500/30 flex flex-col justify-between bg-cyan-950/20">
+              <span className="text-[10px] text-cyan-300 block font-bold">{lang === 'ar' ? 'صافي مساحة الإسفلت' : 'Net Asphalt Area'}</span>
+              <span className="font-mono text-lg font-black text-cyan-300">{boq.totalAsphaltAreaM2.toLocaleString()} <span className="text-xs font-normal">م²</span></span>
             </div>
-            <div className="bg-[#05131b] p-3.5 rounded-2xl border border-white/5 flex flex-col justify-between">
-              <span className="text-[10px] text-white/50 block font-bold">{lang === 'ar' ? 'متوسط عمق الحفر' : 'Avg Depth'}</span>
-              <span className="font-mono text-lg font-black text-white">{boq.avgDepthM} <span className="text-xs font-normal">م</span></span>
+            <div className="bg-[#05131b] p-3.5 rounded-2xl border border-cyan-500/30 flex flex-col justify-between bg-cyan-950/20">
+              <span className="text-[10px] text-cyan-300 block font-bold">{lang === 'ar' ? 'وزن الإسفلت (طن)' : 'Asphalt Weight'}</span>
+              <span className="font-mono text-lg font-black text-cyan-300">{boq.totalAsphaltWeightTon.toLocaleString()} <span className="text-xs font-normal">طن</span></span>
             </div>
             <div className="bg-[#05131b] p-3.5 rounded-2xl border border-amber-500/20 flex flex-col justify-between bg-amber-950/20">
               <span className="text-[10px] text-amber-300 block font-bold">{lang === 'ar' ? 'التكلفة الإجمالية التقديرية' : 'Grand Total Cost'}</span>
               <span className="font-mono text-lg font-black text-amber-300">{boq.grandTotalCost.toLocaleString()} <span className="text-xs font-normal">ر.س</span></span>
+            </div>
+          </div>
+
+          {/* Asphalt Formula Card */}
+          <div className="bg-gradient-to-r from-[#071e2c] to-[#0a2f44] p-4 rounded-2xl border border-cyan-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></div>
+                <h4 className="text-white text-xs font-black">
+                  {lang === 'ar' ? 'معادلات حصر الإسفلت المعتمدة بالمستخلصات' : 'Certified Asphalt Calculation Standard'}
+                </h4>
+              </div>
+              <p className="text-[11px] text-cyan-200/80 font-mono">
+                {lang === 'ar' 
+                  ? `W = W_trench + (2 × ${boq.asphaltOvercutM}m) | المساحة الصافية = (L × W) - خصم المناهل | الحجم = المساحة × ${boq.asphaltThicknessM}m | الوزن = الحجم × ${boq.asphaltDensityTonPerM3} طن/م³`
+                  : `W = W_trench + 2*(Overcut=${boq.asphaltOvercutM}m) | Net Area = (L*W) - Manholes | Vol = Area*${boq.asphaltThicknessM}m | Weight = Vol*${boq.asphaltDensityTonPerM3}`}
+              </p>
+            </div>
+            <div className="flex items-center gap-3 shrink-0 text-xs font-mono">
+              <div className="bg-black/30 px-3 py-1.5 rounded-xl border border-white/10">
+                <span className="text-white/50 block text-[9px]">{lang === 'ar' ? 'إجمالي الحجم' : 'Volume'}</span>
+                <span className="text-white font-bold">{boq.totalAsphaltVolumeM3} م³</span>
+              </div>
+              <div className="bg-black/30 px-3 py-1.5 rounded-xl border border-cyan-500/30">
+                <span className="text-cyan-300/70 block text-[9px]">{lang === 'ar' ? 'إجمالي الوزن' : 'Weight'}</span>
+                <span className="text-cyan-300 font-black">{boq.totalAsphaltWeightTon} طن</span>
+              </div>
             </div>
           </div>
 
@@ -295,37 +322,45 @@ export const EarthworkBoqModal: React.FC<EarthworkBoqModalProps> = ({
               <div className="flex items-center justify-between">
                 <h3 className="text-white font-black text-xs uppercase tracking-wider flex items-center gap-2">
                   <Layers className="w-4 h-4 text-amber-400" />
-                  {lang === 'ar' ? 'جدول الحصر التفصيلي لكل ماسورة (Individual Pipe Breakdown)' : 'Pipe Level Quantities'}
+                  {lang === 'ar' ? 'جدول الحصر التفصيلي لكل ماسورة والإسفلت المعتمد' : 'Pipe Level Quantities & Asphalt Breakdown'}
                 </h3>
               </div>
 
               <div className="max-h-72 overflow-y-auto custom-scrollbar rounded-2xl border border-white/5">
                 <table className="w-full text-start text-xs border-collapse">
-                  <thead className="bg-[#092230] text-white/70 sticky top-0 font-black text-[10px] uppercase">
+                  <thead className="bg-[#092230] text-white/70 sticky top-0 font-black text-[10px] uppercase whitespace-nowrap">
                     <tr>
-                      <th className="p-3 text-start">ID</th>
-                      <th className="p-3 text-start">{lang === 'ar' ? 'الطبقة' : 'Layer'}</th>
-                      <th className="p-3 text-center">{lang === 'ar' ? 'القطر' : 'Dia (mm)'}</th>
-                      <th className="p-3 text-center">{lang === 'ar' ? 'الطول (م)' : 'Length (m)'}</th>
-                      <th className="p-3 text-center">{lang === 'ar' ? 'متوسط العمق' : 'Avg Depth'}</th>
-                      <th className="p-3 text-end">{lang === 'ar' ? 'حجم الحفر (م³)' : 'Excavation (m³)'}</th>
-                      <th className="p-3 text-end">{lang === 'ar' ? 'رمل (م³)' : 'Bedding (m³)'}</th>
-                      <th className="p-3 text-end">{lang === 'ar' ? 'ردم (م³)' : 'Backfill (m³)'}</th>
-                      <th className="p-3 text-end">{lang === 'ar' ? 'سفلتة (م²)' : 'Asphalt (m²)'}</th>
+                      <th className="p-2.5 text-start">ID</th>
+                      <th className="p-2.5 text-start">{lang === 'ar' ? 'الطبقة' : 'Layer'}</th>
+                      <th className="p-2.5 text-center">{lang === 'ar' ? 'القطر (مم)' : 'Dia (mm)'}</th>
+                      <th className="p-2.5 text-center">{lang === 'ar' ? 'الطول (م)' : 'Length (m)'}</th>
+                      <th className="p-2.5 text-center">{lang === 'ar' ? 'متوسط العمق' : 'Avg Depth'}</th>
+                      <th className="p-2.5 text-center">{lang === 'ar' ? 'عرض الخندق' : 'W_trench'}</th>
+                      <th className="p-2.5 text-center font-bold text-cyan-300">{lang === 'ar' ? 'عرض الإسفلت (W)' : 'Actual W'}</th>
+                      <th className="p-2.5 text-end font-bold text-white">{lang === 'ar' ? 'حفر (م³)' : 'Excavation (m³)'}</th>
+                      <th className="p-2.5 text-end text-yellow-300">{lang === 'ar' ? 'رمل (م³)' : 'Bedding (m³)'}</th>
+                      <th className="p-2.5 text-end text-emerald-300">{lang === 'ar' ? 'ردم (م³)' : 'Backfill (m³)'}</th>
+                      <th className="p-2.5 text-end font-bold text-cyan-300">{lang === 'ar' ? 'صافي مساحة الإسفلت (م²)' : 'Net Asphalt (m²)'}</th>
+                      <th className="p-2.5 text-end font-bold text-cyan-200">{lang === 'ar' ? 'حجم الإسفلت (م³)' : 'Vol (m³)'}</th>
+                      <th className="p-2.5 text-end font-bold text-cyan-100">{lang === 'ar' ? 'وزن الإسفلت (طن)' : 'Weight (Ton)'}</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/5 text-white/80">
+                  <tbody className="divide-y divide-white/5 text-white/80 whitespace-nowrap">
                     {boq.items.map((it, idx) => (
                       <tr key={idx} className="hover:bg-white/5 transition-colors">
-                        <td className="p-3 font-mono font-bold text-amber-400">{it.id}</td>
-                        <td className="p-3 text-white/60">{it.layer}</td>
-                        <td className="p-3 text-center font-bold text-accent">{it.diameterMm}</td>
-                        <td className="p-3 text-center font-mono">{it.lengthM}</td>
-                        <td className="p-3 text-center font-mono">{it.avgDepth} م</td>
-                        <td className="p-3 text-end font-mono font-bold text-white">{it.excavationVolumeM3}</td>
-                        <td className="p-3 text-end font-mono text-yellow-300">{it.beddingVolumeM3}</td>
-                        <td className="p-3 text-end font-mono text-emerald-300">{it.ordinaryBackfillVolumeM3}</td>
-                        <td className="p-3 text-end font-mono text-cyan-300">{it.asphaltCuttingAreaM2}</td>
+                        <td className="p-2.5 font-mono font-bold text-amber-400">{it.id}</td>
+                        <td className="p-2.5 text-white/60">{it.layer}</td>
+                        <td className="p-2.5 text-center font-bold text-accent">{it.diameterMm}</td>
+                        <td className="p-2.5 text-center font-mono">{it.lengthM}</td>
+                        <td className="p-2.5 text-center font-mono">{it.avgDepth} م</td>
+                        <td className="p-2.5 text-center font-mono text-white/70">{it.trenchWidthM} م</td>
+                        <td className="p-2.5 text-center font-mono font-bold text-cyan-300">{it.actualAsphaltWidthM} م</td>
+                        <td className="p-2.5 text-end font-mono font-bold text-white">{it.excavationVolumeM3}</td>
+                        <td className="p-2.5 text-end font-mono text-yellow-300">{it.beddingVolumeM3}</td>
+                        <td className="p-2.5 text-end font-mono text-emerald-300">{it.ordinaryBackfillVolumeM3}</td>
+                        <td className="p-2.5 text-end font-mono font-black text-cyan-300">{it.asphaltCuttingAreaM2}</td>
+                        <td className="p-2.5 text-end font-mono text-cyan-200">{it.asphaltVolumeM3}</td>
+                        <td className="p-2.5 text-end font-mono text-cyan-100">{it.asphaltWeightTon}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -339,10 +374,73 @@ export const EarthworkBoqModal: React.FC<EarthworkBoqModalProps> = ({
             <div className="bg-[#05131b] p-5 rounded-3xl border border-white/10 space-y-4">
               <h3 className="text-white font-black text-xs uppercase tracking-wider flex items-center gap-2">
                 <Sliders className="w-4 h-4 text-amber-400" />
-                {lang === 'ar' ? 'تخصيص معايير الخندق وأسعار البنود التقديرية' : 'Trench Parameters & Unit Costs'}
+                {lang === 'ar' ? 'تخصيص معايير الخندق، قص الإسفلت، وأسعار البنود' : 'Trench Parameters, Asphalt Specs & Unit Costs'}
               </h3>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
+                <div className="space-y-1">
+                  <label className="text-cyan-300 font-bold block">{lang === 'ar' ? 'مسافة القص الإضافي للجانبين Overcut (متر)' : 'Asphalt Cut-back / Overcut (m)'}</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={params.asphaltOvercutM}
+                    onChange={(e) => setParams({ ...params, asphaltOvercutM: parseFloat(e.target.value) || 0 })}
+                    className="w-full bg-[#0d2f40] border border-cyan-500/40 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-cyan-400"
+                  />
+                  <span className="text-[10px] text-white/40 block">{lang === 'ar' ? 'افتراضياً 0.15 م (15 سم من كل جانب)' : 'Default: 0.15m (15cm each side)'}</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-cyan-300 font-bold block">{lang === 'ar' ? 'سماكة طبقة الإسفلت (متر)' : 'Asphalt Thickness (m)'}</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={params.asphaltThicknessM}
+                    onChange={(e) => setParams({ ...params, asphaltThicknessM: parseFloat(e.target.value) || 0.10 })}
+                    className="w-full bg-[#0d2f40] border border-cyan-500/40 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-cyan-400"
+                  />
+                  <span className="text-[10px] text-white/40 block">{lang === 'ar' ? 'افتراضياً 0.10 م (10 سم)' : 'Default: 0.10m (10cm)'}</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-cyan-300 font-bold block">{lang === 'ar' ? 'كثافة الإسفلت (طن/م³)' : 'Asphalt Density (Ton/m³)'}</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={params.asphaltDensityTonPerM3}
+                    onChange={(e) => setParams({ ...params, asphaltDensityTonPerM3: parseFloat(e.target.value) || 2.35 })}
+                    className="w-full bg-[#0d2f40] border border-cyan-500/40 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-cyan-400"
+                  />
+                  <span className="text-[10px] text-white/40 block">{lang === 'ar' ? 'الكثافة القياسية المعتمدة: 2.35 طن/م³' : 'Standard Density: 2.35 Ton/m³'}</span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-white/70 font-bold block">{lang === 'ar' ? 'خصم مساحات فتحات المناهل' : 'Deduct Manhole Openings'}</label>
+                  <div className="flex items-center gap-3 pt-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-white">
+                      <input
+                        type="checkbox"
+                        checked={params.deductManholeArea}
+                        onChange={(e) => setParams({ ...params, deductManholeArea: e.target.checked })}
+                        className="rounded accent-amber-500"
+                      />
+                      <span>{lang === 'ar' ? 'تفعيل الخصم من المستخلص' : 'Enable Deduction'}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-white/70 font-bold block">{lang === 'ar' ? 'مساحة فتحة المنهل المخصومة (م²)' : 'Manhole Deduction Area (m²)'}</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={params.manholeDeductionAreaM2}
+                    onChange={(e) => setParams({ ...params, manholeDeductionAreaM2: parseFloat(e.target.value) || 1.13 })}
+                    className="w-full bg-[#0d2f40] border border-white/10 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-amber-400"
+                  />
+                  <span className="text-[10px] text-white/40 block">{lang === 'ar' ? 'منهل دائري قطر 1.2م = 1.13 م²' : 'Circular 1.2m dia = 1.13 m²'}</span>
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-white/70 font-bold block">{lang === 'ar' ? 'سماكة فرشة الرمل (متر)' : 'Bedding Thickness (m)'}</label>
                   <input
@@ -375,19 +473,6 @@ export const EarthworkBoqModal: React.FC<EarthworkBoqModalProps> = ({
                     onChange={(e) => setParams({
                       ...params,
                       unitCosts: { ...params.unitCosts!, beddingSandPerM3: parseFloat(e.target.value) || 0 }
-                    })}
-                    className="w-full bg-[#0d2f40] border border-white/10 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-amber-400"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-white/70 font-bold block">{lang === 'ar' ? 'سعر م³ الردم (ر.س)' : 'Backfill Rate (SAR/m³)'}</label>
-                  <input
-                    type="number"
-                    value={params.unitCosts?.backfillPerM3}
-                    onChange={(e) => setParams({
-                      ...params,
-                      unitCosts: { ...params.unitCosts!, backfillPerM3: parseFloat(e.target.value) || 0 }
                     })}
                     className="w-full bg-[#0d2f40] border border-white/10 rounded-xl px-3 py-2 text-white font-bold outline-none focus:border-amber-400"
                   />
