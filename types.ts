@@ -119,7 +119,6 @@ export interface AnalysisItem {
 }
 
 export type BaseMapType = 'satellite' | 'streets' | 'terrain' | 'osm';
-export type CheckResultModalState = any;
 
 export type HydraulicVelocityStatus = 'low' | 'optimal' | 'high';
 

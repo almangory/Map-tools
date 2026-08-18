@@ -595,6 +595,8 @@ const App: React.FC = () => {
   const [showFlowDirection, setShowFlowDirection] = useState<boolean>(false);
   const [flowAnalysis, setFlowAnalysis] = useState<import('./services/flowDirectionService').NetworkFlowAnalysis | null>(null);
   const [outfallTargets, setOutfallTargets] = useState<OutfallTarget[]>([]);
+  const [suppressAutoOutfalls, setSuppressAutoOutfalls] = useState<boolean>(false);
+  const [removedOutfallIds, setRemovedOutfallIds] = useState<string[]>([]);
 
   // Multi-Polygon & Street Planner States needed for displayPoints
   const [splitMode, setSplitMode] = useState<'count' | 'spatial' | 'street'>('count');
@@ -681,6 +683,8 @@ const App: React.FC = () => {
     }
 
     try {
+      setSuppressAutoOutfalls(false);
+      setRemovedOutfallIds([]);
       const targetsToUse = targets && targets.length > 0 ? targets : outfallTargets;
       const result = orientNetworkTowardsOutfall(globalPoints, {
         outfallTargets: targetsToUse
@@ -768,6 +772,7 @@ const App: React.FC = () => {
   };
 
   const handleAddOutfallTarget = (target: OutfallTarget) => {
+    setSuppressAutoOutfalls(false);
     setOutfallTargets(prev => {
       const exists = prev.some(o => o.id === target.id || (Math.abs(o.x - target.x) < 0.0001 && Math.abs(o.y - target.y) < 0.0001));
       if (exists) return prev;
@@ -786,32 +791,34 @@ const App: React.FC = () => {
   };
 
   const handleRemoveOutfallTarget = (id: string) => {
+    setRemovedOutfallIds(prev => [...prev, id]);
     setOutfallTargets(prev => {
-      const next = prev.filter(o => o.id !== id);
-      if (next.length === 0) {
-        // If all outfalls were deleted, clear outfall nodes from flow analysis and re-analyze cleanly
-        setFlowAnalysis(fPrev => fPrev ? { ...fPrev, outfallNodes: [] } : null);
-        import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
-          analyzeNetworkFlowDirections(globalPoints).then(res => {
-            setFlowAnalysis(res);
-          });
-        });
-        setDataId(`clear-outfalls-${Date.now()}`);
-      } else {
+      const next = prev.filter(o => o.id !== id && (o as any).name !== id);
+      if (next.length > 0) {
         setTimeout(() => {
           handleOrientNetworkTowardsMultiOutfalls(next);
         }, 50);
       }
       return next;
     });
+    setFlowAnalysis(fPrev => {
+      if (!fPrev) return null;
+      return {
+        ...fPrev,
+        outfallNodes: (fPrev.outfallNodes || []).filter(o => o.id !== id && (o as any).name !== id && o.labelAr !== id)
+      };
+    });
+    setDataId(`remove-outfall-${id}-${Date.now()}`);
     setStatusMessage(
-      lang === 'ar' ? 'تم حذف المصب وإعادة توزيع الفلو على المصبات المتبقية.' : 'Removed outfall target and re-partitioned remaining flow.'
+      lang === 'ar' ? 'تم حذف المصب وإزالته بنجاح.' : 'Removed outfall successfully.'
     );
   };
 
   const handleClearOutfallTargets = () => {
     setOutfallTargets([]);
-    // Immediately clear outfall nodes from flow analysis
+    setSuppressAutoOutfalls(true);
+    setRemovedOutfallIds([]);
+    // Immediately clear all outfall nodes (both auto-generated and custom)
     setFlowAnalysis(prev => {
       if (!prev) return null;
       return {
@@ -819,16 +826,10 @@ const App: React.FC = () => {
         outfallNodes: []
       };
     });
-    // Re-run fresh flow direction analysis without explicit outfall targets
-    import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
-      analyzeNetworkFlowDirections(globalPoints).then(res => {
-        setFlowAnalysis(res);
-      });
-    });
     // Trigger map update
     setDataId(`clear-outfalls-${Date.now()}`);
     setStatusMessage(
-      lang === 'ar' ? 'تم مسح كافة المصبات المحددة وإزالتها من الخريطة.' : 'Cleared all custom outfall targets from the map.'
+      lang === 'ar' ? 'تم حذف ومسح جميع المصبات التلقائية والمخصصة من الخريطة بنجاح.' : 'Successfully deleted and cleared all outfalls from the map.'
     );
   };
 
@@ -874,12 +875,18 @@ const App: React.FC = () => {
     import('./services/flowDirectionService').then(({ analyzeNetworkFlowDirections }) => {
       analyzeNetworkFlowDirections(displayPoints).then(result => {
         if (isMounted) {
-          setFlowAnalysis(result);
+          const filteredOutfalls = suppressAutoOutfalls
+            ? []
+            : (result.outfallNodes || []).filter(o => !removedOutfallIds.includes(o.id));
+          setFlowAnalysis({
+            ...result,
+            outfallNodes: filteredOutfalls
+          });
         }
       });
     });
     return () => { isMounted = false; };
-  }, [showFlowDirection, displayPoints, dataId]);
+  }, [showFlowDirection, displayPoints, dataId, suppressAutoOutfalls, removedOutfallIds]);
 
   const [checkResultModal, setCheckResultModal] = useState<CheckResultModalState | null>(null);
 

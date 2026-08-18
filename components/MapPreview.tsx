@@ -232,6 +232,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const onOrientNetworkTowardsOutfallRef = useRef(onOrientNetworkTowardsOutfall);
   const onAddOutfallTargetRef = useRef(onAddOutfallTarget);
   const onRemoveOutfallTargetRef = useRef(onRemoveOutfallTarget);
+  const onClearOutfallTargetsRef = useRef(onClearOutfallTargets);
   const onOrientNetworkTowardsMultiOutfallsRef = useRef(onOrientNetworkTowardsMultiOutfalls);
   const outfallTargetsRef = useRef<OutfallTarget[]>([]);
   const isPickingOutfallTargetRef = useRef(false);
@@ -248,33 +249,16 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     onOrientNetworkTowardsOutfallRef.current = onOrientNetworkTowardsOutfall;
     onAddOutfallTargetRef.current = onAddOutfallTarget;
     onRemoveOutfallTargetRef.current = onRemoveOutfallTarget;
+    onClearOutfallTargetsRef.current = onClearOutfallTargets;
     onOrientNetworkTowardsMultiOutfallsRef.current = onOrientNetworkTowardsMultiOutfalls;
     outfallTargetsRef.current = outfallTargets || [];
     isPickingOutfallTargetRef.current = isPickingOutfallTarget;
   }, [
     isLineDrawingMode, activeLineVertices, onAddLineVertex, onFinishLine, 
     isPickingCoordinate, onPickMapCoordinate, onOrientNetworkTowardsOutfall, 
-    onAddOutfallTarget, onRemoveOutfallTarget, onOrientNetworkTowardsMultiOutfalls, 
+    onAddOutfallTarget, onRemoveOutfallTarget, onClearOutfallTargets, onOrientNetworkTowardsMultiOutfalls, 
     outfallTargets, isPickingOutfallTarget
   ]);
-
-  // Global window bridge for popup buttons
-  useEffect(() => {
-    (window as any).__orientTowardsOutfall = (x: number, y: number) => {
-      if (onOrientNetworkTowardsOutfallRef.current) {
-        onOrientNetworkTowardsOutfallRef.current({ x, y });
-      }
-    };
-    (window as any).__removeOutfallTarget = (id: string) => {
-      if (onRemoveOutfallTargetRef.current) {
-        onRemoveOutfallTargetRef.current(id);
-      }
-    };
-    return () => {
-      delete (window as any).__orientTowardsOutfall;
-      delete (window as any).__removeOutfallTarget;
-    };
-  }, []);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -300,6 +284,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     }
   };
 
+  // Global window bridge for popup buttons
   useEffect(() => {
     (window as any).__orientTowardsOutfall = (x: number, y: number) => {
       if (onOrientNetworkTowardsOutfallRef.current) {
@@ -307,8 +292,15 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       }
     };
     (window as any).__removeOutfallTarget = (id: string) => {
+      mapInstance.current?.closePopup();
       if (onRemoveOutfallTargetRef.current) {
         onRemoveOutfallTargetRef.current(id);
+      }
+    };
+    (window as any).__clearAllOutfalls = () => {
+      mapInstance.current?.closePopup();
+      if (onClearOutfallTargetsRef.current) {
+        onClearOutfallTargetsRef.current();
       }
     };
     (window as any).__focusFurthestPipe = (pipeX: number, pipeY: number, outfallX?: number, outfallY?: number) => {
@@ -326,6 +318,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     return () => {
       delete (window as any).__orientTowardsOutfall;
       delete (window as any).__removeOutfallTarget;
+      delete (window as any).__clearAllOutfalls;
       delete (window as any).__focusFurthestPipe;
     };
   }, []);
@@ -386,6 +379,34 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
     return list;
   }, [outfallTargets, flowAnalysis]);
+
+  const displayOutfalls = useMemo(() => {
+    if (outfallTargets && outfallTargets.length > 0) {
+      return outfallTargets.map((of, idx) => ({
+        id: of.id || `target-${idx}`,
+        name: of.name || (lang === 'ar' ? `مصب ${idx + 1}` : `Outfall ${idx + 1}`),
+        x: of.x,
+        y: of.y,
+        color: of.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
+        furthestPipe: of.furthestPipe,
+        isDistanceExceeded: !!(of.isDistanceExceeded || of.furthestPipe?.exceedsStandard),
+        isTarget: true
+      }));
+    }
+    if (flowAnalysis?.outfallNodes && flowAnalysis.outfallNodes.length > 0) {
+      return flowAnalysis.outfallNodes.map((node, idx) => ({
+        id: node.id,
+        name: (node as any).name || node.labelAr || (lang === 'ar' ? `مصب رئيسي (${node.id})` : `Main Outfall (${node.id})`),
+        x: node.x,
+        y: node.y,
+        color: (node as any).color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length],
+        furthestPipe: (node as any).furthestPipe,
+        isDistanceExceeded: !!((node as any).isDistanceExceeded || (node as any).furthestPipe?.exceedsStandard),
+        isTarget: false
+      }));
+    }
+    return [];
+  }, [outfallTargets, flowAnalysis?.outfallNodes, lang]);
 
   const t = translations[lang];
 
@@ -1638,15 +1659,22 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                   <span>🌊</span>
                   <span>${lang === 'ar' ? 'توجيه الشبكة نحو هذا المصب' : 'Orient Network to this Outfall'}</span>
                 </button>
-                ${outfall.isTarget ? `
                 <button
                   type="button"
                   onclick="window.__removeOutfallTarget && window.__removeOutfallTarget('${outfall.id}')"
-                  class="w-full py-1 px-3 bg-red-950/80 hover:bg-red-900 text-rose-300 border border-red-500/30 rounded-xl text-[10px] transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                  class="w-full py-1.5 px-3 bg-red-950/80 hover:bg-red-900 text-rose-200 border border-red-500/40 rounded-xl text-[10px] font-bold transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shadow"
                 >
                   <span>🗑️</span>
-                  <span>${lang === 'ar' ? 'حذف هذا المصب' : 'Remove Outfall'}</span>
-                </button>` : ''}
+                  <span>${lang === 'ar' ? 'حذف هذا المصب' : 'Remove This Outfall'}</span>
+                </button>
+                <button
+                  type="button"
+                  onclick="window.__clearAllOutfalls && window.__clearAllOutfalls()"
+                  class="w-full py-1 px-3 bg-slate-900/90 hover:bg-slate-800 text-rose-300 hover:text-white border border-rose-500/30 rounded-xl text-[9.5px] font-bold transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span>🧹</span>
+                  <span>${lang === 'ar' ? 'حذف جميع المصبات التلقائية' : 'Clear All Auto Outfalls'}</span>
+                </button>
               </div>
             </div>
           </div>
@@ -2181,9 +2209,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                         <span>🌊</span>
                         <span>{lang === 'ar' ? 'توزيع المصبات والأحواض' : 'Multi-Outfall Distribution'}</span>
                       </span>
-                      {outfallTargets && outfallTargets.length > 0 && (
+                      {displayOutfalls.length > 0 && (
                         <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-mono">
-                          {outfallTargets.length} {lang === 'ar' ? 'مصب' : 'outfalls'}
+                          {displayOutfalls.length} {lang === 'ar' ? 'مصب' : 'outfalls'}
                         </span>
                       )}
                     </div>
@@ -2234,10 +2262,25 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                       </span>
                     </button>
 
+                    {/* Action 3: Delete All Outfalls Button when outfalls exist */}
+                    {displayOutfalls.length > 0 && onClearOutfallTargets && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClearOutfallTargets();
+                        }}
+                        className="w-full py-1.5 px-2.5 rounded-xl bg-red-950/80 hover:bg-red-900 border border-red-500/40 hover:border-red-500/70 text-rose-200 font-bold text-[10px] transition-all shadow-md active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        <span>{lang === 'ar' ? 'حذف جميع المصبات التلقائية' : 'Clear All Auto Outfalls'}</span>
+                      </button>
+                    )}
+
                     {/* Outfall List with Badges, Hydraulic Distance Alerts and Delete Actions */}
-                    {outfallTargets && outfallTargets.length > 0 && (
+                    {displayOutfalls.length > 0 && (
                       <div className="space-y-1.5 pt-1 max-h-44 overflow-y-auto custom-scrollbar">
-                        {outfallTargets.map((of, idx) => {
+                        {displayOutfalls.map((of, idx) => {
                           const ofColor = of.color || OUTFALL_PALETTE[idx % OUTFALL_PALETTE.length];
                           const fur = of.furthestPipe;
                           const isExceeded = !!(of.isDistanceExceeded || fur?.exceedsStandard);
@@ -2309,19 +2352,6 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                             </div>
                           );
                         })}
-                        {onClearOutfallTargets && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onClearOutfallTargets();
-                            }}
-                            className="w-full py-1.5 px-2 text-[9.5px] font-bold text-rose-400 hover:text-rose-200 hover:bg-red-500/10 rounded-lg border border-transparent hover:border-red-500/20 transition-all text-center cursor-pointer flex items-center justify-center gap-1"
-                          >
-                            <Trash2 className="w-3 h-3 text-rose-400" />
-                            <span>{lang === 'ar' ? 'مسح كافة المصبات المحددة' : 'Clear all custom outfalls'}</span>
-                          </button>
-                        )}
                       </div>
                     )}
                   </div>
