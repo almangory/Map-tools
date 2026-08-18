@@ -176,6 +176,48 @@ export interface AsphaltCalculationParams {
   asphaltThickness: number; // default: 0.10 m (10 cm)
 }
 
+export interface AsphaltPolygonCalculation {
+  id: string;
+  name: string;
+  polygon: { x: number; y: number; z?: number }[];
+  areaM2: number;
+  perimeterM: number;
+  thicknessM: number; // default: 0.10 m (10 cm)
+  thicknessCm: number; // default: 10 cm
+  densityTonM3: number; // default: 2.40 ton/m3
+  volumeM3: number; // area * thickness
+  weightTons: number; // volume * density
+  
+  // Bituminous Coats
+  primeCoatRateKgM2: number; // default: 1.0 kg/m2 (MC-70)
+  primeCoatTotalKg: number;
+  tackCoatRateKgM2: number; // default: 0.5 kg/m2 (RC-250)
+  tackCoatTotalKg: number;
+
+  // Base Course / Subbase
+  includeBaseCourse?: boolean;
+  baseCourseThicknessM?: number; // e.g. 0.15 m (15 cm)
+  baseCourseVolumeM3?: number;
+  baseCourseWeightTons?: number; // density ~ 2.2 ton/m3
+
+  // Network Pipes inside Polygon
+  pipesInsideCount: number;
+  pipesTotalLengthM: number;
+  pipesTrenchAsphaltAreaM2: number;
+  pipesTrenchAsphaltVolumeM3: number;
+  pipesTrenchAsphaltWeightTons: number;
+
+  // Cost Estimation (Optional)
+  unitPricePerTon?: number;
+  unitPricePerM2?: number;
+  unitPricePerM3?: number;
+  estimatedTotalCost?: number;
+
+  source: 'draw' | 'file';
+  filename?: string;
+  createdAt: string;
+}
+
 export type HydraulicColorMode = 'velocity' | 'priority' | 'diameter' | 'status' | 'catchment' | 'default';
 
 export type SewerHydraulicStatus = 'Normal Gravity' | 'Drop Manhole' | 'Lift Station Needed';

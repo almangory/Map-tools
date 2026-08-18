@@ -14,7 +14,8 @@ import { twMerge } from 'tailwind-merge';
 import { 
   GeoPoint, BaseMapType, HydraulicNetworkSummary, 
   HydraulicColorMode, AsphaltCalculationParams, PipeHydraulicData,
-  OutfallTarget, OutfallSummaryInfo, OutfallFurthestPipeInfo
+  OutfallTarget, OutfallSummaryInfo, OutfallFurthestPipeInfo,
+  AsphaltPolygonCalculation
 } from '../types';
 import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
@@ -24,6 +25,12 @@ import {
   analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
   DEFAULT_ASPHALT_PARAMS, DEFAULT_MANNING_N 
 } from '../services/hydraulicService';
+import { 
+  calculateAsphaltPolygonBOQ, 
+  calculateGeodesicPolygonArea, 
+  calculatePolygonPerimeter 
+} from '../services/asphaltCalculationService';
+import { AsphaltPolygonCalculatorModal } from './AsphaltPolygonCalculatorModal';
 import { OUTFALL_PALETTE } from '../services/gravitySewerEngine';
 
 function cn(...inputs: ClassValue[]) {
@@ -214,6 +221,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const drawLayerGroup = useRef<L.LayerGroup | null>(null);
   const currentDrawGroup = useRef<L.LayerGroup | null>(null);
   const lineDrawLayerGroup = useRef<L.LayerGroup | null>(null);
+  const asphaltLayerGroup = useRef<L.LayerGroup | null>(null);
+  const asphaltDrawLayerGroup = useRef<L.LayerGroup | null>(null);
   const hoverMarkerRef = useRef<L.Marker | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const issueMarkersMap = useRef<Map<string | number, L.Marker | L.CircleMarker | L.Polyline>>(new Map());
@@ -221,6 +230,21 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const isDrawingRef = useRef(false);
   const polygonCoordsRef = useRef<L.LatLng[]>([]);
   const lastDataIdRef = useRef<string | null>(null);
+
+  // Asphalt Polygon BOQ Calculation States & Refs
+  const [asphaltCalc, setAsphaltCalc] = useState<AsphaltPolygonCalculation | null>(null);
+  const [showAsphaltModal, setShowAsphaltModal] = useState<boolean>(false);
+  const [isAsphaltDrawing, setIsAsphaltDrawing] = useState<boolean>(false);
+  const [asphaltDrawingCoords, setAsphaltDrawingCoords] = useState<{ x: number; y: number }[]>([]);
+  const [isAsphaltPolygonVisible, setIsAsphaltPolygonVisible] = useState<boolean>(true);
+
+  const isAsphaltDrawingRef = useRef(false);
+  const asphaltDrawingCoordsRef = useRef<{ x: number; y: number }[]>([]);
+
+  useEffect(() => {
+    isAsphaltDrawingRef.current = isAsphaltDrawing;
+    asphaltDrawingCoordsRef.current = asphaltDrawingCoords;
+  }, [isAsphaltDrawing, asphaltDrawingCoords]);
 
   // Synchronization refs for direct map line drawing & picking
   const isLineDrawingModeRef = useRef(false);
@@ -868,6 +892,8 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     drawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
     currentDrawGroup.current = L.layerGroup().addTo(mapInstance.current);
     lineDrawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
+    asphaltLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
+    asphaltDrawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
 
     // Add scale bar
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(mapInstance.current);
@@ -877,7 +903,18 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     });
 
     mapInstance.current.on('click', (e: L.LeafletMouseEvent) => {
-      // 0. Check if picking outfall target on map
+      // 0. Check if drawing asphalt polygon interactively
+      if (isAsphaltDrawingRef.current) {
+        const newCoord = { x: e.latlng.lng, y: e.latlng.lat };
+        setAsphaltDrawingCoords(prev => {
+          const updated = [...prev, newCoord];
+          asphaltDrawingCoordsRef.current = updated;
+          return updated;
+        });
+        return;
+      }
+
+      // 1. Check if picking outfall target on map
       if (isPickingOutfallTargetRef.current) {
         setIsPickingOutfallTarget(false);
         const nextIndex = outfallTargetsRef.current.length + 1;
@@ -898,7 +935,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         return;
       }
 
-      // 1. Check if picking a coordinate manually
+      // 2. Check if picking a coordinate manually
       if (isPickingCoordinateRef.current) {
         if (onPickMapCoordinateRef.current) {
           onPickMapCoordinateRef.current({ x: e.latlng.lng, y: e.latlng.lat });
@@ -906,7 +943,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         return;
       }
 
-      // 2. Check if drawing a line interactively on main map
+      // 3. Check if drawing a line interactively on main map
       if (isLineDrawingModeRef.current) {
         if (onAddLineVertexRef.current) {
           onAddLineVertexRef.current({ x: e.latlng.lng, y: e.latlng.lat });
@@ -914,7 +951,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         return;
       }
 
-      // 3. Polygon selection mode
+      // 4. Polygon selection mode
       if (!isDrawingRef.current) return;
       polygonCoordsRef.current = [...polygonCoordsRef.current, e.latlng];
       setHasPolygon(true);
@@ -950,14 +987,394 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   // Update cursor style when in line drawing or coordinate picking mode
   useEffect(() => {
     if (!mapContainer.current) return;
-    if (isLineDrawingMode || isPickingCoordinate) {
+    if (isLineDrawingMode || isPickingCoordinate || isAsphaltDrawing) {
       mapContainer.current.style.cursor = 'crosshair';
     } else if (isDrawing) {
       mapContainer.current.style.cursor = 'crosshair';
     } else {
       mapContainer.current.style.cursor = '';
     }
-  }, [isLineDrawingMode, isPickingCoordinate, isDrawing]);
+  }, [isLineDrawingMode, isPickingCoordinate, isDrawing, isAsphaltDrawing]);
+
+  // Asphalt live calculation values during interactive drawing
+  const liveAsphaltAreaM2 = useMemo(() => {
+    if (asphaltDrawingCoords.length < 3) return 0;
+    return calculateGeodesicPolygonArea(asphaltDrawingCoords);
+  }, [asphaltDrawingCoords]);
+
+  const liveAsphaltPerimeterM = useMemo(() => {
+    if (asphaltDrawingCoords.length < 2) return 0;
+    return calculatePolygonPerimeter(asphaltDrawingCoords);
+  }, [asphaltDrawingCoords]);
+
+  // Asphalt Drawing Action Handlers
+  const handleStartAsphaltDrawing = useCallback(() => {
+    setIsAsphaltDrawing(true);
+    setAsphaltDrawingCoords([]);
+    asphaltDrawingCoordsRef.current = [];
+  }, []);
+
+  const handleUndoAsphaltVertex = useCallback(() => {
+    setAsphaltDrawingCoords(prev => {
+      const next = prev.slice(0, -1);
+      asphaltDrawingCoordsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const handleCancelAsphaltDrawing = useCallback(() => {
+    setIsAsphaltDrawing(false);
+    setAsphaltDrawingCoords([]);
+    asphaltDrawingCoordsRef.current = [];
+    if (asphaltDrawLayerGroup.current) {
+      asphaltDrawLayerGroup.current.clearLayers();
+    }
+  }, []);
+
+  const handleFinishAsphaltDrawing = useCallback(() => {
+    if (asphaltDrawingCoords.length < 3) return;
+    const calc = calculateAsphaltPolygonBOQ(
+      asphaltDrawingCoords,
+      {
+        name: lang === 'ar' ? `مضلع أسفلت ${new Date().toLocaleTimeString('ar-SA')}` : `Asphalt Polygon ${new Date().toLocaleTimeString()}`,
+        source: 'draw'
+      },
+      points
+    );
+    setAsphaltCalc(calc);
+    setIsAsphaltDrawing(false);
+    setAsphaltDrawingCoords([]);
+    asphaltDrawingCoordsRef.current = [];
+    if (asphaltDrawLayerGroup.current) {
+      asphaltDrawLayerGroup.current.clearLayers();
+    }
+    setShowAsphaltModal(true);
+  }, [asphaltDrawingCoords, points, lang]);
+
+  const handleZoomToAsphaltPolygon = useCallback(() => {
+    if (!mapInstance.current || !asphaltCalc?.polygon || asphaltCalc.polygon.length === 0) return;
+    const bounds = L.latLngBounds([]);
+    asphaltCalc.polygon.forEach(p => {
+      if (isValidLatLng(p.y, p.x)) {
+        bounds.extend([p.y, p.x]);
+      }
+    });
+    if (bounds.isValid()) {
+      mapInstance.current.fitBounds(bounds, { padding: [80, 80], maxZoom: 17, animate: true });
+    }
+  }, [asphaltCalc]);
+
+  // Render live asphalt polygon drawing preview on map
+  useEffect(() => {
+    if (!mapInstance.current || !asphaltDrawLayerGroup.current) return;
+    asphaltDrawLayerGroup.current.clearLayers();
+
+    if (!isAsphaltDrawing || asphaltDrawingCoords.length === 0) return;
+
+    const latLngs = asphaltDrawingCoords.map(c => [c.y, c.x] as [number, number]);
+
+    // If >= 3 points, draw polygon fill preview
+    if (latLngs.length >= 3) {
+      const poly = L.polygon(latLngs, {
+        color: '#f59e0b',
+        weight: 2.5,
+        dashArray: '5, 8',
+        fillColor: '#d97706',
+        fillOpacity: 0.3
+      });
+      asphaltDrawLayerGroup.current.addLayer(poly);
+    } else if (latLngs.length === 2) {
+      const line = L.polyline(latLngs, {
+        color: '#f59e0b',
+        weight: 3,
+        dashArray: '5, 8'
+      });
+      asphaltDrawLayerGroup.current.addLayer(line);
+    }
+
+    // Numbered vertex pins & edge dimensions during drawing
+    asphaltDrawingCoords.forEach((v, idx) => {
+      const isStart = idx === 0;
+      const isLatest = idx === asphaltDrawingCoords.length - 1;
+      const vertexColor = isStart ? '#10b981' : isLatest ? '#f59e0b' : '#0284c7';
+
+      const icon = L.divIcon({
+        className: 'custom-asphalt-vertex-pin',
+        html: `
+          <div style="
+            width: 24px;
+            height: 24px;
+            background-color: ${vertexColor};
+            color: #ffffff;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 900;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.6);
+            transform: translate(-50%, -50%);
+            font-family: monospace;
+          ">
+            ${idx + 1}
+          </div>
+        `,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      });
+
+      const marker = L.marker([v.y, v.x], { icon, interactive: false });
+      asphaltDrawLayerGroup.current?.addLayer(marker);
+
+      // Edge length between sequential vertices
+      if (idx > 0 && mapInstance.current) {
+        const prev = asphaltDrawingCoords[idx - 1];
+        const distM = mapInstance.current.distance([prev.y, prev.x], [v.y, v.x]);
+        const midLat = (prev.y + v.y) / 2;
+        const midLng = (prev.x + v.x) / 2;
+        const distLabel = distM >= 1000 ? `${(distM / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` : `${distM.toFixed(1)} ${lang === 'ar' ? 'م' : 'm'}`;
+
+        const edgeIcon = L.divIcon({
+          className: 'asphalt-edge-badge',
+          html: `
+            <div style="
+              background: rgba(15, 23, 42, 0.92);
+              border: 1px solid #f59e0b;
+              border-radius: 8px;
+              padding: 2px 7px;
+              color: #fef08a;
+              font-family: monospace;
+              font-size: 10.5px;
+              font-weight: 800;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+              transform: translate(-50%, -50%);
+              pointer-events: none;
+              white-space: nowrap;
+            ">
+              ${distLabel}
+            </div>
+          `,
+          iconAnchor: [0, 0]
+        });
+        const edgeMarker = L.marker([midLat, midLng], { icon: edgeIcon, interactive: false });
+        asphaltDrawLayerGroup.current?.addLayer(edgeMarker);
+      }
+    });
+
+    // Rubberband line to cursor
+    if (cursorCoords && latLngs.length >= 1) {
+      const lastPt = latLngs[latLngs.length - 1];
+      const rubberBand = L.polyline([lastPt, [cursorCoords.lat, cursorCoords.lng]], {
+        color: '#f59e0b',
+        weight: 2.5,
+        dashArray: '4, 6',
+        opacity: 0.9
+      });
+      asphaltDrawLayerGroup.current.addLayer(rubberBand);
+
+      // If >= 2 points, also rubberband back to first point to visualize closing polygon
+      if (latLngs.length >= 2) {
+        const closingBand = L.polyline([[cursorCoords.lat, cursorCoords.lng], latLngs[0]], {
+          color: '#10b981',
+          weight: 2,
+          dashArray: '3, 5',
+          opacity: 0.7
+        });
+        asphaltDrawLayerGroup.current.addLayer(closingBand);
+      }
+    }
+  }, [isAsphaltDrawing, asphaltDrawingCoords, cursorCoords, lang]);
+
+  // Render completed persistent Asphalt Polygon on map with central summary badge and edge dimensions
+  useEffect(() => {
+    if (!mapInstance.current || !asphaltLayerGroup.current) return;
+    asphaltLayerGroup.current.clearLayers();
+
+    if (!asphaltCalc || !asphaltCalc.polygon || asphaltCalc.polygon.length < 3 || !isAsphaltPolygonVisible) {
+      return;
+    }
+
+    const validPoints = asphaltCalc.polygon.filter(p => isValidLatLng(p.y, p.x));
+    const latLngs = validPoints.map(p => [p.y, p.x] as [number, number]);
+
+    if (latLngs.length < 3) return;
+
+    const poly = L.polygon(latLngs, {
+      color: '#f59e0b',
+      weight: 3.5,
+      dashArray: '6, 6',
+      fillColor: '#d97706',
+      fillOpacity: 0.35,
+      className: 'cursor-pointer hover:fill-opacity-50 transition-all'
+    });
+
+    poly.on('click', () => {
+      setShowAsphaltModal(true);
+    });
+
+    asphaltLayerGroup.current.addLayer(poly);
+
+    // Edge Dimension Badges on each side of the polygon
+    const n = latLngs.length;
+    for (let i = 0; i < n; i++) {
+      const p1 = latLngs[i];
+      const p2 = latLngs[(i + 1) % n];
+      const midLat = (p1[0] + p2[0]) / 2;
+      const midLng = (p1[1] + p2[1]) / 2;
+      const distM = mapInstance.current.distance(p1, p2);
+      const distLabel = distM >= 1000 
+        ? `${(distM / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` 
+        : `${distM.toFixed(1)} ${lang === 'ar' ? 'م' : 'm'}`;
+
+      const edgeIcon = L.divIcon({
+        className: 'asphalt-edge-badge',
+        html: `
+          <div style="
+            background: rgba(15, 23, 42, 0.94);
+            border: 1px solid rgba(245, 158, 11, 0.85);
+            border-radius: 7px;
+            padding: 2px 7px;
+            color: #fef08a;
+            font-family: monospace, system-ui;
+            font-size: 11px;
+            font-weight: 800;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.6);
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            white-space: nowrap;
+            letter-spacing: -0.2px;
+          ">
+            ${distLabel}
+          </div>
+        `,
+        iconAnchor: [0, 0]
+      });
+
+      const edgeMarker = L.marker([midLat, midLng], { icon: edgeIcon, interactive: false });
+      asphaltLayerGroup.current.addLayer(edgeMarker);
+    }
+
+    // Central summary card with rich GIS data and clear anti-cramping layout
+    const center = poly.getBounds().getCenter();
+    const isAr = lang === 'ar';
+    const summaryIcon = L.divIcon({
+      className: 'asphalt-summary-badge',
+      html: `
+        <div style="
+          background: linear-gradient(145deg, rgba(15, 23, 42, 0.97) 0%, rgba(30, 41, 59, 0.95) 100%);
+          border: 2px solid #f59e0b;
+          border-radius: 18px;
+          padding: 10px 14px;
+          color: #ffffff;
+          font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+          box-shadow: 0 14px 35px rgba(0,0,0,0.65), 0 0 20px rgba(245, 158, 11, 0.3);
+          cursor: pointer;
+          transform: translate(-50%, -50%);
+          pointer-events: auto;
+          min-width: 230px;
+          max-width: 320px;
+          width: max-content;
+          direction: ${isAr ? 'rtl' : 'ltr'};
+          user-select: none;
+          text-align: right;
+        ">
+          <!-- Header -->
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 6px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 16px;">🚜</span>
+              <span style="font-size: 13px; font-weight: 900; color: #fde047; white-space: nowrap;">${asphaltCalc.name}</span>
+            </div>
+            <span style="background: rgba(245, 158, 11, 0.25); border: 1px solid rgba(245, 158, 11, 0.6); color: #fbbf24; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 6px; white-space: nowrap;">
+              ${isAr ? '🔍 التفاصيل والحصر' : '🔍 Details'}
+            </span>
+          </div>
+
+          <!-- Metrics 2x2 Grid -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; font-size: 11px;">
+            <!-- Area -->
+            <div style="display: flex; flex-direction: column;">
+              <span style="color: #94a3b8; font-size: 10px; font-weight: 600;">${isAr ? 'المساحة السطحية:' : 'Surface Area:'}</span>
+              <span style="color: #38bdf8; font-weight: 900; font-family: monospace; font-size: 13.5px; white-space: nowrap;">
+                ${asphaltCalc.areaM2.toLocaleString('en-US', { maximumFractionDigits: 1 })} <span style="font-size: 10px; color: #7dd3fc;">${isAr ? 'م²' : 'm²'}</span>
+              </span>
+            </div>
+
+            <!-- Asphalt Weight -->
+            <div style="display: flex; flex-direction: column;">
+              <span style="color: #94a3b8; font-size: 10px; font-weight: 600;">${isAr ? 'وزن الأسفلت:' : 'Asphalt Weight:'}</span>
+              <span style="color: #fb923c; font-weight: 900; font-family: monospace; font-size: 13.5px; white-space: nowrap;">
+                ${asphaltCalc.weightTons.toLocaleString('en-US', { maximumFractionDigits: 1 })} <span style="font-size: 10px; color: #fdba74;">${isAr ? 'طن' : 'Tons'}</span>
+              </span>
+            </div>
+
+            <!-- Perimeter -->
+            <div style="display: flex; flex-direction: column;">
+              <span style="color: #94a3b8; font-size: 10px; font-weight: 600;">${isAr ? 'المحيط الإجمالي:' : 'Perimeter:'}</span>
+              <span style="color: #f1f5f9; font-weight: 800; font-family: monospace; font-size: 12px; white-space: nowrap;">
+                ${asphaltCalc.perimeterM.toFixed(1)} <span style="font-size: 10px; color: #cbd5e1;">${isAr ? 'م' : 'm'}</span>
+              </span>
+            </div>
+
+            <!-- Thickness -->
+            <div style="display: flex; flex-direction: column;">
+              <span style="color: #94a3b8; font-size: 10px; font-weight: 600;">${isAr ? 'سماكة الطبقة:' : 'Thickness:'}</span>
+              <span style="color: #e2e8f0; font-weight: 800; font-family: monospace; font-size: 12px; white-space: nowrap;">
+                ${asphaltCalc.thicknessCm} <span style="font-size: 10px; color: #cbd5e1;">${isAr ? 'سم' : 'cm'}</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- Intersected network indicator if any -->
+          ${asphaltCalc.intersectedPipesCount > 0 ? `
+            <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #7dd3fc;">
+              <span>💧 ${isAr ? 'تقاطع شبكات الأنابيب:' : 'Pipes Intersected:'}</span>
+              <strong style="font-family: monospace; font-size: 11px; color: #38bdf8;">${asphaltCalc.intersectedPipesCount} ${isAr ? 'خطوط' : 'lines'}</strong>
+            </div>
+          ` : ''}
+        </div>
+      `,
+      iconAnchor: [0, 0]
+    });
+
+    const marker = L.marker(center, { icon: summaryIcon });
+    marker.on('click', () => {
+      setShowAsphaltModal(true);
+    });
+    asphaltLayerGroup.current.addLayer(marker);
+
+    // Numbered vertex points on corners
+    latLngs.forEach((coord, idx) => {
+      const dotIcon = L.divIcon({
+        className: 'custom-asphalt-vertex-pin',
+        html: `
+          <div style="
+            width: 18px;
+            height: 18px;
+            background-color: #f59e0b;
+            color: #0f172a;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9.5px;
+            font-weight: 900;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+            transform: translate(-50%, -50%);
+            font-family: monospace;
+          ">
+            ${idx + 1}
+          </div>
+        `,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+      });
+
+      const dotMarker = L.marker(coord, { icon: dotIcon, interactive: false });
+      asphaltLayerGroup.current?.addLayer(dotMarker);
+    });
+  }, [asphaltCalc, isAsphaltPolygonVisible, lang]);
 
   // Render active line segments, numbered vertices, and rubber-band guide on main map
   useEffect(() => {
@@ -2525,6 +2942,26 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               </div>
             </div>
 
+            {/* Asphalt Polygon BOQ Button */}
+            <button 
+                type="button"
+                onClick={() => setShowAsphaltModal(true)}
+                className={cn(
+                    "w-10 h-10 sm:w-12 sm:h-12 rounded-2xl shadow-xl flex items-center justify-center transition-all border active:scale-95 relative",
+                    asphaltCalc
+                      ? "bg-amber-500 text-slate-950 border-amber-300 ring-2 ring-amber-400/50 shadow-amber-500/30 font-black" 
+                      : "bg-white/95 backdrop-blur-md text-amber-700 hover:bg-white border-white/20 hover:text-amber-600"
+                )}
+                title={lang === 'ar' ? 'حاسبة كميات الأسفلت بالمضلع (رسم / إرفاق مضلع)' : 'Asphalt Polygon BOQ Calculator (Draw / Upload)'}
+            >
+                <span className="text-lg">🏗️</span>
+                {asphaltCalc && (
+                  <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center text-[8px] font-bold text-white shadow">
+                    ✓
+                  </span>
+                )}
+            </button>
+
             <button 
                 onClick={zoomToDataExtent}
                 disabled={points.length === 0}
@@ -2794,6 +3231,109 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             </span>
           </div>
         )}
+
+        {/* ======================================================== */}
+        {/* INTERACTIVE ASPHALT POLYGON DRAWING ON-MAP FLOATING HUD */}
+        {/* ======================================================== */}
+        {isAsphaltDrawing && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[800] bg-slate-950/95 backdrop-blur-md border-2 border-amber-500/70 text-white px-4 sm:px-6 py-3 rounded-2xl sm:rounded-3xl shadow-2xl flex flex-wrap items-center justify-center gap-3 sm:gap-4 animate-in fade-in slide-in-from-top-3 max-w-[95%]">
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-full bg-amber-400 animate-ping" />
+              <div className="flex flex-col">
+                <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                  <span className="text-sm">🏗️</span>
+                  <span>{lang === 'ar' ? 'رسم مضلع الأسفلت المباشر' : 'Drawing Asphalt Polygon'}</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium">
+                  {lang === 'ar' ? 'انقر على الخريطة لإضافة رؤوس المضلع' : 'Click on map to place polygon vertices'}
+                </span>
+              </div>
+            </div>
+
+            <div className="h-6 w-px bg-white/20 hidden sm:block" />
+
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="bg-amber-500/20 text-amber-300 font-black px-2.5 py-1 rounded-xl border border-amber-500/30 text-[11px]">
+                {asphaltDrawingCoords.length} {lang === 'ar' ? 'رؤوس' : 'vertices'}
+              </span>
+              {liveAsphaltAreaM2 > 0 && (
+                <span className="bg-emerald-500/20 text-emerald-300 font-black px-2.5 py-1 rounded-xl border border-emerald-500/30 text-[11px]">
+                  {liveAsphaltAreaM2.toLocaleString('en-US', { maximumFractionDigits: 1 })} {lang === 'ar' ? 'م² مساحة' : 'm² Area'}
+                </span>
+              )}
+              {liveAsphaltPerimeterM > 0 && (
+                <span className="bg-cyan-500/20 text-cyan-300 font-black px-2.5 py-1 rounded-xl border border-cyan-500/30 text-[11px] hidden md:inline">
+                  {liveAsphaltPerimeterM.toFixed(1)} {lang === 'ar' ? 'م محيط' : 'm Perimeter'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                onClick={handleUndoAsphaltVertex}
+                disabled={asphaltDrawingCoords.length === 0}
+                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white font-bold text-xs rounded-xl flex items-center gap-1 disabled:opacity-40 transition-all active:scale-95 cursor-pointer"
+                title={lang === 'ar' ? 'تراجع عن آخر نقطة' : 'Undo Last Vertex'}
+              >
+                <Undo2 className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">{lang === 'ar' ? 'تراجع' : 'Undo'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCancelAsphaltDrawing}
+                className="px-3 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold text-xs rounded-xl flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+                title={lang === 'ar' ? 'إلغاء الرسم' : 'Cancel Draw'}
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>{lang === 'ar' ? 'إلغاء' : 'Cancel'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFinishAsphaltDrawing}
+                disabled={asphaltDrawingCoords.length < 3}
+                className="px-4 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl shadow-lg flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+              >
+                <Check className="w-4 h-4 font-black" />
+                <span>{lang === 'ar' ? 'إنهاء واحتساب الكميات' : 'Finish & Calculate'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* ASPHALT POLYGON CALCULATOR MODAL */}
+        {/* ======================================================== */}
+        <AsphaltPolygonCalculatorModal
+          isOpen={showAsphaltModal}
+          onClose={() => setShowAsphaltModal(false)}
+          lang={lang}
+          networkPoints={points}
+          currentCalculation={asphaltCalc}
+          onUpdateCalculation={(calc) => {
+            setAsphaltCalc(calc);
+          }}
+          onApplyCalculation={(calc) => {
+            setAsphaltCalc(calc);
+          }}
+          isDrawingMode={isAsphaltDrawing}
+          onStartDrawing={() => {
+            setShowAsphaltModal(false);
+            handleStartAsphaltDrawing();
+          }}
+          onStartDrawMode={() => {
+            setShowAsphaltModal(false);
+            handleStartAsphaltDrawing();
+          }}
+          onCancelDrawing={handleCancelAsphaltDrawing}
+          onFinishDrawing={handleFinishAsphaltDrawing}
+          drawingVerticesCount={asphaltDrawingCoords.length}
+          isPolygonVisible={isAsphaltPolygonVisible}
+          onTogglePolygonVisibility={() => setIsAsphaltPolygonVisible(prev => !prev)}
+          onZoomToPolygon={handleZoomToAsphaltPolygon}
+        />
     </div>
   );
 };
