@@ -1,3 +1,4 @@
+import proj4 from 'proj4';
 import { GeoPoint } from '../types';
 
 /**
@@ -49,7 +50,6 @@ const parseColorToRgb = (colorStr?: string): { r: number; g: number; b: number }
     }
   }
 
-  // Check rgb(r, g, b) format
   const rgbMatch = str.match(/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/);
   if (rgbMatch) {
     return {
@@ -113,6 +113,22 @@ const sanitizeLayerName = (name?: string): string => {
   return clean || '0';
 };
 
+/**
+ * Check if coordinates are in geographic degrees (WGS84 Lat/Lng)
+ */
+const isGeographicDegrees = (x: number, y: number): boolean => {
+  return Math.abs(x) <= 180 && Math.abs(y) <= 90;
+};
+
+/**
+ * Get UTM PROJ4 definition from Longitude & Latitude
+ */
+const getUtmProjDef = (lon: number, lat: number): string => {
+  const zone = Math.min(60, Math.max(1, Math.floor((lon + 180) / 6) + 1));
+  const isSouth = lat < 0;
+  return `+proj=utm +zone=${zone} ${isSouth ? '+south ' : ''}+ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+};
+
 interface PreparedEntity {
   item: GeoPoint;
   layer: string;
@@ -125,17 +141,57 @@ interface PreparedEntity {
   label?: string;
 }
 
+export interface DxfExportOptions {
+  forceUtm?: boolean; // Convert WGS84 to UTM Metric Coordinates (Recommended for AutoCAD)
+  customCrs?: string; // Optional custom CRS definition
+}
+
 /**
  * Generate a complete, fully standards-compliant AutoCAD 2000 (AC1015) DXF file
  * Compatible with AutoCAD, Civil 3D, QGIS, ArcGIS, MicroStation, BricsCAD, etc.
  */
-export const generateDXF = (data: GeoPoint[]): string => {
+export const generateDXF = (data: GeoPoint[], options: DxfExportOptions = { forceUtm: true }): string => {
   if (!data || !Array.isArray(data) || data.length === 0) {
     return `  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\nAC1015\n  0\nENDSEC\n  0\nSECTION\n  2\nENTITIES\n  0\nENDSEC\n  0\nEOF\n`;
   }
 
   let handleSeed = 0x30;
   const getNextHandle = () => (handleSeed++).toString(16).toUpperCase();
+
+  // Find sample coordinate to determine if UTM transformation is needed
+  let samplePt: { x: number; y: number } | null = null;
+  for (const p of data) {
+    if (p.path && p.path.length > 0 && typeof p.path[0].x === 'number') {
+      samplePt = { x: p.path[0].x, y: p.path[0].y };
+      break;
+    }
+    if (typeof p.x === 'number' && typeof p.y === 'number') {
+      samplePt = { x: p.x, y: p.y };
+      break;
+    }
+  }
+
+  const shouldConvertToUtm = options.forceUtm !== false && samplePt && isGeographicDegrees(samplePt.x, samplePt.y);
+  let utmDef = '+proj=utm +zone=38 +ellps=WGS84 +datum=WGS84 +units=m +no_defs';
+  const wgs84Def = '+proj=longlat +datum=WGS84 +no_defs';
+
+  if (shouldConvertToUtm && samplePt) {
+    utmDef = getUtmProjDef(samplePt.x, samplePt.y);
+  }
+
+  const transformCoord = (x: number, y: number, z: number = 0): { x: number; y: number; z: number } => {
+    if (shouldConvertToUtm && isGeographicDegrees(x, y)) {
+      try {
+        const [utmX, utmY] = proj4(wgs84Def, utmDef, [x, y]);
+        if (Number.isFinite(utmX) && Number.isFinite(utmY)) {
+          return { x: utmX, y: utmY, z: Number.isFinite(z) ? z : 0 };
+        }
+      } catch {
+        // Fallback to original if proj4 fails
+      }
+    }
+    return { x, y, z: Number.isFinite(z) ? z : 0 };
+  };
 
   // Bounding box tracking for AutoCAD zoom-extents & viewport initialization
   let minX = Infinity;
@@ -161,11 +217,8 @@ export const generateDXF = (data: GeoPoint[]): string => {
       for (let j = 0; j < p.path.length; j++) {
         const pt = p.path[j];
         if (pt && typeof pt.x === 'number' && typeof pt.y === 'number' && !isNaN(pt.x) && !isNaN(pt.y)) {
-          pts.push({
-            x: pt.x,
-            y: pt.y,
-            z: typeof pt.z === 'number' && !isNaN(pt.z) ? pt.z : 0
-          });
+          const transformed = transformCoord(pt.x, pt.y, typeof pt.z === 'number' && !isNaN(pt.z) ? pt.z : 0);
+          pts.push(transformed);
         }
       }
     }
@@ -175,7 +228,8 @@ export const generateDXF = (data: GeoPoint[]): string => {
       const y = typeof p.y === 'number' ? p.y : parseFloat(String(p.y || ''));
       const z = typeof p.z === 'number' ? p.z : 0;
       if (!isNaN(x) && !isNaN(y)) {
-        pts.push({ x, y, z: !isNaN(z) ? z : 0 });
+        const transformed = transformCoord(x, y, !isNaN(z) ? z : 0);
+        pts.push(transformed);
       }
     }
 
@@ -207,7 +261,7 @@ export const generateDXF = (data: GeoPoint[]): string => {
     }
 
     // Extract text label if available
-    const label = p.description || p.attributes?.['ASSETNAME'] || p.attributes?.['STREETNAME'] || (p.id ? String(p.id) : undefined);
+    const label = p.description || p.attributes?.['ASSETNAME'] || p.attributes?.['STREETNAME'] || p.attributes?.['اسم الخط'] || (p.id ? String(p.id) : undefined);
 
     preparedEntities.push({
       item: p,
@@ -232,9 +286,9 @@ export const generateDXF = (data: GeoPoint[]): string => {
 
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;
-  const viewHeight = Math.max(maxY - minY, 10) * 1.15;
-  const viewWidth = Math.max(maxX - minX, 10) * 1.15;
-  const textHeight = Math.max(viewHeight / 200, 1.2);
+  const viewHeight = Math.max(maxY - minY, 10) * 1.25;
+  const viewWidth = Math.max(maxX - minX, 10) * 1.25;
+  const textHeight = Math.max(viewHeight / 150, 1.5);
 
   let dxf = '';
 
@@ -249,10 +303,10 @@ export const generateDXF = (data: GeoPoint[]): string => {
   dxf += '  9\n$LUNITS\n 70\n2\n'; // Decimal units
   dxf += '  9\n$PDMODE\n 70\n34\n'; // Point display: circle with cross
   dxf += '  9\n$PDSIZE\n 40\n0.0\n'; // Relative scale point size
-  dxf += `  9\n$EXTMIN\n 10\n${minX}\n 20\n${minY}\n 30\n${minZ}\n`;
-  dxf += `  9\n$EXTMAX\n 10\n${maxX}\n 20\n${maxY}\n 30\n${maxZ}\n`;
-  dxf += `  9\n$LIMMIN\n 10\n${minX}\n 20\n${minY}\n`;
-  dxf += `  9\n$LIMMAX\n 10\n${maxX}\n 20\n${maxY}\n`;
+  dxf += `  9\n$EXTMIN\n 10\n${minX.toFixed(4)}\n 20\n${minY.toFixed(4)}\n 30\n${minZ.toFixed(4)}\n`;
+  dxf += `  9\n$EXTMAX\n 10\n${maxX.toFixed(4)}\n 20\n${maxY.toFixed(4)}\n 30\n${maxZ.toFixed(4)}\n`;
+  dxf += `  9\n$LIMMIN\n 10\n${minX.toFixed(4)}\n 20\n${minY.toFixed(4)}\n`;
+  dxf += `  9\n$LIMMAX\n 10\n${maxX.toFixed(4)}\n 20\n${maxY.toFixed(4)}\n`;
   dxf += '  0\nENDSEC\n';
 
   // ==========================================
@@ -268,7 +322,7 @@ export const generateDXF = (data: GeoPoint[]): string => {
   // VPORT Table (*ACTIVE viewport with auto-zoom to extents)
   dxf += '  0\nTABLE\n  2\nVPORT\n  5\n' + getNextHandle() + '\n100\nAcDbSymbolTable\n 70\n1\n';
   dxf += '  0\nVPORT\n  5\n' + getNextHandle() + '\n100\nAcDbSymbolTableRecord\n100\nAcDbViewportTableRecord\n  2\n*ACTIVE\n 70\n0\n';
-  dxf += ` 10\n0.0\n 20\n0.0\n 11\n1.0\n 21\n1.0\n 12\n${centerX}\n 22\n${centerY}\n 40\n${viewHeight}\n 41\n${viewWidth / (viewHeight || 1)}\n`;
+  dxf += ` 10\n0.0\n 20\n0.0\n 11\n1.0\n 21\n1.0\n 12\n${centerX.toFixed(4)}\n 22\n${centerY.toFixed(4)}\n 40\n${viewHeight.toFixed(4)}\n 41\n${(viewWidth / (viewHeight || 1)).toFixed(4)}\n`;
   dxf += '  0\nENDTAB\n';
 
   // LTYPE Table (Continuous Line)
@@ -323,18 +377,18 @@ export const generateDXF = (data: GeoPoint[]): string => {
       const pt = ent.coords[0];
       // POINT Entity
       dxf += '  0\nPOINT\n  5\n' + getNextHandle() + '\n100\nAcDbEntity\n  8\n' + ent.layer + '\n 62\n' + ent.aci + '\n420\n' + ent.trueColor + '\n100\nAcDbPoint\n';
-      dxf += ` 10\n${pt.x}\n 20\n${pt.y}\n 30\n${pt.z}\n`;
+      dxf += ` 10\n${pt.x.toFixed(4)}\n 20\n${pt.y.toFixed(4)}\n 30\n${pt.z.toFixed(4)}\n`;
 
-      // Optional circle indicator around the point to guarantee visibility on any CAD viewer
-      const markerRadius = Math.max(textHeight * 0.8, 0.5);
+      // Circular manhole/node marker to guarantee immediate visibility on any CAD viewer
+      const markerRadius = Math.max(textHeight * 0.75, 0.5);
       dxf += '  0\nCIRCLE\n  5\n' + getNextHandle() + '\n100\nAcDbEntity\n  8\n' + ent.layer + '\n 62\n' + ent.aci + '\n420\n' + ent.trueColor + '\n100\nAcDbCircle\n';
-      dxf += ` 10\n${pt.x}\n 20\n${pt.y}\n 30\n${pt.z}\n 40\n${markerRadius}\n`;
+      dxf += ` 10\n${pt.x.toFixed(4)}\n 20\n${pt.y.toFixed(4)}\n 30\n${pt.z.toFixed(4)}\n 40\n${markerRadius.toFixed(4)}\n`;
 
-      // Optional text label
+      // Text label (Clean standard AutoCAD TEXT entity)
       if (ent.label && ent.label.trim()) {
         const cleanLabel = ent.label.replace(/[\r\n\t]/g, ' ').substring(0, 100);
         dxf += '  0\nTEXT\n  5\n' + getNextHandle() + '\n100\nAcDbEntity\n  8\n' + ent.layer + '\n 62\n' + ent.aci + '\n420\n' + ent.trueColor + '\n100\nAcDbText\n';
-        dxf += ` 10\n${pt.x + markerRadius * 1.3}\n 20\n${pt.y + markerRadius * 1.3}\n 30\n${pt.z}\n 40\n${textHeight}\n  1\n${cleanLabel}\n100\nAcDbText\n`;
+        dxf += ` 10\n${(pt.x + markerRadius * 1.2).toFixed(4)}\n 20\n${(pt.y + markerRadius * 1.2).toFixed(4)}\n 30\n${pt.z.toFixed(4)}\n 40\n${textHeight.toFixed(4)}\n  1\n${cleanLabel}\n`;
       }
     } else {
       // 2D Lightweight Polyline (LWPOLYLINE)
@@ -343,7 +397,7 @@ export const generateDXF = (data: GeoPoint[]): string => {
       
       for (let j = 0; j < ent.coords.length; j++) {
         const pt = ent.coords[j];
-        dxf += ` 10\n${pt.x}\n 20\n${pt.y}\n`;
+        dxf += ` 10\n${pt.x.toFixed(4)}\n 20\n${pt.y.toFixed(4)}\n`;
       }
     }
   }
@@ -366,12 +420,12 @@ export const generateDXF = (data: GeoPoint[]): string => {
 /**
  * Trigger immediate browser download of the generated DXF file
  */
-export const downloadDXF = (data: GeoPoint[], filename: string) => {
+export const downloadDXF = (data: GeoPoint[], filename: string, options?: DxfExportOptions) => {
   if (!data || data.length === 0) {
     console.warn("downloadDXF called with empty data");
   }
   const cleanBaseName = String(filename || 'Export').replace(/\.[^/.]+$/, "").trim() || 'Export';
-  const dxfContent = generateDXF(data);
+  const dxfContent = generateDXF(data, options);
   const blob = new Blob([dxfContent], { type: 'application/dxf;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
