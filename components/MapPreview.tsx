@@ -9,8 +9,7 @@ import {
   FileSpreadsheet, ChevronDown, ChevronUp, Gauge, Droplet, Ruler,
   PenTool, Undo2, Check, Target
 } from 'lucide-react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { cn, escapeHtml, sanitizeImageUrl } from '../utils';
 import { 
   GeoPoint, BaseMapType, HydraulicNetworkSummary, 
   HydraulicColorMode, AsphaltCalculationParams, PipeHydraulicData,
@@ -33,9 +32,6 @@ import {
 import { AsphaltPolygonCalculatorModal } from './AsphaltPolygonCalculatorModal';
 import { OUTFALL_PALETTE } from '../services/gravitySewerEngine';
 
-function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs));
-}
 
 export interface MapPreviewProps {
   onPointClick?: (pt: GeoPoint) => void;
@@ -1486,9 +1482,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
           featColor = pt.color === '#000000' ? '#000000' : '#ef4444';
         }
         
+        const safeId = escapeHtml(pt.id);
+        const safeIssueReason = escapeHtml(issueReasonText);
+        const safeStreet = escapeHtml(pt.street);
+        const safeDistrict = escapeHtml(pt.district);
+
         let popupContent = `<div class="p-3 min-w-[240px] font-sans" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
           <div class="font-bold text-primary border-b border-slate-200 pb-2 mb-2 text-[13px] flex items-center justify-between">
-            <span>${pt.id}</span>
+            <span>${safeId}</span>
             ${hasIssue && issueReasonText ? `<span class="bg-red-50 text-red-600 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm">⚠️ ${lang === 'ar' ? 'عنصر به ملاحظة' : 'Issue Found'}</span>` : ''}
           </div>`;
         if (hasIssue && issueReasonText) {
@@ -1498,15 +1499,15 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               <span>${lang === 'ar' ? 'نوع الملاحظة / التدقيق:' : 'Audit Issue Type:'}</span>
             </div>
             <p class="text-[11px] leading-relaxed text-red-950 font-black">
-              ${issueReasonText}
+              ${safeIssueReason}
             </p>
           </div>`;
         }
         
         if (pt.street || pt.district) {
           popupContent += `<div class="space-y-1.5 mb-3 bg-slate-50 p-2 rounded-lg border border-slate-200">
-            ${pt.street ? `<div class="text-[10px] leading-tight"><span class="text-slate-500 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الشارع' : 'Street'}</span> <span class="font-bold text-slate-800">${pt.street}</span></div>` : ''}
-            ${pt.district ? `<div class="text-[10px] leading-tight"><span class="text-slate-500 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الحي' : 'District'}</span> <span class="font-bold text-slate-800">${pt.district}</span></div>` : ''}
+            ${pt.street ? `<div class="text-[10px] leading-tight"><span class="text-slate-500 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الشارع' : 'Street'}</span> <span class="font-bold text-slate-800">${safeStreet}</span></div>` : ''}
+            ${pt.district ? `<div class="text-[10px] leading-tight"><span class="text-slate-500 block font-bold uppercase mb-0.5">${lang === 'ar' ? 'الحي' : 'District'}</span> <span class="font-bold text-slate-800">${safeDistrict}</span></div>` : ''}
           </div>`;
         }
         
@@ -1536,7 +1537,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               L.marker(center, {
                 icon: L.divIcon({
                   className: 'bg-white/90 border border-slate-200 px-2 py-1 rounded-md shadow-lg text-[10px] font-black text-slate-800 whitespace-nowrap',
-                  html: `<span>${pt.id}</span>`,
+                  html: `<span>${escapeHtml(pt.id)}</span>`,
                   iconAnchor: [20, 10]
                 })
               }).addTo(layerGroup.current!);
@@ -1747,15 +1748,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               popupAnchor: [0, -18]
             });
             marker = L.marker([pt.y, pt.x], { icon: pulseIcon });
-          } else if (pt.iconUrl) {
-            let safeUrl = pt.iconUrl;
-            if (safeUrl.startsWith('http://')) safeUrl = safeUrl.replace('http://', 'https://');
+          } else if (pt.iconUrl && sanitizeImageUrl(pt.iconUrl)) {
+            const safeUrl = sanitizeImageUrl(pt.iconUrl)!;
             const customIcon = L.divIcon({
               className: 'bg-transparent border-0',
               html: `<div style="position:relative; width:28px; height:28px; display:flex; align-items:center; justify-content:center;">
                        <img src="${safeUrl}" style="width:100%; height:100%; object-fit:contain;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
-                       ${pt.color ? `<div style="position:absolute; top:0; left:0; width:100%; height:100%; background-color:${pt.color}; mix-blend-mode: multiply; -webkit-mask-image: url('${safeUrl}'); -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; mask-image: url('${safeUrl}'); mask-size: contain; mask-repeat: no-repeat; mask-position: center; pointer-events: none;"></div>` : ''}
-                       <div style="display:none; width:14px; height:14px; background-color:${featColor || '#3b82f6'}; border:2px solid ${isOverlap ? '#000000' : '#fff'}; border-radius:50%;"></div>
+                       ${pt.color ? `<div style="position:absolute; top:0; left:0; width:100%; height:100%; background-color:${escapeHtml(pt.color)}; mix-blend-mode: multiply; -webkit-mask-image: url('${safeUrl}'); -webkit-mask-size: contain; -webkit-mask-repeat: no-repeat; -webkit-mask-position: center; mask-image: url('${safeUrl}'); mask-size: contain; mask-repeat: no-repeat; mask-position: center; pointer-events: none;"></div>` : ''}
+                       <div style="display:none; width:14px; height:14px; background-color:${escapeHtml(featColor || '#3b82f6')}; border:2px solid ${isOverlap ? '#000000' : '#fff'}; border-radius:50%;"></div>
                      </div>`,
               iconSize: [28, 28],
               iconAnchor: [14, 28],
