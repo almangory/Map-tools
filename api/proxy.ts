@@ -1,4 +1,35 @@
-function isSafeUrl(rawUrl: string): { safe: boolean; error?: string } {
+import dns from 'dns';
+
+const MAX_PROXY_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit
+
+function isPrivateIPv4(ip: string): boolean {
+  const parts = ip.split(".").map((p) => parseInt(p, 10));
+  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) return true;
+
+  const [a, b] = parts;
+  if (a === 0) return true;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+function isPrivateIPv6(ip: string): boolean {
+  const clean = ip.toLowerCase().replace(/[\[\]]/g, "");
+  if (clean === "::1" || clean === "::" || clean.startsWith("fe80") || clean.startsWith("fc") || clean.startsWith("fd")) {
+    return true;
+  }
+  if (clean.startsWith("::ffff:")) {
+    const ipv4 = clean.replace("::ffff:", "");
+    return isPrivateIPv4(ipv4);
+  }
+  return false;
+}
+
+async function isSafeUrl(rawUrl: string): Promise<{ safe: boolean; error?: string }> {
   try {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -21,40 +52,26 @@ function isSafeUrl(rawUrl: string): { safe: boolean; error?: string } {
       return { safe: false, error: "Access to local or internal endpoints is prohibited." };
     }
 
-    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-    const ipMatch = hostname.match(ipv4Regex);
-    if (ipMatch) {
-      const octets = [
-        parseInt(ipMatch[1], 10),
-        parseInt(ipMatch[2], 10),
-        parseInt(ipMatch[3], 10),
-        parseInt(ipMatch[4], 10),
-      ];
-
-      if (octets.some(o => o > 255)) return { safe: false, error: "Invalid IP address." };
-      if (octets[0] === 127) return { safe: false, error: "Loopback addresses are not allowed." };
-      if (octets[0] === 10) return { safe: false, error: "Private IP addresses are not allowed." };
-      if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) return { safe: false, error: "Private IP addresses are not allowed." };
-      if (octets[0] === 192 && octets[1] === 168) return { safe: false, error: "Private IP addresses are not allowed." };
-      if (octets[0] === 169 && octets[1] === 254) return { safe: false, error: "Cloud metadata endpoints are not allowed." };
-      if (octets[0] === 0) return { safe: false, error: "Invalid IP address." };
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) {
+      if (isPrivateIPv4(hostname)) return { safe: false, error: "Private IP addresses are not allowed." };
     }
 
-    if (/^\d+$/.test(hostname) || /^0x[0-9a-f]+$/i.test(hostname)) {
-      return { safe: false, error: "Numeric/Hex IP representations are not allowed." };
+    if (hostname.includes(":")) {
+      if (isPrivateIPv6(hostname)) return { safe: false, error: "Private IPv6 addresses are not allowed." };
     }
 
-    if (hostname.startsWith("[") || hostname.includes(":")) {
-      const cleanIpv6 = hostname.replace(/[\[\]]/g, "");
-      if (
-        cleanIpv6 === "::1" ||
-        cleanIpv6 === "::" ||
-        cleanIpv6.startsWith("fe80") ||
-        cleanIpv6.startsWith("fc") ||
-        cleanIpv6.startsWith("fd")
-      ) {
-        return { safe: false, error: "Private IPv6 addresses are not allowed." };
+    try {
+      const records = await dns.promises.lookup(hostname, { all: true });
+      for (const record of records) {
+        if (record.family === 4 && isPrivateIPv4(record.address)) {
+          return { safe: false, error: "Domain resolves to a prohibited internal IP address." };
+        }
+        if (record.family === 6 && isPrivateIPv6(record.address)) {
+          return { safe: false, error: "Domain resolves to a prohibited internal IPv6 address." };
+        }
       }
+    } catch {
+      return { safe: false, error: "Unable to resolve target domain." };
     }
 
     return { safe: true };
@@ -71,20 +88,33 @@ export default async function handler(req: any, res: any) {
       return;
     }
 
-    const validation = isSafeUrl(targetUrl);
+    const validation = await isSafeUrl(targetUrl);
     if (!validation.safe) {
       res.status(403).json({ error: validation.error || "Forbidden URL destination." });
       return;
     }
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
+
     const response = await fetch(targetUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      }
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GeoGISPro/1.0",
+      },
+      signal: controller.signal,
+      redirect: "follow",
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const contentLengthHeader = response.headers.get("content-length");
+    if (contentLengthHeader && parseInt(contentLengthHeader, 10) > MAX_PROXY_FILE_SIZE) {
+      res.status(413).json({ error: "File exceeds maximum allowable proxy size (50MB)." });
+      return;
     }
 
     const contentType = response.headers.get("content-type");
@@ -100,13 +130,21 @@ export default async function handler(req: any, res: any) {
       (contentType && contentType.includes("application/zip"))
     ) {
       const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      res.send(buffer);
+      if (arrayBuffer.byteLength > MAX_PROXY_FILE_SIZE) {
+        res.status(413).json({ error: "File exceeds maximum allowable proxy size (50MB)." });
+        return;
+      }
+      res.send(Buffer.from(arrayBuffer));
     } else {
       const text = await response.text();
+      if (text.length > MAX_PROXY_FILE_SIZE) {
+        res.status(413).json({ error: "Content exceeds allowable proxy limit." });
+        return;
+      }
       res.send(text);
     }
   } catch (error: any) {
     res.status(500).json({ error: error.message || "Failed to fetch from url" });
   }
 }
+
