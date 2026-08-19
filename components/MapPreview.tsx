@@ -302,6 +302,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const filterModalRef = useRef<HTMLDivElement>(null);
+  const layerMenuRef = useRef<HTMLDivElement>(null);
+  const layerToggleBtnRef = useRef<HTMLButtonElement>(null);
+  const flowInfoOverlayRef = useRef<HTMLDivElement>(null);
+  const flowInfoBtnRef = useRef<HTMLButtonElement>(null);
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasPolygon, setHasPolygon] = useState(false);
@@ -934,6 +938,12 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     });
 
     mapInstance.current.on('click', (e: L.LeafletMouseEvent) => {
+      // Close open floating overlay panels or search dropdowns on map click
+      setShowLayerMenu(false);
+      setShowFlowInfoOverlay(false);
+      setShowSearchResultsDropdown(false);
+      setShowSearchFiltersModal(false);
+
       // 0. Check if drawing asphalt polygon interactively
       if (isAsphaltDrawingRef.current) {
         const newCoord = { x: e.latlng.lng, y: e.latlng.lat };
@@ -2241,18 +2251,29 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     currentDrawGroup.current?.clearLayers();
   };
 
-  // Close search results dropdown and filter modal when clicking outside
+  // Close open layer menu, flow info overlay, search results dropdown, and filter modal when clicking outside
   useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      const target = e.target as Node;
+      if (layerMenuRef.current && !layerMenuRef.current.contains(target) && !layerToggleBtnRef.current?.contains(target)) {
+        setShowLayerMenu(false);
+      }
+      if (flowInfoOverlayRef.current && !flowInfoOverlayRef.current.contains(target) && !flowInfoBtnRef.current?.contains(target)) {
+        setShowFlowInfoOverlay(false);
+      }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
         setShowSearchResultsDropdown(false);
       }
-      if (filterModalRef.current && !filterModalRef.current.contains(e.target as Node) && !(e.target as HTMLElement).closest('.filter-toggle-btn')) {
+      if (filterModalRef.current && !filterModalRef.current.contains(target) && !(target as HTMLElement).closest?.('.filter-toggle-btn')) {
         setShowSearchFiltersModal(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
   }, []);
 
   // Street & Location Search Execution
@@ -3082,6 +3103,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             lang === 'ar' ? 'right-3 sm:right-6' : 'left-3 sm:left-6'
         )}>
             <button 
+                ref={layerToggleBtnRef}
                 onClick={() => setShowLayerMenu(!showLayerMenu)}
                 className={cn(
                     "w-10 h-10 sm:w-12 sm:h-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl flex items-center justify-center text-primary hover:bg-white transition-all border border-white/20 active:scale-95",
@@ -3112,6 +3134,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
               {/* Info Toggle Button */}
               <button
+                  ref={flowInfoBtnRef}
                   type="button"
                   onClick={() => setShowFlowInfoOverlay(!showFlowInfoOverlay)}
                   className={cn(
@@ -3126,7 +3149,9 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               </button>
 
               {/* Technical Info Overlay Dashboard (Shown on Hover OR when Info button clicked) */}
-              <div className={cn(
+              <div 
+                ref={flowInfoOverlayRef}
+                className={cn(
                 "absolute top-0 z-50 w-80 sm:w-96 p-4 rounded-3xl bg-slate-950/95 backdrop-blur-2xl border border-cyan-500/40 shadow-2xl text-white text-xs transition-all duration-200 animate-in fade-in zoom-in-95",
                 showFlowInfoOverlay ? "block" : "hidden group-hover:block",
                 lang === 'ar' ? "right-20 sm:right-24" : "left-20 sm:left-24"
@@ -3278,13 +3303,25 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
             
             {showLayerMenu && (
-                <div className={cn(
+                <div 
+                    ref={layerMenuRef}
+                    className={cn(
                     "absolute top-0 bg-white/98 backdrop-blur-xl rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl p-4 sm:p-7 w-64 sm:w-72 border border-white/40 animate-in fade-in zoom-in duration-200 origin-top max-h-[75vh] overflow-y-auto custom-scrollbar",
                     lang === 'ar' ? 'right-12 sm:right-16' : 'left-12 sm:left-16'
                 )}>
-                    <div className="flex items-center gap-2 mb-4 sm:mb-5">
-                        <MapIcon className="w-4 h-4 text-accent" />
-                        <h4 className="text-[10px] sm:text-[11px] font-black uppercase text-primary tracking-[0.2em]">{t.baseMaps}</h4>
+                    <div className="flex items-center justify-between mb-4 sm:mb-5 pb-2 border-b border-slate-100 dark:border-white/10">
+                        <div className="flex items-center gap-2">
+                            <MapIcon className="w-4 h-4 text-accent" />
+                            <h4 className="text-[10px] sm:text-[11px] font-black uppercase text-primary tracking-[0.2em]">{t.baseMaps}</h4>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setShowLayerMenu(false)}
+                            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-primary transition-all active:scale-90"
+                            title={lang === 'ar' ? 'إغلاق الإطار' : 'Close Panel'}
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
                     </div>
                     
                     <div className="grid grid-cols-2 gap-3 mb-8">
