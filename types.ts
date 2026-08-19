@@ -118,7 +118,7 @@ export interface AnalysisItem {
   center?: { x: number; y: number };
 }
 
-export type BaseMapType = 'satellite' | 'streets' | 'terrain' | 'osm';
+export type BaseMapType = 'satellite' | 'esriSatellite' | 'streets' | 'cartoVoyager' | 'darkMatrix' | 'terrain' | 'esriTopo' | 'osm';
 
 export type HydraulicVelocityStatus = 'low' | 'optimal' | 'high';
 
