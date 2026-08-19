@@ -15,7 +15,7 @@ import {
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, AlertOctagon, RotateCcw, Save, Smartphone, PenTool,
   Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves, AlertCircle,
-  TrendingUp, Pickaxe, ShieldAlert, Mountain
+  TrendingUp, Pickaxe, ShieldAlert, Mountain, Camera, PlayCircle
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -56,6 +56,10 @@ import { ClashDetectionModal } from './components/ClashDetectionModal';
 import { OverflowSimulationModal } from './components/OverflowSimulationModal';
 import { EngineeringSuiteCard } from './components/EngineeringSuiteCard';
 import { UserManualModal } from './components/UserManualModal';
+import { GeotaggedPhotoModal } from './components/GeotaggedPhotoModal';
+import { FieldInspectionSheetModal } from './components/FieldInspectionSheetModal';
+import { TopologyCleanerModal } from './components/TopologyCleanerModal';
+import { getSampleInfrastructureProject } from './services/sampleProjectService';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
 
@@ -535,6 +539,9 @@ const App: React.FC = () => {
   const [hoveredTabTooltip, setHoveredTabTooltip] = useState<{ id: string; top: number; left: number; side: 'left' | 'right' | 'bottom' } | null>(null);
   const [activeTab, setActiveTab] = useState<'map-viewer' | 'converter' | 'street-planner' | 'analyzer' | 'engineering-suite' | 'sbc-checker' | 'segment-vault' | 'classifier' | 'splitter' | 'polygon-converter' | 'attribute-formatter' | 'comparator' | 'line-drawer'>('map-viewer');
   const [showManual, setShowManual] = useState(false);
+  const [showPhotoModal, setShowPhotoModal] = useState(false);
+  const [showInspectionModal, setShowInspectionModal] = useState(false);
+  const [showTopologyModal, setShowTopologyModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progressPercent, setProgressPercent] = useState<number | null>(null);
   const [statusMessage, setStatusMessage] = useState('');
@@ -5663,6 +5670,50 @@ const App: React.FC = () => {
            </div>
 
            <div className="flex-1 overflow-y-auto custom-scrollbar px-4 sm:px-6 md:px-10 pb-8 pt-4">
+                
+                {/* Quick Community Engineering Action Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4 p-2 bg-slate-900/60 rounded-2xl border border-slate-800">
+                  <button
+                    onClick={() => setShowPhotoModal(true)}
+                    className="p-2 bg-pink-500/10 hover:bg-pink-500/20 text-pink-400 border border-pink-500/30 rounded-xl text-[10px] font-black transition flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
+                    title={lang === 'ar' ? 'توثيق وإسقاط صور الجوال الجغرافية (EXIF GPS) على الخريطة' : 'Plot Geotagged Photos on Map'}
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>{lang === 'ar' ? 'صور GPS' : 'GPS Photos'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowInspectionModal(true)}
+                    className="p-2 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-[10px] font-black transition flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
+                    title={lang === 'ar' ? 'توليد كروكي ومحضر استلام رسمي A4 جاهز للطباعة' : 'Print A4 Inspection Sheet'}
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>{lang === 'ar' ? 'كروكي A4' : 'A4 Sheet'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowTopologyModal(true)}
+                    className="p-2 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/30 rounded-xl text-[10px] font-black transition flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
+                    title={lang === 'ar' ? 'المعالج الطوبولوجي الذكي وتصحيح الفجوات والنقاط المكررة' : 'Heal & Clean Topology'}
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>{lang === 'ar' ? 'تصحيح الشبكة' : 'Topology'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const sample = getSampleInfrastructureProject();
+                      setGlobalPoints(sample);
+                      setActiveTab('map-viewer');
+                    }}
+                    className="p-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-xl text-[10px] font-black transition flex items-center justify-center gap-1.5 active:scale-95 shadow-sm"
+                    title={lang === 'ar' ? 'تحميل شبكة بنية تحتية نموذجية متكاملة للتجربة والتعلم' : 'Load Sample Infrastructure Project'}
+                  >
+                    <PlayCircle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                    <span>{lang === 'ar' ? 'مشروع تجريبي' : 'Demo Project'}</span>
+                  </button>
+                </div>
+
                 {error && (<div className="bg-red-500/10 border border-red-500/20 p-4 rounded-2xl mb-6 flex items-start gap-3 animate-in slide-in-from-top"><X className="w-4 h-4 text-red-400 shrink-0 mt-1 cursor-pointer" onClick={() => setError(null)} /><p className="text-[10px] text-red-400 font-bold leading-relaxed">{error}</p></div>)}
 
                 {/* Persistent Auto-Alert Banner for Unresolved Spatial Overlaps */}
@@ -8866,6 +8917,42 @@ const App: React.FC = () => {
          )}
 
          <UserManualModal lang={lang} isOpen={showManual} onClose={() => setShowManual(false)} />
+
+          {/* Field Geotagged Photos Modal */}
+          {showPhotoModal && (
+            <GeotaggedPhotoModal
+              lang={lang}
+              isOpen={showPhotoModal}
+              onClose={() => setShowPhotoModal(false)}
+              onAddPointsToMap={(newPts) => {
+                setGlobalPoints(prev => [...prev, ...newPts]);
+                setActiveTab('map-viewer');
+              }}
+            />
+          )}
+
+          {/* Field Inspection & Handover A4 Sheet Modal */}
+          {showInspectionModal && (
+            <FieldInspectionSheetModal
+              lang={lang}
+              isOpen={showInspectionModal}
+              onClose={() => setShowInspectionModal(false)}
+              points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+            />
+          )}
+
+          {/* Smart Topology Cleaner & Healer Modal */}
+          {showTopologyModal && (
+            <TopologyCleanerModal
+              lang={lang}
+              isOpen={showTopologyModal}
+              onClose={() => setShowTopologyModal(false)}
+              points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+              onApplyCleanedPoints={(cleaned) => {
+                setGlobalPoints(cleaned);
+              }}
+            />
+          )}
 
          {/* Engineering Suite Modals */}
          {showProfileModal && (
