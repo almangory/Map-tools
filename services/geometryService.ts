@@ -341,30 +341,67 @@ export const getReverseGeocode = async (
     let district = "";
 
     const isAccurate = mode === 'accurate';
-    const primaryTimeout = isAccurate ? 2200 : 1200;
+    const primaryTimeout = isAccurate ? 2400 : 1200;
 
-    // 1. Primary: ArcGIS World Geocoding Service (high precision in Middle East & KSA, reliable & fast)
+    // 1. Layer 1 (Primary): Google Maps Reverse Geocoding & Street Search (Arabic / Localized)
     try {
-        const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${queryLon},${queryLat}&langCode=ar`;
-        const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, primaryTimeout);
-        if (arcgisRes && arcgisRes.ok) {
-            const arcgisData = await arcgisRes.json();
-            if (arcgisData && arcgisData.address) {
-                const addr = arcgisData.address;
-                district = addr.District || addr.Neighborhood || addr.City || addr.Subregion || "";
-                let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || addr.StAddr || "";
-                // Clean leading numbers/house codes if present
-                street = rawStreet.replace(/^[\d\s\-]+/, '').trim();
-                if (street.includes(",")) {
-                    street = street.split(",")[0].trim();
+        const googleGeocodeUrl = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${queryLat},${queryLon}&language=ar`;
+        const googleRes = await fetchWithTimeout(googleGeocodeUrl, {}, primaryTimeout);
+        if (googleRes && googleRes.ok) {
+            const googleData = await googleRes.json();
+            if (googleData && Array.isArray(googleData.results) && googleData.results.length > 0) {
+                for (const res of googleData.results) {
+                    for (const comp of res.address_components || []) {
+                        const types: string[] = comp.types || [];
+                        if (types.includes('route') || types.includes('street_address') || types.includes('premise')) {
+                            if (!street && comp.long_name) {
+                                street = comp.long_name;
+                            }
+                        }
+                        if (types.includes('sublocality') || types.includes('sublocality_level_1') || types.includes('neighborhood')) {
+                            if (!district && comp.long_name) {
+                                district = comp.long_name;
+                            }
+                        }
+                        if (!district && (types.includes('locality') || types.includes('administrative_area_level_2'))) {
+                            district = comp.long_name;
+                        }
+                    }
+                    if (street && district) break;
                 }
             }
         }
     } catch (e) {
-        // Fallback silently
+        // Fallback to next layer
     }
 
-    // 2. Query Overpass (using GET for robust CORS compatibility across browser origins)
+    // 2. Layer 2: ArcGIS World Geocoding Service (Esri High Precision in KSA & Riyadh)
+    if (!street || street.length <= 2 || !district) {
+        try {
+            const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${queryLon},${queryLat}&langCode=ar`;
+            const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, primaryTimeout);
+            if (arcgisRes && arcgisRes.ok) {
+                const arcgisData = await arcgisRes.json();
+                if (arcgisData && arcgisData.address) {
+                    const addr = arcgisData.address;
+                    if (!district) {
+                        district = addr.District || addr.Neighborhood || addr.City || addr.Subregion || "";
+                    }
+                    if (!street || street.length <= 2) {
+                        let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || addr.StAddr || "";
+                        street = rawStreet.replace(/^[\d\s\-]+/, '').trim();
+                        if (street.includes(",")) {
+                            street = street.split(",")[0].trim();
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Fallback silently
+        }
+    }
+
+    // 3. Layer 3: Overpass OSM Road Network Multi-Endpoints (High-Density Street Geometry)
     if (!street || street.length <= 2 || street === "غير متوفر") {
         const endpoints = [
             'https://overpass.kumi.systems/api/interpreter',
@@ -376,8 +413,8 @@ export const getReverseGeocode = async (
             'https://z.overpass-api.de/api/interpreter'
         ];
         
-        const radius = isAccurate ? 80 : 50;
-        const query = `[out:json][timeout:3];way(around:${radius},${queryLat},${queryLon})["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|service"]["name"];out body geom;`;
+        const radius = isAccurate ? 85 : 50;
+        const query = `[out:json][timeout:3];way(around:${radius},${queryLat},${queryLon})["highway"~"primary|secondary|tertiary|residential|unclassified|living_street|service|trunk|motorway"]["name"];out body geom;`;
         
         for (const endpoint of endpoints) {
             try {
@@ -428,7 +465,7 @@ export const getReverseGeocode = async (
         }
     }
 
-    // 3. Fallback: BigDataCloud & Photon API & Nominatim if street or district is still incomplete
+    // 4. Layer 4: BigDataCloud Localized Reverse Geocoding
     if (!street || street.length <= 2 || !district) {
         try {
             const bdcUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${queryLat}&longitude=${queryLon}&localityLanguage=ar`;
@@ -456,9 +493,9 @@ export const getReverseGeocode = async (
         }
     }
 
+    // 5. Layer 5: Photon Geocoding Engine (Komoot / OSM)
     if (!street || street.length <= 2 || !district) {
         try {
-            // Photon reverse geocoding (fast & CORS open)
             const photonUrl = `https://photon.komoot.io/reverse?lat=${queryLat}&lon=${queryLon}`;
             const photonRes = await fetchWithTimeout(photonUrl, {}, 2000);
             if (photonRes && photonRes.ok) {
@@ -478,6 +515,7 @@ export const getReverseGeocode = async (
         }
     }
 
+    // 6. Layer 6: OpenStreetMap Nominatim Engine
     if (!street || street.length <= 2 || !district) {
         try {
             const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${queryLat}&lon=${queryLon}&zoom=18&addressdetails=1&accept-language=ar`;
@@ -497,6 +535,16 @@ export const getReverseGeocode = async (
         } catch (e) {
             // Ignore
         }
+    }
+
+    // Cleanup and normalize names
+    if (street) {
+        street = street
+            .replace(/^[\d\s\-]+/, '')
+            .replace(/,.*$/, '')
+            .replace(/^Unnamed Road/i, '')
+            .replace(/^طريق غير مسمى/i, '')
+            .trim();
     }
     
     const result = {
