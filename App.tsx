@@ -14,8 +14,8 @@ import {
   CloudDownload, GitBranch, UnfoldVertical, MapPin as MapPinIcon,
   Target, Sparkles, Hash, Maximize, Crop, Layers2, Edit3, Filter, Search,
   Database, Droplet, AlertTriangle, AlertOctagon, RotateCcw, Save, Smartphone, PenTool,
-  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle2, FolderArchive, Waves, AlertCircle,
-  TrendingUp, Pickaxe, ShieldAlert, Mountain, Camera, PlayCircle
+  Fingerprint, HardDrive, Moon, Sun, ShieldCheck, CheckCircle, CheckCircle2, FolderArchive, Waves, AlertCircle,
+  TrendingUp, Pickaxe, ShieldAlert, Mountain, Camera, PlayCircle, Eye
 } from 'lucide-react';
 import { GitCompare } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -34,7 +34,7 @@ import { formatProjectIdForExcel, cleanSegmentId, getCanonicalSegmentKey } from 
 import { downloadDXF } from './services/dxfExportService';
 import { downloadDataPDF, downloadNetworkGapsPDF } from './services/pdfExportService';
 import { downloadShapefile } from './services/shapefileExportService';
-import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance } from './services/colorUtils';
+import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance, checkColorCompliance, EXACT_APPROVED_CODES, NON_COMPLIANT_CATEGORY } from './services/colorUtils';
 import { findNearestPerpendicularPoint } from './services/spatialPerpendicularService';
 import { orientNetworkTowardsOutfall, computeGravityPipeSegment, enrichGeoPointWithHydraulics } from './services/gravitySewerEngine';
 import MapPreview from './components/MapPreview';
@@ -2363,22 +2363,12 @@ const App: React.FC = () => {
 
           totalChecked++;
           const ptColor = pt.color || '#DCB13C';
-
-          let minDistance = Infinity;
-          let nearestCat = STATUS_CATEGORIES[0];
-
-          for (const cat of STATUS_CATEGORIES) {
-            const dist = colorDistance(ptColor, cat.color);
-            if (dist < minDistance) {
-              minDistance = dist;
-              nearestCat = cat;
-            }
-          }
+          const comp = checkColorCompliance(ptColor);
 
           const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
           const origLayer = (pt as any).originalLayer || pt.layer;
 
-          if (minDistance > 60) {
+          if (!comp.isCompliant) {
             nonCompliantCount++;
             const issuePt: GeoPoint = {
               ...pt,
@@ -2387,8 +2377,8 @@ const App: React.FC = () => {
               color: '#ef4444',
               isIssue: true,
               issueReason: lang === 'ar'
-                ? `لون مخالف للمواصفات (${ptColor}) - الأقرب: ${nearestCat.nameAr}`
-                : `Non-compliant color (${ptColor}) - Nearest: ${nearestCat.nameEn}`
+                ? `لون مخالف للمواصفات (${ptColor}) - الأقرب المعتمد: ${comp.category.nameAr}`
+                : `Non-compliant color (${ptColor}) - Nearest approved: ${comp.category.nameEn}`
             };
             nonCompliantList.push(issuePt);
             return issuePt;
@@ -2421,18 +2411,18 @@ const App: React.FC = () => {
         totalChecked,
         issuesCount: nonCompliantCount,
         successCount: compliantCount,
-        badgeTextAr: nonCompliantCount > 0 ? `وُجدت ${nonCompliantCount} مشكلة (ألوان مخالفة)` : 'جميع العناصر ذات ألوان معتمدة بالكامل',
-        badgeTextEn: nonCompliantCount > 0 ? `${nonCompliantCount} Non-compliant colors found` : 'All elements match approved colors',
+        badgeTextAr: nonCompliantCount > 0 ? `وُجدت ${nonCompliantCount} مشكلة (ألوان مخالفة)` : 'جميع العناصر ذات ألوان معتمدة تماماً',
+        badgeTextEn: nonCompliantCount > 0 ? `${nonCompliantCount} Non-compliant colors found` : 'All elements match approved colors exactly',
         detailsAr: nonCompliantCount > 0
-          ? `تم فحص ${totalChecked} عنصر خطي، وتبين وجود ${nonCompliantCount} عنصر بألوان غير معتمدة (مخالفة للمواصفات الخمس المعتمدة: منفذ مياه، منفذ صرف، جاري العمل، متبقي، ملغى). تم إبرازها وتحديد مواقعها على الخريطة.`
-          : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وجميع ألوانها مطابقة للألوان المعتمدة بمشروع المياه والصرف الصحي.`,
+          ? `تم فحص ${totalChecked} عنصر خطي، وتبين وجود ${nonCompliantCount} عنصر بألوان مخالفة للأكواد الخمس المعتمدة حصراً: [#01579B مياه، #097138 صرف، #FFEA00 جاري، #A52714 متبقي، #F48FB1 ملغى]. تم إبرازها وتحديد مواقعها على الخريطة باللون الأحمر.`
+          : `تم فحص جميع العناصر الخطية (${totalChecked} عنصر)، وجميع ألوانها مطابقة تماماً للأكواد المعتمدة حصراً (#01579B، #097138، #FFEA00، #A52714، #F48FB1).`,
         detailsEn: nonCompliantCount > 0
-          ? `Audited ${totalChecked} line elements. Found ${nonCompliantCount} elements with non-compliant colors outside the standard approved categories. Highlighted on map.`
-          : `Audited ${totalChecked} line elements. All elements 100% match approved project colors.`,
+          ? `Audited ${totalChecked} line elements. Found ${nonCompliantCount} elements with non-compliant colors outside the exact 5 approved codes: [#01579B Water, #097138 Sewer, #FFEA00 In Progress, #A52714 Remaining, #F48FB1 Cancelled]. Highlighted in red on map.`
+          : `Audited ${totalChecked} line elements. All elements 100% match the exact approved project codes (#01579B, #097138, #FFEA00, #A52714, #F48FB1).`,
         issueItems: nonCompliantList,
         stats: [
           { labelAr: 'إجمالي العناصر الخطية المفحوصة', labelEn: 'Total Audited Line Elements', value: totalChecked, colorClass: 'text-white' },
-          { labelAr: 'عناصر بألوان معتمدة', labelEn: 'Approved Compliant Colors', value: compliantCount, colorClass: 'text-emerald-400 font-black' },
+          { labelAr: 'عناصر مطابقة تماماً', labelEn: 'Exact Approved Colors', value: compliantCount, colorClass: 'text-emerald-400 font-black' },
           { labelAr: 'عناصر بألوان مخالفة', labelEn: 'Non-compliant Colors', value: nonCompliantCount, colorClass: nonCompliantCount > 0 ? 'text-rose-400 font-black' : 'text-emerald-400 font-black' }
         ]
       });
@@ -2457,6 +2447,36 @@ const App: React.FC = () => {
       setLoading(false);
       setProgressPercent(null);
     }
+  };
+
+  const handleAutoCorrectNonCompliantColors = () => {
+    let correctedCount = 0;
+    const processPts = (pts: GeoPoint[]) => {
+      return pts.map(pt => {
+        if (!pt || !isLineElement(pt)) return pt;
+        const comp = checkColorCompliance(pt.color || '#DCB13C');
+        if (!comp.isCompliant) {
+          correctedCount++;
+          return {
+            ...pt,
+            color: comp.suggestedColor,
+            isIssue: false,
+            issueReason: undefined
+          };
+        }
+        return pt;
+      });
+    };
+
+    if (globalPoints.length > 0) setGlobalPoints(processPts(globalPoints));
+    if (plannedStreets.length > 0) setPlannedStreets(processPts(plannedStreets));
+    setDataId(`color-corrected-${Date.now()}`);
+    setStatusMessage(
+      lang === 'ar'
+        ? `تم تصحيح ${correctedCount} عنصر خطي إلى الألوان المعتمدة بنجاح.`
+        : `Successfully corrected ${correctedCount} line elements to approved standard colors.`
+    );
+    setTimeout(() => setStatusMessage(''), 5000);
   };
 
   const clearAuditResults = () => {
@@ -3455,9 +3475,15 @@ const App: React.FC = () => {
     });
 
     return Object.entries(groups).map(([color, stats]) => {
-      const statusCat = matchStatusByColor(color);
+      const comp = checkColorCompliance(color);
+      const statusCat = comp.category;
       return {
         color,
+        isCompliant: comp.isCompliant,
+        complianceDistance: comp.distance,
+        suggestedColor: comp.suggestedColor,
+        reasonAr: comp.reasonAr,
+        reasonEn: comp.reasonEn,
         statusName: lang === 'ar' ? statusCat.nameAr : statusCat.nameEn,
         statusColor: statusCat.color,
         totalLength: stats.totalLength,
@@ -3466,6 +3492,39 @@ const App: React.FC = () => {
       };
     }).sort((a, b) => b.totalLength - a.totalLength);
   }, [globalPoints, plannedStreets, activeTab, canonicalColorMap, activeFile, lang, analyzerNetworkType]);
+
+  const highlightSpecificColor = (targetColor: string) => {
+    if (!targetColor) return;
+    const cleanTarget = targetColor.toUpperCase();
+    const highlightPts = (pts: GeoPoint[]) => {
+      return pts.map(pt => {
+        if (!pt || !isLineElement(pt)) return pt;
+        const ptColor = String(pt.color || '').toUpperCase();
+        const mappedColor = (canonicalColorMap[ptColor] || ptColor).toUpperCase();
+        const isMatch = ptColor === cleanTarget || mappedColor === cleanTarget;
+        if (isMatch) {
+          return {
+            ...pt,
+            originalColor: (pt as any).originalColor || pt.color,
+            color: '#ef4444',
+            isIssue: true,
+            issueReason: lang === 'ar' ? `تحديد اللون: ${targetColor}` : `Selected color: ${targetColor}`
+          };
+        }
+        return pt;
+      });
+    };
+
+    if (globalPoints.length > 0) setGlobalPoints(highlightPts(globalPoints));
+    if (plannedStreets.length > 0) setPlannedStreets(highlightPts(plannedStreets));
+    setDataId(`color-highlight-${Date.now()}`);
+    setStatusMessage(
+      lang === 'ar'
+        ? `تم إبراز العناصر ذات اللون (${targetColor}) باللون الأحمر على الخريطة.`
+        : `Highlighted elements with color (${targetColor}) in red on map.`
+    );
+    setTimeout(() => setStatusMessage(''), 5000);
+  };
 
   const placemarksSummary = useMemo(() => {
     const rawPoints = (!activeFile ? plannedStreets : globalPoints) || [];
@@ -5560,7 +5619,7 @@ const App: React.FC = () => {
         {[
           { id: 'map-viewer', icon: <Globe />, label: lang === 'ar' ? 'عرض الخريطة' : 'Map View' },
           { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
-          { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
+          { id: 'line-drawer', icon: <PenTool />, label: lang === 'ar' ? 'الرسام والمخطط' : 'Drawer & Planner' },
           { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
           { id: 'engineering-suite', icon: <Mountain />, label: lang === 'ar' ? 'الأدوات الهندسية' : 'Engineering' },
           { id: 'sbc-checker', icon: <ShieldCheck />, label: lang === 'ar' ? 'الكود السعودي (تحت التطوير)' : 'SBC Code (In Dev)' },
@@ -5569,8 +5628,7 @@ const App: React.FC = () => {
           { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
           { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
           { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق' : 'Format' },
-          { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' },
-          { id: 'line-drawer', icon: <PenTool />, label: lang === 'ar' ? 'رسم الخطوط' : 'Line Drawer' }
+          { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
         ].map((tab) => (
           <button
             key={tab.id}
@@ -5597,7 +5655,7 @@ const App: React.FC = () => {
              {[
                { id: 'map-viewer', icon: <Globe />, label: lang === 'ar' ? 'عرض الخريطة' : 'Map View' },
                { id: 'converter', icon: <RefreshCw />, label: lang === 'ar' ? 'محول' : 'Converter' },
-               { id: 'street-planner', icon: <MapPinned />, label: lang === 'ar' ? 'مخطط' : 'Planner' },
+               { id: 'line-drawer', icon: <PenTool />, label: lang === 'ar' ? 'الرسام والمخطط' : 'Drawer & Planner' },
                { id: 'analyzer', icon: <BarChart3 />, label: lang === 'ar' ? 'محلل' : 'Analyzer' },
                { id: 'engineering-suite', icon: <Mountain />, label: lang === 'ar' ? 'الأدوات الهندسية' : 'Engineering' },
                { id: 'sbc-checker', icon: <ShieldCheck />, label: lang === 'ar' ? 'الكود السعودي (تحت التطوير)' : 'SBC Code (In Dev)' },
@@ -5606,8 +5664,7 @@ const App: React.FC = () => {
                { id: 'splitter', icon: <Split />, label: lang === 'ar' ? 'مقسم' : 'Splitter' },
                { id: 'polygon-converter', icon: <Shapes />, label: lang === 'ar' ? 'مضلعات' : 'Polygons' },
                { id: 'attribute-formatter', icon: <Database />, label: lang === 'ar' ? 'تنسيق البيانات' : 'Format Data' },
-               { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' },
-               { id: 'line-drawer', icon: <PenTool />, label: lang === 'ar' ? 'رسم الخطوط' : 'Line Drawer' }
+               { id: 'comparator', icon: <GitCompare />, label: lang === 'ar' ? 'مقارنة' : 'Compare' }
              ].map((tab) => (
                 <button key={tab.id} onClick={() => setActiveTab(tab.id as any)} onMouseEnter={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -6344,204 +6401,6 @@ const App: React.FC = () => {
                     </div>
                 )}
 
-                {activeTab === 'street-planner' && (
-                  <div className="space-y-6 animate-in fade-in duration-500">
-                      {!activeFile ? (
-                        <FileUploadZone id="planner-up" label={lang === 'ar' ? '1. رفع ملف التصميم / الرفع المساحي' : '1. Upload Design / Survey File'} />
-                      ) : (
-                        <div className="space-y-4 animate-in slide-in-from-top">
-                           <div className="p-6 bg-[#0b2d3d]/60 rounded-[2rem] border border-accent/20 flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                 <FileText className="w-5 h-5 text-accent" />
-                                 <div className="flex flex-col">
-                                    <span className="text-[11px] font-black text-white truncate max-w-[180px]">{activeFile.filename}</span>
-                                    <span className="text-[9px] text-white/40 font-bold">{globalPoints.length} {lang === 'ar' ? 'عنصر تم اكتشافه' : 'elements detected'}</span>
-                                 </div>
-                              </div>
-                              <button onClick={() => { setActiveFile(null); setGlobalPoints([]); }} className="p-2 text-white/20 hover:text-red-400 transition-colors"><Trash2 className="w-4 h-4" /></button>
-                           </div>
-
-                           <GeocodingModeSelector mode={geocodingMode} setMode={setGeocodingMode} lang={lang} />
-
-                           <button
-                             onClick={handleReverseGeocodeGlobal}
-                             className="w-full bg-[#0b2d3d] border-2 border-accent/40 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-xs group"
-                           >
-                              <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
-                              {lang === 'ar' ? 'جلب الشوارع والعناوين للبيانات المرفوعة' : 'Fetch Streets & Names for Design Data'}
-                           </button>
-                        </div>
-                      )}
-
-                      <div className="h-px bg-white/5 mx-4" />
-
-                      <div className="p-8 bg-[#0b2d3d]/40 rounded-[2.5rem] border border-white/5 shadow-2xl text-center space-y-4">
-                          <h2 className="text-white font-black text-sm tracking-tight leading-tight uppercase tracking-widest">{lang === 'ar' ? 'استخراج بيانات من الخريطة' : 'Extract Map Data'}</h2>
-
-                          
-                            <div className="grid grid-cols-2 gap-3">
-                              <button onClick={() => setIsDrawingMode(!isDrawingMode)} className={cn("p-4 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 transition-all border shadow-lg group", isDrawingMode ? "bg-accent text-primary border-accent" : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10")}><Navigation className={cn("w-5 h-5 transition-transform group-hover:scale-110", isDrawingMode ? "text-primary" : "text-white/40")} /><span className="leading-tight">{lang === 'ar' ? "ارسم مضلع" : "Draw Polygon"}</span></button>
-                              <label className="p-4 bg-white/5 text-white/80 border border-white/10 rounded-2xl font-black text-[10px] flex flex-col items-center gap-2 hover:bg-white/10 transition-all shadow-lg cursor-pointer group"><input type="file" className="hidden" onChange={handleBoundaryUpload} /><FileUp className="w-5 h-5 text-accent/60 group-hover:text-accent transition-colors" /><span className="leading-tight text-center">{lang === 'ar' ? 'رفع حدود' : 'Upload Boundary'}</span></label>
-                          </div>
-
-                          <button onClick={handleFetchStreets} disabled={!selectedArea && globalPoints.length === 0} className={cn("w-full py-5 rounded-2xl flex items-center justify-center gap-4 shadow-2xl transition-all font-black text-sm group", (selectedArea || globalPoints.length > 0) ? "bg-accent/10 border-2 border-accent/20 text-accent hover:bg-accent hover:text-primary" : "bg-[#0e3f53]/50 border border-white/5 text-white/20 cursor-not-allowed")}><RefreshCw className={cn("w-6 h-6", (selectedArea || globalPoints.length > 0) ? "animate-spin-slow" : "")} /><span>{lang === 'ar' ? 'جلب شوارع المنطقة المحيطة' : 'Fetch Surrounding Streets'}</span></button>
-                      </div>
-
-                      <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
-                          <div className="flex items-center gap-2 mb-2">
-                              <Settings2 className="w-4 h-4 text-accent" />
-                              <h3 className="text-white font-black text-[11px] uppercase tracking-wider">{lang === 'ar' ? 'خيارات التخطيط' : 'Planner Options'}</h3>
-                          </div>
-
-                          {/* Street Classification Filters */}
-                          <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-3">
-                             <div className="flex items-center gap-2 mb-1">
-                                <Filter className="w-3 h-3 text-accent" />
-                                <span className="text-[10px] font-black text-white/80 uppercase tracking-widest">{t.streetTypes}</span>
-                             </div>
-                             <div className="flex flex-wrap gap-2">
-                                {[
-                                  { id: 'motorway', label: t.typeMotorway, color: '#ef4444' },
-                                  { id: 'trunk', label: t.typeMain, color: '#ef4444' },
-                                  { id: 'secondary', label: t.typeSecondary, color: '#3b82f6' },
-                                  { id: 'residential', label: t.typeResidential, color: '#10b981' },
-                                  { id: 'service', label: t.typeService, color: '#10b981' }
-                                ].map(type => (
-                                  <button
-                                    key={type.id}
-                                    onClick={() => toggleStreetType(type.id)}
-                                    className={cn(
-                                      "px-3 py-1.5 rounded-full text-[9px] font-black border transition-all flex items-center gap-1.5",
-                                      streetTypeFilters.includes(type.id)
-                                        ? "bg-accent/20 border-accent text-accent"
-                                        : "bg-white/5 border-white/10 text-white/30 hover:text-white/60"
-                                    )}
-                                  >
-                                    <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: type.color }} />
-                                    {type.label}
-                                  </button>
-                                ))}
-                             </div>
-                          </div>
-
-                          <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
-                              <div className="flex flex-col gap-1">
-                                  <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'قص الشوارع عند الحدود' : 'Clip to Boundary'}</span>
-                                  <span className="text-[9px] text-white/40">{lang === 'ar' ? 'إبقاء الشوارع داخل المضلع فقط' : 'Restrict streets to polygon interior'}</span>
-                              </div>
-                              <button onClick={() => setPlannerClip(!plannerClip)} className={cn("w-10 h-5 rounded-full transition-all relative", plannerClip ? "bg-accent" : "bg-white/10")}>
-                                  <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerClip ? "left-0.5" : "left-5.5") : (plannerClip ? "right-0.5" : "right-5.5"))} />
-                              </button>
-                          </label>
-
-                          <div className="px-4 py-2 bg-white/5 rounded-2xl space-y-2">
-                              <div className="flex items-center justify-between">
-                                  <div className="flex flex-col gap-0.5">
-                                      <span className="text-[10px] font-black text-white">{lang === 'ar' ? 'نطاق البحث الإضافي (Buffer)' : 'Search Buffer (Context)'}</span>
-                                      <span className="text-[8px] text-white/40">{lang === 'ar' ? 'جلب الشوارع المحيطة بالمنطقة بمسافة محددة' : 'Fetch streets around the area'}</span>
-                                  </div>
-                                  <span className="text-xs font-black text-accent">{plannerBuffer}m</span>
-                              </div>
-                              <input
-                                  type="range"
-                                  min="0" max="500" step="50"
-                                  value={plannerBuffer}
-                                  onChange={(e) => setPlannerBuffer(parseInt(e.target.value))}
-                                  className="w-full accent-accent h-1 bg-white/10 rounded-full cursor-pointer"
-                              />
-                          </div>
-
-                          <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
-                              <div className="flex flex-col gap-1">
-                                  <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط عند التقاطعات' : 'Split Lines at Intersections'}</span>
-                                  <span className="text-[9px] text-white/40">{lang === 'ar' ? 'فصل الشوارع عند التقاطعات لقطع مستقلة' : 'Split streets at every intersection'}</span>
-                              </div>
-                              <button onClick={() => setPlannerSplitIntersections(!plannerSplitIntersections)} className={cn("w-10 h-5 rounded-full transition-all relative", plannerSplitIntersections ? "bg-accent" : "bg-white/10")}>
-                                  <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerSplitIntersections ? "left-0.5" : "left-5.5") : (plannerSplitIntersections ? "right-0.5" : "right-5.5"))} />
-                              </button>
-                          </label>
-
-                          <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-transparent hover:border-white/5">
-                              <div className="flex flex-col gap-1">
-                                  <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'تقسيم الخطوط حسب الطول' : 'Split Lines by Length'}</span>
-                                  <span className="text-[9px] text-white/40">{lang === 'ar' ? 'تقسيم المسارات المستخرجة لقطع متساوية' : 'Split fetched paths equally'}</span>
-                              </div>
-                              <button onClick={() => setPlannerSplitLines(!plannerSplitLines)} className={cn("w-10 h-5 rounded-full transition-all relative", plannerSplitLines ? "bg-accent" : "bg-white/10")}>
-                                  <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerSplitLines ? "left-0.5" : "left-5.5") : (plannerSplitLines ? "right-0.5" : "right-5.5"))} />
-                              </button>
-                          </label>
-
-                          {plannerSplitLines && (
-                              <div className="px-4 pb-2 space-y-3 animate-in slide-in-from-top">
-                                  <div className="flex items-center justify-between mb-1">
-                                      <span className="text-[9px] font-bold text-white/60">{lang === 'ar' ? 'الحد الأقصى (10 - 1000 متر):' : 'Max Length (10 - 1000 m):'}</span>
-                                      <div className="flex items-center gap-1 bg-[#0e3f53] px-2.5 py-0.5 rounded-lg border border-white/10 shadow-inner">
-                                        <input
-                                          type="number"
-                                          min="10"
-                                          max="10000"
-                                          step="10"
-                                          value={plannerMaxLen}
-                                          onChange={(e) => setPlannerMaxLen(Math.max(10, parseInt(e.target.value) || 10))}
-                                          className="w-14 bg-transparent text-xs font-black text-accent outline-none text-center select-text"
-                                        />
-                                        <span className="text-[10px] font-bold text-accent">{lang === 'ar' ? 'م' : 'm'}</span>
-                                      </div>
-                                  </div>
-                                  <input
-                                      type="range"
-                                      min="10" max="1000" step="10"
-                                      value={Math.min(plannerMaxLen, 1000)}
-                                      onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))}
-                                      className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
-                                  />
-                                  <div className="flex flex-wrap gap-1 pt-0.5">
-                                    {[10, 20, 50, 100, 200, 500, 1000].map((val) => (
-                                      <button
-                                        key={val}
-                                        type="button"
-                                        onClick={() => setPlannerMaxLen(val)}
-                                        className={cn(
-                                          "px-2 py-0.5 rounded-lg text-[9px] font-bold transition-all border",
-                                          plannerMaxLen === val
-                                            ? "bg-accent text-primary border-accent shadow-md font-black scale-105"
-                                            : "bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white"
-                                        )}
-                                      >
-                                        {val} {lang === 'ar' ? 'م' : 'm'}
-                                      </button>
-                                    ))}
-                                  </div>
-                              </div>
-                          )}
-                      </div>
-
-                      {(plannedStreets.length > 0 || globalPoints.length > 0) && (
-                        <div className="space-y-4 animate-in slide-in-from-bottom pb-10">
-                            <div className="bg-white/5 p-6 rounded-3xl border border-white/5 space-y-3">
-                                <div className="flex items-center justify-between mb-4">
-                                   <span className="text-[10px] font-black text-white/40 uppercase">{lang === 'ar' ? 'ملخص المشروع' : 'Project Summary'}</span>
-                                   <div className="flex gap-2">
-                                      <span className="px-3 py-1 bg-accent/10 text-accent rounded-full text-[9px] font-black">{globalPoints.length} {lang === 'ar' ? 'تصميم' : 'Design'}</span>
-                                      <span className="px-3 py-1 bg-blue-500/10 text-blue-400 rounded-full text-[9px] font-black">{plannedStreets.length} {lang === 'ar' ? 'شوارع' : 'Streets'}</span>
-                                   </div>
-                                </div>
-                                <UniversalExportBar
-                                    data={[...globalPoints, ...plannedStreets]}
-                                    filename={activeFile?.filename || 'Full_Street_Project'}
-                                    lang={lang}
-                                    isExecuting={loading}
-                                    runWithLoading={runWithLoading}
-                                    onExcelExport={downloadExcelWithStreets}
-                                    onKmzExport={() => executeWithStreetFetching([...globalPoints, ...plannedStreets], selectedHeaders, () => { downloadKMZ([...globalPoints, ...plannedStreets], "Full_Street_Project", { mode: 'none', groupByAttribute: 'layer', optimizeForMyMaps: optimizeForMyMaps, keepOriginalDescription: keepOriginalDescription, removeImagesOnly: removeImagesOnly }, activeFile?.headers, selectedHeaders) })}
-                                />
-                                <button onClick={() => { setSelectedArea(null); setPlannedStreets([]); setBoundaryPolygon(null); setIsDrawingMode(false); setActiveFile(null); setGlobalPoints([]); }} className="w-full mt-2 bg-white/5 text-white/40 font-black py-3 rounded-xl flex items-center justify-center gap-2 hover:text-red-400 transition-all text-[10px] uppercase"><Trash2 className="w-3 h-3" />{lang === 'ar' ? 'إفراغ مساحة العمل' : 'Clear Workspace'}</button>
-                            </div>
-                        </div>
-                      )}
-                  </div>
-                )}
-
                 {activeTab === 'analyzer' && (activeFile || plannedStreets.length > 0) && (
                   <div className="space-y-6 animate-in fade-in duration-500 pb-10">
                       <div className="p-10 bg-[#0b2d3d]/60 rounded-[3rem] border border-accent/20 shadow-2xl text-center space-y-4 relative overflow-hidden">
@@ -6713,7 +6572,73 @@ const App: React.FC = () => {
                                 </p>
                             </div>
 
-                                                        {/* Interactive Charts */}
+                            {/* Active Non-Compliant Colors Alert & Correction Banner */}
+                            {analysisData.some(item => !item.isCompliant) && (
+                              <div className="p-6 bg-rose-950/40 border-2 border-rose-500/50 rounded-[2.5rem] shadow-2xl space-y-4 animate-in fade-in duration-500">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-rose-500/20 pb-3">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0">
+                                      <AlertTriangle className="w-5 h-5 animate-pulse" />
+                                    </div>
+                                    <div>
+                                      <h4 className="text-sm font-black text-rose-300">
+                                        {lang === 'ar' ? '⚠️ تنبيه: تم اكتشاف ألوان مخالفة للأكواد المعتمدة!' : '⚠️ Alert: Non-Compliant Color Codes Detected!'}
+                                      </h4>
+                                      <p className="text-[10px] text-white/70">
+                                        {lang === 'ar'
+                                          ? `يوجد ${analysisData.filter(it => !it.isCompliant).length} كود لون في المخطط لا يطابق الأكواد الخمس المعتمدة حصراً (#01579B مياه، #097138 صرف، #FFEA00 جاري، #A52714 متبقي، #F48FB1 ملغى).`
+                                          : `${analysisData.filter(it => !it.isCompliant).length} color codes do not match the exact 5 approved codes (#01579B, #097138, #FFEA00, #A52714, #F48FB1).`}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      onClick={verifyApprovedColors}
+                                      className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-lg flex items-center gap-1.5 transition-all active:scale-95"
+                                    >
+                                      <Search className="w-3.5 h-3.5" />
+                                      <span>{lang === 'ar' ? 'إبراز وتدقيق على الخريطة' : 'Audit on Map'}</span>
+                                    </button>
+                                    <button
+                                      onClick={handleAutoCorrectNonCompliantColors}
+                                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-lg flex items-center gap-1.5 transition-all active:scale-95"
+                                    >
+                                      <CheckCircle className="w-3.5 h-3.5" />
+                                      <span>{lang === 'ar' ? 'تصحيح تلقائي للألوان المعتمدة' : 'Auto-Correct to Approved'}</span>
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                  {analysisData.filter(it => !it.isCompliant).map((it, i) => (
+                                    <div key={i} className="bg-black/40 border border-rose-500/30 rounded-xl p-2.5 flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="w-3.5 h-3.5 rounded-full border border-white/40 shrink-0" style={{ backgroundColor: it.color }} />
+                                        <div className="min-w-0">
+                                          <span className="font-mono font-black text-xs text-rose-300 block truncate">{it.color}</span>
+                                          <span className="text-[9px] text-white/60 block truncate">
+                                            {lang === 'ar' ? `الأقرب: ${it.statusName}` : `Nearest: ${it.statusName}`}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        <span className="text-[10px] font-bold text-white/80 bg-white/10 px-1.5 py-0.5 rounded">
+                                          {(it.totalLength / 1000).toFixed(2)} {lang === 'ar' ? 'كم' : 'km'}
+                                        </span>
+                                        <button
+                                          onClick={() => highlightSpecificColor(it.color)}
+                                          className="p-1 rounded-lg bg-rose-500/20 hover:bg-rose-500 text-white text-[10px] transition-colors"
+                                          title={lang === 'ar' ? 'إبراز على الخريطة' : 'Highlight on map'}
+                                        >
+                                          <Eye className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Interactive Charts */}
                             <div className="p-6 bg-[#0b2d3d]/80 rounded-[2.5rem] border border-white/5 shadow-xl space-y-6 animate-in slide-in-from-bottom duration-700">
                                 <div className="flex items-center justify-between border-b border-white/5 pb-3">
                                     <div className="flex items-center gap-2">
@@ -7617,12 +7542,13 @@ const App: React.FC = () => {
                             <div className="bg-[#0b2d3d]/40 p-8 rounded-[3rem] border border-white/5 space-y-6">
                                 <h3 className="text-white/40 font-black text-[11px] text-center uppercase tracking-[0.2em]">{lang === 'ar' ? 'تفاصيل المجموعات المدمجة' : 'Merged Color Details'}</h3>
                                 <div className="space-y-8">{analysisData.map((item, idx) => (
-                                        <div key={idx} className="space-y-3">
-                                          <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                                              <div className="w-3 h-3 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.2)]" style={{ backgroundColor: item.color }} />
-                                              <span className="text-[11px] font-black text-white/80 tracking-widest">{item.color}</span>
-                                              {item.statusName && (
+                                        <div key={idx} className={`space-y-3 p-4 rounded-2xl transition-all ${!item.isCompliant ? 'bg-rose-950/20 border border-rose-500/30' : 'bg-white/[0.02]'}`}>
+                                          <div className="flex items-center justify-between flex-wrap gap-2">
+                                            <div className="flex items-center gap-2.5 flex-wrap">
+                                              <div className="w-3.5 h-3.5 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.2)] border border-white/40 shrink-0" style={{ backgroundColor: item.color }} />
+                                              <span className="text-[11px] font-mono font-black text-white/90 tracking-wider">{item.color}</span>
+                                              
+                                              {item.isCompliant ? (
                                                 <span
                                                   className="text-[9px] font-black px-2.5 py-0.5 rounded-md border"
                                                   style={{
@@ -7633,8 +7559,23 @@ const App: React.FC = () => {
                                                 >
                                                   {item.statusName}
                                                 </span>
+                                              ) : (
+                                                <span className="text-[9px] font-black px-2.5 py-0.5 rounded-md bg-rose-500/20 border border-rose-500/50 text-rose-400 flex items-center gap-1">
+                                                  <span>⚠️ {lang === 'ar' ? 'لون غير معتمد' : 'Non-Compliant'}</span>
+                                                  <span className="text-white/60">({lang === 'ar' ? `الأقرب: ${item.statusName}` : `Nearest: ${item.statusName}`})</span>
+                                                </span>
                                               )}
+
                                               <span className="text-[9px] font-black text-accent bg-accent/10 px-2 py-0.5 rounded-md">#{item.count} {lang === 'ar' ? 'عناصر' : 'items'}</span>
+
+                                              <button
+                                                onClick={() => highlightSpecificColor(item.color)}
+                                                className="text-[9px] font-black px-2 py-0.5 rounded bg-white/10 hover:bg-accent hover:text-primary text-white/70 transition-all flex items-center gap-1"
+                                                title={lang === 'ar' ? 'إبراز هذه المجموعة على الخريطة' : 'Highlight group on map'}
+                                              >
+                                                <Eye className="w-3 h-3" />
+                                                <span>{lang === 'ar' ? 'إبراز' : 'Highlight'}</span>
+                                              </button>
                                             </div>
                                             <div className="flex items-baseline gap-1">
                                               <span className="text-sm font-black text-white">{(item.totalLength / 1000).toFixed(3)}</span>
@@ -8041,6 +7982,34 @@ const App: React.FC = () => {
                     onFocusPoint={(pt) => {
                       setFocusedPoint(pt);
                     }}
+                    plannedStreets={plannedStreets}
+                    setPlannedStreets={setPlannedStreets}
+                    selectedArea={selectedArea}
+                    setSelectedArea={setSelectedArea}
+                    boundaryPolygon={boundaryPolygon}
+                    setBoundaryPolygon={setBoundaryPolygon}
+                    isDrawingMode={isDrawingMode}
+                    setIsDrawingMode={setIsDrawingMode}
+                    plannerBuffer={plannerBuffer}
+                    setPlannerBuffer={setPlannerBuffer}
+                    plannerClip={plannerClip}
+                    setPlannerClip={setPlannerClip}
+                    streetTypeFilters={streetTypeFilters}
+                    setStreetTypeFilters={setStreetTypeFilters}
+                    plannerSplitIntersections={plannerSplitIntersections}
+                    setPlannerSplitIntersections={setPlannerSplitIntersections}
+                    plannerSplitLines={plannerSplitLines}
+                    setPlannerSplitLines={setPlannerSplitLines}
+                    plannerMaxLen={plannerMaxLen}
+                    setPlannerMaxLen={setPlannerMaxLen}
+                    geocodingMode={geocodingMode}
+                    setGeocodingMode={setGeocodingMode}
+                    handleFetchStreets={handleFetchStreets}
+                    handleBoundaryUpload={handleBoundaryUpload}
+                    handleReverseGeocodeGlobal={handleReverseGeocodeGlobal}
+                    activeFile={activeFile}
+                    setActiveFile={setActiveFile}
+                    initialMode={activeTab === 'street-planner' ? 'street-planner' : undefined}
                   />
                 )}
                 {activeTab === 'segment-vault' && (

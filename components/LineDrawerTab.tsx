@@ -7,7 +7,8 @@ import {
   Square, Sliders, Palette, Info, ListOrdered, Hash, Ruler, Tag,
   FileCheck, ShieldAlert, CheckCircle2, ChevronRight, CornerDownLeft,
   Building2, Home, Route, Split, SlidersHorizontal, Layers3, Box, HelpCircle,
-  Loader2, Activity, Cpu, Clock, Filter, Compass
+  Loader2, Activity, Cpu, Clock, Filter, Compass, MapPinned, Target, Zap,
+  FileUp, Settings2, CheckSquare, Scissors
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -16,7 +17,7 @@ import * as XLSX from 'xlsx';
 import { GeoPoint, ParsedFile } from '../types';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, geoJsonToGeoPoints } from '../services/parserService';
 import { transformPoints, identifyPotentialCRS } from '../services/crs';
-import { COMMON_EPSG } from '../constants';
+import { COMMON_EPSG, PALETTE } from '../constants';
 import { calculatePathLength, downloadKMZ } from '../services/kmlService';
 import { downloadShapefile } from '../services/shapefileExportService';
 import { downloadDXF } from '../services/dxfExportService';
@@ -43,6 +44,15 @@ import {
   geoDistanceMeters
 } from '../services/spatialPerpendicularService';
 import { computeGravityPipeSegment, enrichGeoPointWithHydraulics, orientNetworkTowardsOutfall } from '../services/gravitySewerEngine';
+import {
+  fetchStreetsInPolygon,
+  bufferPolygon,
+  calculateBoundingBox,
+  splitLinesAtIntersections,
+  splitLineString,
+  getReverseGeocode,
+  matchNearestStreetName
+} from '../services/geometryService';
 
 function cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)); }
 
@@ -85,9 +95,39 @@ interface Props {
   setManualPickingTarget?: (target: 'start' | 'end' | null) => void;
   onFinishCurrentLine?: () => void;
   onFocusPoint?: (pt: GeoPoint) => void;
+
+  // Merged Street & Network Planner Properties
+  plannedStreets?: GeoPoint[];
+  setPlannedStreets?: React.Dispatch<React.SetStateAction<GeoPoint[]>>;
+  selectedArea?: { x: number; y: number }[] | null;
+  setSelectedArea?: (area: { x: number; y: number }[] | null) => void;
+  boundaryPolygon?: GeoPoint | null;
+  setBoundaryPolygon?: (poly: GeoPoint | null) => void;
+  isDrawingMode?: boolean;
+  setIsDrawingMode?: (val: boolean) => void;
+  plannerBuffer?: number;
+  setPlannerBuffer?: (val: number) => void;
+  plannerClip?: boolean;
+  setPlannerClip?: (val: boolean) => void;
+  streetTypeFilters?: string[];
+  setStreetTypeFilters?: (filters: string[]) => void;
+  plannerSplitIntersections?: boolean;
+  setPlannerSplitIntersections?: (val: boolean) => void;
+  plannerSplitLines?: boolean;
+  setPlannerSplitLines?: (val: boolean) => void;
+  plannerMaxLen?: number;
+  setPlannerMaxLen?: (val: number) => void;
+  geocodingMode?: 'accurate' | 'fast';
+  setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
+  handleFetchStreets?: () => Promise<void>;
+  handleBoundaryUpload?: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  handleReverseGeocodeGlobal?: () => Promise<void>;
+  activeFile?: ParsedFile | null;
+  setActiveFile?: (file: ParsedFile | null) => void;
+  initialMode?: DrawMode;
 }
 
-type DrawMode = 'file-import' | 'map-interactive' | 'cad-network-auto' | 'manual-coords' | 'lines-inventory';
+type DrawMode = 'cad-network-auto' | 'street-planner' | 'map-interactive' | 'file-import' | 'manual-coords' | 'lines-inventory';
 
 const PRESET_COLORS = [
   { name: 'أزرق (Blue)', hex: '#3b82f6' },
@@ -136,7 +176,37 @@ export const LineDrawerTab: React.FC<Props> = ({
   manualPickingTarget: propManualPickingTarget,
   setManualPickingTarget: propSetManualPickingTarget,
   onFinishCurrentLine,
-  onFocusPoint
+  onFocusPoint,
+
+  // Street Planner props with fallbacks
+  plannedStreets: propPlannedStreets,
+  setPlannedStreets: propSetPlannedStreets,
+  selectedArea: propSelectedArea,
+  setSelectedArea: propSetSelectedArea,
+  boundaryPolygon: propBoundaryPolygon,
+  setBoundaryPolygon: propSetBoundaryPolygon,
+  isDrawingMode: propIsDrawingMode,
+  setIsDrawingMode: propSetIsDrawingMode,
+  plannerBuffer: propPlannerBuffer,
+  setPlannerBuffer: propSetPlannerBuffer,
+  plannerClip: propPlannerClip,
+  setPlannerClip: propSetPlannerClip,
+  streetTypeFilters: propStreetTypeFilters,
+  setStreetTypeFilters: propSetStreetTypeFilters,
+  plannerSplitIntersections: propPlannerSplitIntersections,
+  setPlannerSplitIntersections: propSetPlannerSplitIntersections,
+  plannerSplitLines: propPlannerSplitLines,
+  setPlannerSplitLines: propSetPlannerSplitLines,
+  plannerMaxLen: propPlannerMaxLen,
+  setPlannerMaxLen: propSetPlannerMaxLen,
+  geocodingMode: propGeocodingMode,
+  setGeocodingMode: propSetGeocodingMode,
+  handleFetchStreets: propHandleFetchStreets,
+  handleBoundaryUpload: propHandleBoundaryUpload,
+  handleReverseGeocodeGlobal: propHandleReverseGeocodeGlobal,
+  activeFile: propActiveFile,
+  setActiveFile: propSetActiveFile,
+  initialMode
 }) => {
   // Local fallback states if not provided as props
   const [localDrawnLines, setLocalDrawnLines] = useState<GeoPoint[]>([]);
@@ -157,6 +227,20 @@ export const LineDrawerTab: React.FC<Props> = ({
   });
   const [localPickingTarget, setLocalPickingTarget] = useState<'start' | 'end' | null>(null);
 
+  // Street Planner Local Fallback States
+  const [localPlannedStreets, setLocalPlannedStreets] = useState<GeoPoint[]>([]);
+  const [localSelectedArea, setLocalSelectedArea] = useState<{ x: number; y: number }[] | null>(null);
+  const [localBoundaryPolygon, setLocalBoundaryPolygon] = useState<GeoPoint | null>(null);
+  const [localIsDrawingMode, setLocalIsDrawingMode] = useState(false);
+  const [localPlannerBuffer, setLocalPlannerBuffer] = useState(0);
+  const [localPlannerClip, setLocalPlannerClip] = useState(true);
+  const [localStreetTypeFilters, setLocalStreetTypeFilters] = useState<string[]>(['motorway', 'trunk', 'secondary', 'residential', 'service']);
+  const [localPlannerSplitIntersections, setLocalPlannerSplitIntersections] = useState(true);
+  const [localPlannerSplitLines, setLocalPlannerSplitLines] = useState(false);
+  const [localPlannerMaxLen, setLocalPlannerMaxLen] = useState(100);
+  const [localGeocodingMode, setLocalGeocodingMode] = useState<'accurate' | 'fast'>('accurate');
+  const [localActiveFile, setLocalActiveFile] = useState<ParsedFile | null>(null);
+
   // Effective state bindings
   const drawnLines = propDrawnLines !== undefined ? propDrawnLines : localDrawnLines;
   const setDrawnLines = propSetDrawnLines || setLocalDrawnLines;
@@ -169,8 +253,38 @@ export const LineDrawerTab: React.FC<Props> = ({
   const manualPickingTarget = propManualPickingTarget !== undefined ? propManualPickingTarget : localPickingTarget;
   const setManualPickingTarget = propSetManualPickingTarget || setLocalPickingTarget;
 
+  // Effective Street Planner bindings
+  const plannedStreets = propPlannedStreets !== undefined ? propPlannedStreets : localPlannedStreets;
+  const setPlannedStreets = propSetPlannedStreets || setLocalPlannedStreets;
+  const selectedArea = propSelectedArea !== undefined ? propSelectedArea : localSelectedArea;
+  const setSelectedArea = propSetSelectedArea || setLocalSelectedArea;
+  const boundaryPolygon = propBoundaryPolygon !== undefined ? propBoundaryPolygon : localBoundaryPolygon;
+  const setBoundaryPolygon = propSetBoundaryPolygon || setLocalBoundaryPolygon;
+  const isDrawingMode = propIsDrawingMode !== undefined ? propIsDrawingMode : localIsDrawingMode;
+  const setIsDrawingMode = propSetIsDrawingMode || setLocalIsDrawingMode;
+  const plannerBuffer = propPlannerBuffer !== undefined ? propPlannerBuffer : localPlannerBuffer;
+  const setPlannerBuffer = propSetPlannerBuffer || setLocalPlannerBuffer;
+  const plannerClip = propPlannerClip !== undefined ? propPlannerClip : localPlannerClip;
+  const setPlannerClip = propSetPlannerClip || setLocalPlannerClip;
+  const streetTypeFilters = propStreetTypeFilters !== undefined ? propStreetTypeFilters : localStreetTypeFilters;
+  const setStreetTypeFilters = propSetStreetTypeFilters || setLocalStreetTypeFilters;
+  const plannerSplitIntersections = propPlannerSplitIntersections !== undefined ? propPlannerSplitIntersections : localPlannerSplitIntersections;
+  const setPlannerSplitIntersections = propSetPlannerSplitIntersections || setLocalPlannerSplitIntersections;
+  const plannerSplitLines = propPlannerSplitLines !== undefined ? propPlannerSplitLines : localPlannerSplitLines;
+  const setPlannerSplitLines = propSetPlannerSplitLines || setLocalPlannerSplitLines;
+  const plannerMaxLen = propPlannerMaxLen !== undefined ? propPlannerMaxLen : localPlannerMaxLen;
+  const setPlannerMaxLen = propSetPlannerMaxLen || setLocalPlannerMaxLen;
+  const geocodingMode = propGeocodingMode !== undefined ? propGeocodingMode : localGeocodingMode;
+  const setGeocodingMode = propSetGeocodingMode || setLocalGeocodingMode;
+  const activeFile = propActiveFile !== undefined ? propActiveFile : localActiveFile;
+  const setActiveFile = propSetActiveFile || setLocalActiveFile;
+
   // Active sub-tab
-  const [activeMode, setActiveMode] = useState<DrawMode>('map-interactive');
+  const [activeMode, setActiveMode] = useState<DrawMode>(initialMode || 'cad-network-auto');
+
+  useEffect(() => {
+    if (initialMode) setActiveMode(initialMode);
+  }, [initialMode]);
 
   // Status messages
   const [error, setError] = useState<string | null>(null);
@@ -813,6 +927,42 @@ export const LineDrawerTab: React.FC<Props> = ({
     }
   };
 
+  const handleExportBoundaryKMZ = async () => {
+    const activeBoundaryPts = selectedArea && selectedArea.length > 0 
+      ? selectedArea 
+      : (boundaryPolygon?.path || []);
+
+    if (activeBoundaryPts.length === 0) {
+      setError(lang === 'ar' ? 'يرجى رسم أو رفع حدود المنطقة أولاً للتصدير.' : 'Please draw or upload an area boundary first.');
+      return;
+    }
+
+    const boundaryFeature: GeoPoint = boundaryPolygon || {
+      id: `boundary-${Date.now()}`,
+      name: lang === 'ar' ? 'حدود نطاق المنطقة الجغرافية' : 'Geographic Area Boundary Zone',
+      lat: activeBoundaryPts[0][0],
+      lng: activeBoundaryPts[0][1],
+      type: 'Polygon',
+      path: activeBoundaryPts,
+      layer: 'Area_Boundary_Zone',
+      color: '#06b6d4',
+      attributes: {
+        'Layer': 'Area_Boundary_Zone',
+        'Type': 'Geographic Boundary Polygon',
+        'Vertices Count': String(activeBoundaryPts.length),
+        'Source': 'GIS Boundary Planner'
+      }
+    };
+
+    const task = () => downloadKMZ([boundaryFeature], 'Target_Area_Boundary_Zone', { mode: 'none', groupByAttribute: 'layer' });
+    if (runWithLoading) {
+      await runWithLoading(lang === 'ar' ? 'جاري تصدير ملف حدود المنطقة كـ KMZ...' : 'Exporting Area Boundary KMZ...', task);
+    } else {
+      await task();
+    }
+    setSuccess(lang === 'ar' ? '✅ تم تصدير ملف حدود المنطقة (KMZ) بنجاح لجوجل إيرث!' : '✅ Area Boundary KMZ exported successfully!');
+  };
+
   const handleExportShapefile = async () => {
     if (drawnLines.length === 0) return;
     const baseName = 'Drawn_Map_Lines';
@@ -1339,6 +1489,224 @@ export const LineDrawerTab: React.FC<Props> = ({
     setSuccess(lang === 'ar' ? `تم حفظ الخط (${newLine.id}) بنجاح!` : `Line ${newLine.id} saved!`);
   };
 
+  // --- Street Planner Handler Functions ---
+  const toggleStreetType = (typeId: string) => {
+    setStreetTypeFilters(prev => 
+      prev.includes(typeId) 
+        ? prev.filter(t => t !== typeId)
+        : [...prev, typeId]
+    );
+  };
+
+  const handleFetchStreetsInternal = async () => {
+    if (propHandleFetchStreets) {
+      await propHandleFetchStreets();
+      return;
+    }
+
+    let areaToQuery = selectedArea;
+    if (!areaToQuery && globalPoints.length > 0) {
+      const allPathPoints: { x: number; y: number }[] = [];
+      globalPoints.forEach(p => {
+        if (p.path) p.path.forEach(v => allPathPoints.push({ x: v.x, y: v.y }));
+        else allPathPoints.push({ x: p.x, y: p.y });
+      });
+      areaToQuery = calculateBoundingBox(allPathPoints);
+    }
+
+    if (!areaToQuery) {
+      setError(lang === 'ar' ? "يرجى رسم مضلع أو رفع حدود منطقة أو رفع ملف هندسي أولاً لتحديد نطاق جلب الشوارع." : "Please draw a polygon, upload boundary, or upload engineering data first.");
+      return;
+    }
+
+    setLoading(true);
+    if (setGlobalProgress) setGlobalProgress(15);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? "جاري الاتصال بخدمات الخرائط وتحديد النطاق الجغرافي..." : "Connecting to map services & calculating bounds...");
+
+    try {
+      const buffered = bufferPolygon(areaToQuery, plannerBuffer);
+      if (setGlobalProgress) setGlobalProgress(30);
+      if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? "جاري استرجاع شبكة الشوارع والطرق من خوادم الخرائط..." : "Fetching street network for area from map servers...");
+
+      let streets = await fetchStreetsInPolygon(
+        buffered,
+        plannerClip,
+        streetTypeFilters,
+        (msg, pct) => {
+          if (setGlobalStatus) setGlobalStatus(msg);
+          if (setGlobalProgress) setGlobalProgress(pct);
+        }
+      );
+
+      if (setGlobalProgress) setGlobalProgress(85);
+      if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? "جاري تقطيع ومعالجة تقاطعات وهندسة الشوارع..." : "Processing & splitting fetched street geometries...");
+
+      if (plannerSplitIntersections) {
+        streets = splitLinesAtIntersections(streets);
+      }
+
+      if (plannerSplitLines) {
+        let splitResults: GeoPoint[] = [];
+        streets.forEach(s => {
+          if (s.path) {
+            const segments = splitLineString(s.path, plannerMaxLen);
+            segments.forEach((seg, idx) => {
+              splitResults.push({
+                ...s,
+                id: segments.length > 1 ? `${s.id} [${idx + 1}]` : s.id,
+                path: seg,
+                originalLength: calculatePathLength(seg)
+              });
+            });
+          } else {
+            splitResults.push(s);
+          }
+        });
+        streets = splitResults;
+      }
+
+      setPlannedStreets(streets);
+      if (setDataId) setDataId(`streets-${Date.now()}`);
+      if (setGlobalProgress) setGlobalProgress(100);
+      setSuccess(lang === 'ar' ? `تم استخراج ${streets.length} مسار شارع بنجاح من خوادم الخرائط!` : `Successfully fetched ${streets.length} street paths!`);
+    } catch (e: any) {
+      console.warn("Street planning fetch notice:", e);
+      setError(lang === 'ar' ? 'تعذر جلب الشوارع من خوادم الخرائط حالياً. يرجى المحاولة مرة أخرى أو توسيع النطاق.' : 'Unable to fetch streets from map servers at this moment. Please retry or expand buffer.');
+    } finally {
+      setLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
+      if (setGlobalStatus) setTimeout(() => setGlobalStatus(''), 3000);
+    }
+  };
+
+  const handleBoundaryUploadInternal = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (propHandleBoundaryUpload) {
+      await propHandleBoundaryUpload(e);
+      return;
+    }
+
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+    setLoading(true);
+
+    try {
+      const fName = selectedFile.name.toLowerCase();
+      let pts: GeoPoint[] = [];
+
+      if (fName.endsWith('.kmz') || fName.endsWith('.kml')) {
+        const parsed = await parseKMZ(selectedFile);
+        pts = parsed.points;
+      } else if (fName.endsWith('.dxf')) {
+        const parsed = await parseDXF(selectedFile);
+        pts = extractPointsFromDXF(parsed.data);
+      }
+
+      if (pts.length > 0) {
+        const polygonCandidate = pts.find(p => p.type === 'Polygon' || (p.path && p.path.length >= 3)) || pts[0];
+        if (polygonCandidate && polygonCandidate.path) {
+          setSelectedArea(polygonCandidate.path);
+          setBoundaryPolygon(polygonCandidate);
+          setSuccess(lang === 'ar' ? `تم استيراد حدود المنطقة بنجاح (${polygonCandidate.path.length} نقطة)!` : `Boundary area imported (${polygonCandidate.path.length} points)!`);
+        }
+      }
+    } catch (err: any) {
+      setError(err.message || 'Error loading boundary file');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReverseGeocodeGlobalInternal = async () => {
+    if (propHandleReverseGeocodeGlobal) {
+      await propHandleReverseGeocodeGlobal();
+      return;
+    }
+
+    if (globalPoints.length === 0) {
+      setError(lang === 'ar' ? 'لا توجد بيانات مرفوعة لجلب العناوين لها.' : 'No data uploaded to geocode.');
+      return;
+    }
+
+    setLoading(true);
+    if (setGlobalStatus) setGlobalStatus(lang === 'ar' ? 'جاري الاستعلام عن أسماء الشوارع والأحياء من خوادم العنونة المكانية...' : 'Reverse geocoding points...');
+
+    try {
+      const updated: GeoPoint[] = [];
+      const total = globalPoints.length;
+
+      for (let i = 0; i < total; i++) {
+        const pt = globalPoints[i];
+        const lat = pt.y;
+        const lng = pt.x;
+
+        if (i % 5 === 0 && setGlobalProgress) {
+          setGlobalProgress(Math.round((i / total) * 100));
+        }
+
+        try {
+          const geoInfo = await getReverseGeocode(lat, lng, geocodingMode === 'accurate');
+          updated.push({
+            ...pt,
+            streetName: geoInfo.street || pt.streetName,
+            neighborhood: geoInfo.district || pt.neighborhood,
+            city: geoInfo.city || pt.city,
+            attributes: {
+              ...pt.attributes,
+              ...(geoInfo.street ? { 'Street': geoInfo.street, 'الشارع': geoInfo.street } : {}),
+              ...(geoInfo.district ? { 'District': geoInfo.district, 'الحي': geoInfo.district } : {}),
+              ...(geoInfo.city ? { 'City': geoInfo.city, 'المدينة': geoInfo.city } : {})
+            }
+          });
+        } catch {
+          updated.push(pt);
+        }
+      }
+
+      if (setGlobalPoints) setGlobalPoints(updated);
+      setSuccess(lang === 'ar' ? `تم تحديث وإثراء عناوين ${updated.length} عنصر بنجاح!` : `Enriched ${updated.length} elements with geocoding!`);
+    } catch (err: any) {
+      setError(err.message || 'Error performing geocoding');
+    } finally {
+      setLoading(false);
+      if (setGlobalProgress) setGlobalProgress(null);
+      if (setGlobalStatus) setGlobalStatus('');
+    }
+  };
+
+  // Convert planned streets to drawn lines
+  const handleMergePlannedToDrawnLines = () => {
+    if (plannedStreets.length === 0) return;
+
+    const newDrawn: GeoPoint[] = plannedStreets.map((s, idx) => ({
+      id: s.id || `STREET_${(drawnLines?.length || 0) + idx + 1}`,
+      x: s.x,
+      y: s.y,
+      type: 'LineString',
+      path: s.path ? [...s.path] : [{ x: s.x, y: s.y }, { x: s.x + 0.0001, y: s.y + 0.0001 }],
+      color: lineConfig.color || '#3b82f6',
+      layer: lineConfig.layer || 'شوارع المخطط المستخرجة',
+      attributes: {
+        ...s.attributes,
+        Source: 'Street Planner',
+        Type: 'Pipeline',
+        Length_m: s.path ? calculatePathLength(s.path) : (s.originalLength || 0),
+        ...(lineConfig.diameter ? { Diameter: lineConfig.diameter, 'القطر': lineConfig.diameter } : {}),
+        ...(lineConfig.material ? { Material: lineConfig.material, 'المادة': lineConfig.material } : {}),
+        ...(lineConfig.permitNo ? { 'Permit No': lineConfig.permitNo, 'رقم التصريح': lineConfig.permitNo } : {})
+      }
+    }));
+
+    setDrawnLines(prev => [...newDrawn, ...(prev || [])]);
+    if (setGlobalPoints) {
+      setGlobalPoints(prev => [...newDrawn, ...(prev || [])]);
+    }
+    if (setDataId) {
+      setDataId(`merge-planned-${Date.now()}`);
+    }
+    setActiveMode('lines-inventory');
+    setSuccess(lang === 'ar' ? `تم دمج ${newDrawn.length} خط من شوارع المخطط في سجل الرسام بنجاح! يمكنك الآن تعديلها وتصديرها.` : `Merged ${newDrawn.length} planned lines into Line Drawer inventory!`);
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto w-full">
       {/* Main Container */}
@@ -1354,33 +1722,54 @@ export const LineDrawerTab: React.FC<Props> = ({
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h2 className="text-lg sm:text-xl lg:text-2xl font-black text-white">
-                  {lang === 'ar' ? 'تصميم ورسم الخطوط الهندسية' : 'Engineering Line Design & Drawing'}
+                  {lang === 'ar' ? 'الرسام والمخطط الهندسي المتكامل' : 'Engineering Line Drawer & Planner'}
                 </h2>
                 <span className="text-[10px] uppercase font-black bg-accent/20 text-accent px-2.5 py-0.5 rounded-full border border-accent/30 tracking-wider">
-                  {lang === 'ar' ? 'مباشر على الخريطة' : 'Direct on Map'}
+                  {lang === 'ar' ? 'تصميم + استخراج شوارع + CAD' : 'Design + Streets + CAD'}
                 </span>
               </div>
               <p className="text-xs sm:text-sm text-white/70 mt-1 leading-relaxed">
                 {lang === 'ar' 
-                  ? 'ارسم الخطوط مباشرة بالنقر على الخريطة الرئيسية المجاورة، أو استوردها من ملف إكسل بكامل الخصائص والبيانات.' 
-                  : 'Draw lines directly by clicking on the main map, or import from Excel with complete attributes and properties.'}
+                  ? 'رسم الخطوط المباشر على الخريطة، استخراج شبكات ومحاور CAD والمخططات، واستخراج مسارات الشوارع الحقيقية من الخرائط ودمجها مباشرة.' 
+                  : 'Direct map drawing, CAD & subdivision utility extraction, and real GIS street network extraction in a unified interface.'}
               </p>
             </div>
           </div>
 
-          {/* Mode Switcher Navigation Tabs - Clean 5-Tab Grid with prominent CAD extraction */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 bg-[#071c27] p-2 rounded-2xl border border-white/15 w-full shadow-inner">
+          {/* Mode Switcher Navigation Tabs - Unified 6-Tab Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 bg-[#071c27] p-2 rounded-2xl border border-white/15 w-full shadow-inner">
             <button
               onClick={() => { setActiveMode('cad-network-auto'); setError(null); }}
               className={cn(
-                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center col-span-2 sm:col-span-1 border",
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center border",
                 activeMode === 'cad-network-auto' 
                   ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02] border-accent" 
                   : "text-amber-300/90 hover:text-white hover:bg-white/5 border-amber-400/20 bg-amber-400/5"
               )}
             >
               <Sparkles className="w-4 h-4 shrink-0 text-amber-400 animate-pulse" />
-              <span className="leading-tight">{lang === 'ar' ? 'توليد من CAD/Shapefile' : 'Auto CAD Network'}</span>
+              <span className="leading-tight">{lang === 'ar' ? 'توليد من CAD' : 'Auto CAD Network'}</span>
+            </button>
+
+            <button
+              onClick={() => { setActiveMode('street-planner'); setError(null); }}
+              className={cn(
+                "py-3 px-2 rounded-xl text-xs font-black transition-all flex flex-col sm:flex-row items-center justify-center gap-1.5 text-center relative border",
+                activeMode === 'street-planner' 
+                  ? "bg-accent text-primary shadow-lg ring-1 ring-accent/50 scale-[1.02] border-accent" 
+                  : "text-cyan-300/90 hover:text-white hover:bg-white/5 border-cyan-400/20 bg-cyan-400/5"
+              )}
+            >
+              <MapPinned className="w-4 h-4 shrink-0 text-cyan-400" />
+              <span className="leading-tight">{lang === 'ar' ? 'مخطط الشوارع' : 'Street Planner'}</span>
+              {plannedStreets.length > 0 && (
+                <span className={cn(
+                  "text-[9px] px-1.5 py-0.2 rounded-full font-mono font-black",
+                  activeMode === 'street-planner' ? "bg-primary text-cyan-400" : "bg-cyan-400 text-primary"
+                )}>
+                  {plannedStreets.length}
+                </span>
+              )}
             </button>
 
             <button
@@ -1457,6 +1846,392 @@ export const LineDrawerTab: React.FC<Props> = ({
           <div className="bg-emerald-500/10 border-s-4 border-emerald-500 p-3.5 mb-5 rounded-xl flex items-start gap-3 animate-in fade-in">
             <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
             <p className="text-xs sm:text-sm text-emerald-200">{success}</p>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* MODE: INTEGRATED STREET PLANNER */}
+        {/* ======================================================== */}
+        {activeMode === 'street-planner' && (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            {/* Header description banner */}
+            <div className="p-5 bg-[#0b2d3d]/70 rounded-3xl border border-cyan-400/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
+              <div className="flex items-center gap-3.5">
+                <div className="p-3 bg-cyan-400/20 border border-cyan-400/40 rounded-2xl text-cyan-300 shadow-md">
+                  <MapPinned className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">
+                    {lang === 'ar' ? 'مخطط الشوارع واستخراج مسارات GIS' : 'GIS Street Network Planner & Extractor'}
+                  </h3>
+                  <p className="text-xs text-white/70 mt-0.5">
+                    {lang === 'ar' 
+                      ? 'حدد أو ارسم حدود المضلع، أو ارفع ملف نطاق، ثم استخرج شبكة الشوارع الحقيقية من خوادم الخرائط وادمجها مباشرة في الرسام.' 
+                      : 'Draw polygon boundary or upload boundary file, extract actual street networks from map servers and seamlessly merge into Drawer.'}
+                  </p>
+                </div>
+              </div>
+              {plannedStreets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleMergePlannedToDrawnLines}
+                  className="px-4 py-2.5 bg-accent text-primary rounded-xl font-black text-xs flex items-center gap-2 shadow-lg hover:scale-105 transition-transform shrink-0"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  {lang === 'ar' ? '📥 دمج في سجل الرسام' : 'Merge to Drawer'}
+                </button>
+              )}
+            </div>
+
+            {/* Reverse Geocoding & Survey Data Info */}
+            {activeFile && (
+              <div className="p-5 bg-[#0b2d3d]/50 rounded-3xl border border-white/10 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <FileText className="w-5 h-5 text-accent" />
+                    <div>
+                      <div className="text-xs font-black text-white">{activeFile.filename}</div>
+                      <div className="text-[10px] text-white/50">{globalPoints.length} {lang === 'ar' ? 'عنصر تصميم نشط' : 'active design elements'}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleReverseGeocodeGlobalInternal}
+                      disabled={loading || globalPoints.length === 0}
+                      className="px-3 py-1.5 bg-accent/20 hover:bg-accent hover:text-primary text-accent rounded-xl text-[11px] font-black transition-all flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      {lang === 'ar' ? 'جلب أسماء الشوارع' : 'Fetch Street Names'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Boundary Definition Card */}
+            <div className="p-6 bg-[#0b2d3d]/50 rounded-3xl border border-white/10 shadow-xl space-y-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <div className="flex items-center gap-2">
+                  <Navigation className="w-4 h-4 text-cyan-400" />
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                    {lang === 'ar' ? '1. تحديد نطاق وحدود المنطقة المستهدفة' : '1. Define Target Boundary Area'}
+                  </h4>
+                </div>
+                {selectedArea && (
+                  <span className="text-[10px] bg-cyan-400/20 text-cyan-300 px-2.5 py-0.5 rounded-full font-black border border-cyan-400/30">
+                    {selectedArea.length} {lang === 'ar' ? 'نقطة محددة' : 'boundary points'}
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setIsDrawingMode(!isDrawingMode)} 
+                  className={cn(
+                    "p-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2.5 transition-all border shadow-lg group",
+                    isDrawingMode ? "bg-cyan-500 text-white border-cyan-400 ring-2 ring-cyan-400/50" : "bg-white/5 text-white/80 border-white/10 hover:bg-white/10"
+                  )}
+                >
+                  <Navigation className={cn("w-4 h-4 transition-transform group-hover:scale-110", isDrawingMode ? "text-white" : "text-cyan-400")} />
+                  <span>{isDrawingMode ? (lang === 'ar' ? "جاري رسم المضلع على الخريطة..." : "Drawing on Map...") : (lang === 'ar' ? "ارسم مضلع النطاق" : "Draw Polygon Boundary")}</span>
+                </button>
+
+                <label className="p-4 bg-white/5 text-white/80 border border-white/10 rounded-2xl font-black text-xs flex items-center justify-center gap-2.5 hover:bg-white/10 transition-all shadow-lg cursor-pointer group">
+                  <input type="file" className="hidden" onChange={handleBoundaryUploadInternal} accept=".kmz,.kml,.dxf,.zip" />
+                  <FileUp className="w-4 h-4 text-cyan-400 group-hover:scale-110 transition-transform" />
+                  <span>{lang === 'ar' ? 'رفع ملف حدود (KMZ/DXF)' : 'Upload Boundary File'}</span>
+                </label>
+              </div>
+
+              {/* Boundary KMZ Export Shortcut */}
+              {(selectedArea || boundaryPolygon) && (
+                <div className="p-3.5 bg-cyan-950/40 rounded-2xl border border-cyan-500/30 flex items-center justify-between gap-3 animate-in fade-in">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+                    <div>
+                      <div className="text-xs font-black text-white">
+                        {lang === 'ar' ? 'حدود المنطقة الجغرافية جاهزة' : 'Area Boundary is Ready'}
+                      </div>
+                      <div className="text-[10px] text-cyan-300/80">
+                        {selectedArea?.length || boundaryPolygon?.path?.length || 0} {lang === 'ar' ? 'نقطة إحداثية تشكل النطاق' : 'boundary vertices'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportBoundaryKMZ}
+                    className="px-3.5 py-2 bg-cyan-500 hover:bg-cyan-400 text-primary font-black rounded-xl text-xs flex items-center gap-2 shadow-lg hover:scale-105 active:scale-95 transition-all"
+                    title={lang === 'ar' ? 'تصدير ملف حدود المنطقة المنشأ كـ KMZ' : 'Export Boundary KMZ file'}
+                  >
+                    <DownloadCloud className="w-4 h-4" />
+                    <span>{lang === 'ar' ? 'تصدير حدود المنطقة (KMZ)' : 'Export Boundary KMZ'}</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Action Button: Fetch Streets */}
+              <button 
+                type="button"
+                onClick={handleFetchStreetsInternal} 
+                disabled={loading || (!selectedArea && globalPoints.length === 0)} 
+                className={cn(
+                  "w-full py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl transition-all font-black text-xs sm:text-sm group",
+                  (selectedArea || globalPoints.length > 0) 
+                    ? "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-cyan-500/20" 
+                    : "bg-[#0e3f53]/50 border border-white/5 text-white/30 cursor-not-allowed"
+                )}
+              >
+                <RefreshCw className={cn("w-4 h-4", loading ? "animate-spin" : "group-hover:rotate-180 transition-transform duration-500")} />
+                <span>{loading ? (lang === 'ar' ? 'جاري جلب واستخلاص الشوارع...' : 'Fetching Streets...') : (lang === 'ar' ? 'جلب شوارع المنطقة من خوادم الخرائط (OSM)' : 'Fetch Surrounding Streets from Map')}</span>
+              </button>
+            </div>
+
+            {/* Planner Options Card */}
+            <div className="p-6 bg-[#0b2d3d]/50 rounded-3xl border border-white/10 shadow-xl space-y-4">
+              <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+                <Settings2 className="w-4 h-4 text-accent" />
+                <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                  {lang === 'ar' ? '2. خيارات وقواعد تصفية الشوارع' : '2. Street Extraction & Filtering Rules'}
+                </h4>
+              </div>
+
+              {/* Street Classification Filters */}
+              <div className="p-4 bg-white/5 rounded-2xl border border-white/5 space-y-2.5">
+                <div className="flex items-center gap-2">
+                  <Filter className="w-3.5 h-3.5 text-accent" />
+                  <span className="text-[10px] font-black text-white/80 uppercase tracking-widest">
+                    {lang === 'ar' ? 'تصنيفات الشوارع المستخرجة' : 'Street Classifications'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {[
+                    { id: 'motorway', label: lang === 'ar' ? 'سريع (Motorway)' : 'Motorway', color: '#ef4444' },
+                    { id: 'trunk', label: lang === 'ar' ? 'رئيسي (Trunk)' : 'Trunk', color: '#ef4444' },
+                    { id: 'secondary', label: lang === 'ar' ? 'فرعي (Secondary)' : 'Secondary', color: '#3b82f6' },
+                    { id: 'residential', label: lang === 'ar' ? 'سكني (Residential)' : 'Residential', color: '#10b981' },
+                    { id: 'service', label: lang === 'ar' ? 'خدمي (Service)' : 'Service', color: '#10b981' }
+                  ].map(type => (
+                    <button
+                      key={type.id}
+                      type="button"
+                      onClick={() => toggleStreetType(type.id)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-full text-[10px] font-black border transition-all flex items-center gap-1.5",
+                        streetTypeFilters.includes(type.id)
+                          ? "bg-accent/20 border-accent text-accent shadow-sm"
+                          : "bg-white/5 border-white/10 text-white/30 hover:text-white/60"
+                      )}
+                    >
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: type.color }} />
+                      {type.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sliders & Switches */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* Search Buffer slider */}
+                <div className="p-4 bg-white/5 rounded-2xl space-y-2 border border-white/5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex flex-col">
+                      <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'نطاق البحث الإضافي (Buffer)' : 'Search Buffer'}</span>
+                      <span className="text-[9px] text-white/40">{lang === 'ar' ? 'توسيع نطاق الجلب حول المضلع' : 'Expand fetch zone around boundary'}</span>
+                    </div>
+                    <span className="text-xs font-black text-accent bg-accent/10 px-2 py-0.5 rounded-lg">{plannerBuffer}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0" max="500" step="50"
+                    value={plannerBuffer}
+                    onChange={(e) => setPlannerBuffer(parseInt(e.target.value))}
+                    className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
+                  />
+                </div>
+
+                {/* Clip to Boundary switch */}
+                <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-white/5">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'قص الشوارع عند الحدود' : 'Clip to Boundary'}</span>
+                    <span className="text-[9px] text-white/40">{lang === 'ar' ? 'إبقاء الشوارع داخل المضلع فقط' : 'Restrict streets inside polygon'}</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setPlannerClip(!plannerClip)} 
+                    className={cn("w-10 h-5 rounded-full transition-all relative shrink-0", plannerClip ? "bg-accent" : "bg-white/10")}
+                  >
+                    <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerClip ? "left-0.5" : "left-5.5") : (plannerClip ? "right-0.5" : "right-5.5"))} />
+                  </button>
+                </label>
+
+                {/* Split at Intersections switch */}
+                <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-white/5">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'تقسيم عند التقاطعات' : 'Split at Intersections'}</span>
+                    <span className="text-[9px] text-white/40">{lang === 'ar' ? 'فصل الشوارع لقطع مستقلة عند التقاطع' : 'Split lines at cross points'}</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setPlannerSplitIntersections(!plannerSplitIntersections)} 
+                    className={cn("w-10 h-5 rounded-full transition-all relative shrink-0", plannerSplitIntersections ? "bg-accent" : "bg-white/10")}
+                  >
+                    <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerSplitIntersections ? "left-0.5" : "left-5.5") : (plannerSplitIntersections ? "right-0.5" : "right-5.5"))} />
+                  </button>
+                </label>
+
+                {/* Split by Length switch */}
+                <label className="flex items-center justify-between p-4 bg-white/5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all border border-white/5">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[11px] font-black text-white">{lang === 'ar' ? 'تقسيم حسب الطول' : 'Split by Length'}</span>
+                    <span className="text-[9px] text-white/40">{lang === 'ar' ? 'تجزئة الخطوط لقطع متساوية' : 'Segment lines equally'}</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={() => setPlannerSplitLines(!plannerSplitLines)} 
+                    className={cn("w-10 h-5 rounded-full transition-all relative shrink-0", plannerSplitLines ? "bg-accent" : "bg-white/10")}
+                  >
+                    <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all shadow-md", lang === 'ar' ? (plannerSplitLines ? "left-0.5" : "left-5.5") : (plannerSplitLines ? "right-0.5" : "right-5.5"))} />
+                  </button>
+                </label>
+              </div>
+
+              {/* Length Split Slider & Presets if enabled */}
+              {plannerSplitLines && (
+                <div className="p-4 bg-white/5 rounded-2xl space-y-3 border border-white/5 animate-in slide-in-from-top">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-white/70">{lang === 'ar' ? 'الحد الأقصى لطول القطعة:' : 'Max Segment Length:'}</span>
+                    <div className="flex items-center gap-1 bg-[#0e3f53] px-2.5 py-0.5 rounded-lg border border-white/10 shadow-inner">
+                      <input
+                        type="number"
+                        min="10"
+                        max="1000"
+                        step="10"
+                        value={plannerMaxLen}
+                        onChange={(e) => setPlannerMaxLen(Math.max(10, parseInt(e.target.value) || 10))}
+                        className="w-14 bg-transparent text-xs font-black text-accent outline-none text-center select-text"
+                      />
+                      <span className="text-[10px] font-bold text-accent">{lang === 'ar' ? 'م' : 'm'}</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="10" max="1000" step="10"
+                    value={Math.min(plannerMaxLen, 1000)}
+                    onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))}
+                    className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
+                  />
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {[10, 20, 50, 100, 200, 500, 1000].map((val) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setPlannerMaxLen(val)}
+                        className={cn(
+                          "px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border",
+                          plannerMaxLen === val
+                            ? "bg-accent text-primary border-accent shadow-md font-black scale-105"
+                            : "bg-white/5 text-white/60 border-white/5 hover:bg-white/10 hover:text-white"
+                        )}
+                      >
+                        {val} {lang === 'ar' ? 'م' : 'm'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Results & Integration Actions */}
+            {plannedStreets.length > 0 && (
+              <div className="p-6 bg-[#0b2d3d]/50 rounded-3xl border border-accent/20 shadow-xl space-y-4 animate-in slide-in-from-bottom">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <h4 className="text-xs font-black text-white">
+                      {lang === 'ar' ? 'نتائج استخراج الشوارع' : 'Extracted Street Results'}
+                    </h4>
+                  </div>
+                  <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 rounded-full text-xs font-black border border-emerald-500/30">
+                    {plannedStreets.length} {lang === 'ar' ? 'شارع ومسار' : 'streets'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={handleMergePlannedToDrawnLines}
+                    className="p-3.5 bg-gradient-to-r from-accent to-emerald-400 text-primary font-black rounded-2xl flex items-center justify-center gap-2 shadow-xl hover:scale-[1.02] transition-transform text-xs"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>{lang === 'ar' ? '📥 نقل للرسام' : 'Merge to Drawer'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadKMZ(plannedStreets, 'Extracted_Streets_Network', { mode: 'none', groupByAttribute: 'layer' });
+                      setSuccess(lang === 'ar' ? 'تم تصدير شبكة الشوارع كـ KMZ بنجاح!' : 'Streets KMZ exported successfully!');
+                    }}
+                    className="p-3.5 bg-white/5 border border-white/10 text-white font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-white/10 transition-all text-xs"
+                  >
+                    <DownloadCloud className="w-4 h-4 text-accent" />
+                    <span>{lang === 'ar' ? 'تصدير الشوارع (KMZ)' : 'Export Streets KMZ'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleExportBoundaryKMZ}
+                    className="p-3.5 bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-black rounded-2xl flex items-center justify-center gap-2 hover:bg-cyan-900 transition-all text-xs shadow-lg"
+                  >
+                    <DownloadCloud className="w-4 h-4 text-cyan-400" />
+                    <span>{lang === 'ar' ? 'تصدير حدود المنطقة (KMZ)' : 'Export Boundary KMZ'}</span>
+                  </button>
+                </div>
+
+                {/* Combined Export All */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const activeBoundaryPts = selectedArea && selectedArea.length > 0 ? selectedArea : (boundaryPolygon?.path || []);
+                    const boundaryFeature: GeoPoint = boundaryPolygon || {
+                      id: `boundary-${Date.now()}`,
+                      name: lang === 'ar' ? 'حدود المنطقة' : 'Area Boundary',
+                      lat: activeBoundaryPts[0]?.[0] || 0,
+                      lng: activeBoundaryPts[0]?.[1] || 0,
+                      type: 'Polygon',
+                      path: activeBoundaryPts,
+                      layer: 'Area_Boundary',
+                      color: '#06b6d4',
+                      attributes: { 'Layer': 'Area_Boundary', 'Type': 'Boundary Zone' }
+                    };
+                    const combined = [boundaryFeature, ...plannedStreets];
+                    downloadKMZ(combined, 'Zone_Boundary_And_Streets_Package', { mode: 'none', groupByAttribute: 'layer' });
+                    setSuccess(lang === 'ar' ? 'تم تصدير حزمة الحدود مع الشوارع كـ KMZ بنجاح!' : 'Full Boundary & Streets KMZ Package Exported!');
+                  }}
+                  className="w-full py-3 bg-[#071c27] hover:bg-[#114056] border border-accent/40 text-accent font-black rounded-2xl flex items-center justify-center gap-2 transition-all text-xs shadow-lg"
+                >
+                  <FolderArchive className="w-4 h-4" />
+                  <span>{lang === 'ar' ? 'تصدير الحزمة الشاملة (حدود المنطقة + الشوارع في ملف KMZ واحد)' : 'Export Combined KMZ Package (Boundary + Streets)'}</span>
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setSelectedArea(null);
+                    setPlannedStreets([]);
+                    setBoundaryPolygon(null);
+                    setIsDrawingMode(false);
+                    setSuccess(lang === 'ar' ? 'تم إفراغ نتائج الشوارع والمضلع بنجاح.' : 'Cleared planned streets.');
+                  }} 
+                  className="w-full bg-white/5 text-white/40 font-black py-2.5 rounded-xl flex items-center justify-center gap-2 hover:text-red-400 hover:bg-red-500/10 transition-all text-[10px] uppercase"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  {lang === 'ar' ? 'إفراغ نتائج الشوارع' : 'Clear Street Results'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
