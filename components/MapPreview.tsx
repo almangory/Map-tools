@@ -23,7 +23,8 @@ import { NetworkFlowAnalysis } from '../services/flowDirectionService';
 import { calculatePathLength } from '../services/kmlService';
 import { 
   StreetSearchResult, searchProjectStreets, searchGlobalStreets,
-  StreetSearchFilters, COUNTRY_PRESETS, CountryPreset
+  StreetSearchFilters, COUNTRY_PRESETS, CountryPreset,
+  RegionBoundaryGeometry, fetchRegionBoundary, exportRegionBoundaryToKMZ
 } from '../services/streetSearchService';
 import { 
   analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
@@ -225,6 +226,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const asphaltLayerGroup = useRef<L.LayerGroup | null>(null);
   const asphaltDrawLayerGroup = useRef<L.LayerGroup | null>(null);
   const searchHighlightGroup = useRef<L.LayerGroup | null>(null);
+  const regionBoundaryGroup = useRef<L.LayerGroup | null>(null);
   const hoverMarkerRef = useRef<L.Marker | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const issueMarkersMap = useRef<Map<string | number, L.Marker | L.CircleMarker | L.Polyline>>(new Map());
@@ -232,6 +234,18 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const isDrawingRef = useRef(false);
   const polygonCoordsRef = useRef<L.LatLng[]>([]);
   const lastDataIdRef = useRef<string | null>(null);
+
+  // Region & City Geographic Administrative Boundary States & Controls
+  const [activeRegionBoundary, setActiveRegionBoundary] = useState<RegionBoundaryGeometry | null>(null);
+  const [boundaryRenderMode, setBoundaryRenderMode] = useState<'boundary_lines' | 'boundary_with_tint' | 'full_polygon'>('boundary_lines');
+  const [boundaryLineStyle, setBoundaryLineStyle] = useState<'cadastral' | 'dashed' | 'solid' | 'double'>('cadastral');
+  const [boundaryLineWeight, setBoundaryLineWeight] = useState<number>(3.5);
+  const [boundaryLineOpacity, setBoundaryLineOpacity] = useState<number>(0.95);
+  const [boundaryFillOpacity, setBoundaryFillOpacity] = useState<number>(0.0); // 0 by default for pure geographic boundary lines
+  const [boundaryColor, setBoundaryColor] = useState<string>('#06b6d4');
+  const [showBoundaryPolygon, setShowBoundaryPolygon] = useState<boolean>(true);
+  const [showBoundaryVertexNodes, setShowBoundaryVertexNodes] = useState<boolean>(true);
+  const [isFetchingBoundary, setIsFetchingBoundary] = useState<boolean>(false);
 
   // Asphalt Polygon BOQ Calculation States & Refs
   const [asphaltCalc, setAsphaltCalc] = useState<AsphaltPolygonCalculation | null>(null);
@@ -368,13 +382,273 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         mapInstance.current.flyTo([pipeY, pipeX], 18, { animate: true, duration: 1.2 });
       }
     };
+    (window as any).__zoomToActiveBoundary = () => {
+      if (activeRegionBoundary?.geoJson && mapInstance.current) {
+        const tempLayer = L.geoJSON(activeRegionBoundary.geoJson);
+        const bounds = tempLayer.getBounds();
+        if (bounds.isValid()) {
+          mapInstance.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, animate: true });
+        }
+      }
+    };
+    (window as any).__clearActiveBoundary = () => {
+      mapInstance.current?.closePopup();
+      setActiveRegionBoundary(null);
+      if (regionBoundaryGroup.current) {
+        regionBoundaryGroup.current.clearLayers();
+      }
+    };
+    (window as any).__loadBoundaryFromSearch = (name: string, countryCode?: string, parentCity?: string) => {
+      loadRegionBoundary(name, countryCode, parentCity);
+    };
+    (window as any).__exportBoundaryKMZ = () => {
+      handleExportActiveBoundaryKMZ();
+    };
     return () => {
       delete (window as any).__orientTowardsOutfall;
       delete (window as any).__removeOutfallTarget;
       delete (window as any).__clearAllOutfalls;
       delete (window as any).__focusFurthestPipe;
+      delete (window as any).__zoomToActiveBoundary;
+      delete (window as any).__clearActiveBoundary;
+      delete (window as any).__loadBoundaryFromSearch;
+      delete (window as any).__exportBoundaryKMZ;
     };
+  }, [activeRegionBoundary, boundaryRenderMode, boundaryColor, boundaryLineWeight, boundaryFillOpacity, showBoundaryVertexNodes]);
+
+  const [isExportingBoundaryKMZ, setIsExportingBoundaryKMZ] = useState(false);
+
+  const handleExportActiveBoundaryKMZ = useCallback(async () => {
+    if (!activeRegionBoundary) return;
+    setIsExportingBoundaryKMZ(true);
+    try {
+      await exportRegionBoundaryToKMZ(activeRegionBoundary, {
+        renderMode: boundaryRenderMode,
+        colorHex: boundaryColor,
+        strokeWeight: boundaryLineWeight,
+        fillOpacity: boundaryFillOpacity,
+        includeVertices: showBoundaryVertexNodes
+      });
+    } catch (e: any) {
+      console.error('Failed to export boundary KMZ:', e);
+    } finally {
+      setIsExportingBoundaryKMZ(false);
+    }
+  }, [activeRegionBoundary, boundaryRenderMode, boundaryColor, boundaryLineWeight, boundaryFillOpacity, showBoundaryVertexNodes]);
+
+  const loadRegionBoundary = useCallback(async (
+    locationName: string,
+    countryCode?: string,
+    parentCity?: string
+  ) => {
+    if (!locationName || !locationName.trim()) return;
+    setIsFetchingBoundary(true);
+    try {
+      const boundary = await fetchRegionBoundary(locationName, countryCode, parentCity);
+      if (boundary) {
+        setActiveRegionBoundary(boundary);
+        setShowBoundaryPolygon(true);
+        if (mapInstance.current && boundary.geoJson) {
+          const tempLayer = L.geoJSON(boundary.geoJson);
+          const bounds = tempLayer.getBounds();
+          if (bounds.isValid()) {
+            mapInstance.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, animate: true });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching region boundary:', e);
+    } finally {
+      setIsFetchingBoundary(false);
+    }
   }, []);
+
+  const clearRegionBoundary = useCallback(() => {
+    setActiveRegionBoundary(null);
+    if (regionBoundaryGroup.current) {
+      regionBoundaryGroup.current.clearLayers();
+    }
+    mapInstance.current?.closePopup();
+  }, []);
+
+  // Render Geographic Administrative Boundary Layer (حدود جغرافية دقيقة)
+  useEffect(() => {
+    if (!regionBoundaryGroup.current || !mapInstance.current) return;
+    regionBoundaryGroup.current.clearLayers();
+
+    if (!activeRegionBoundary || !showBoundaryPolygon || !activeRegionBoundary.geoJson) return;
+
+    try {
+      const globalOp = layerOpacity ?? 1;
+      const effectiveLineOpacity = Math.max(0.1, Math.min(1, boundaryLineOpacity * globalOp));
+      
+      let effectiveFillOpacity = 0;
+      let shouldFill = false;
+
+      if (boundaryRenderMode === 'boundary_lines') {
+        shouldFill = false;
+        effectiveFillOpacity = 0;
+      } else if (boundaryRenderMode === 'boundary_with_tint') {
+        shouldFill = true;
+        effectiveFillOpacity = Math.max(0.02, Math.min(0.2, (boundaryFillOpacity > 0 ? boundaryFillOpacity : 0.06) * globalOp));
+      } else {
+        shouldFill = true;
+        effectiveFillOpacity = Math.max(0.05, Math.min(1, (boundaryFillOpacity > 0 ? boundaryFillOpacity : 0.35) * globalOp));
+      }
+
+      // Determine Dash pattern for geographic lines
+      let dashPattern: string | undefined = undefined;
+      if (boundaryLineStyle === 'cadastral') {
+        dashPattern = '14, 6, 3, 6'; // Standard GIS Cadastral Administrative Line (── · ──)
+      } else if (boundaryLineStyle === 'dashed') {
+        dashPattern = '8, 8';
+      } else if (boundaryLineStyle === 'double') {
+        dashPattern = '4, 4';
+      }
+
+      // Layer 1: High-Contrast Outer Glow / Halo Casing for GIS visibility
+      const casingLayer = L.geoJSON(activeRegionBoundary.geoJson, {
+        style: {
+          color: '#020617',
+          weight: boundaryLineWeight + 3,
+          opacity: effectiveLineOpacity * 0.4,
+          fill: false,
+          lineCap: 'round',
+          lineJoin: 'round'
+        },
+        interactive: false
+      });
+      casingLayer.addTo(regionBoundaryGroup.current);
+
+      // Layer 2: Main Geographic Boundary Line
+      const geoLayer = L.geoJSON(activeRegionBoundary.geoJson, {
+        style: {
+          color: boundaryColor,
+          weight: boundaryLineWeight,
+          opacity: effectiveLineOpacity,
+          fillColor: boundaryColor,
+          fill: shouldFill,
+          fillOpacity: effectiveFillOpacity,
+          dashArray: dashPattern,
+          lineCap: 'round',
+          lineJoin: 'round'
+        },
+        onEachFeature: (feature, layer) => {
+          const isDistrict = activeRegionBoundary.boundaryType === 'district_border' || activeRegionBoundary.name.includes('حي');
+          const title = isDistrict 
+            ? (lang === 'ar' ? `الحدود الجغرافية لـ ${activeRegionBoundary.name}` : `Geographic Boundary: ${activeRegionBoundary.name}`)
+            : (lang === 'ar' ? `الحدود الإدارية لـ ${activeRegionBoundary.name}` : `Administrative Boundary: ${activeRegionBoundary.name}`);
+          const sub = activeRegionBoundary.displayName;
+
+          layer.bindTooltip(`
+            <div style="direction: ${lang === 'ar' ? 'rtl' : 'ltr'}; font-family: system-ui, -apple-system, sans-serif; font-size: 11.5px; padding: 6px 10px; font-weight: bold; background: #020617; color: #fff; border-radius: 10px; border: 1.5px solid ${boundaryColor}; box-shadow: 0 4px 14px rgba(0,0,0,0.6);">
+              <span style="display: flex; align-items: center; gap: 5px;">🏛️ ${escapeHtml(title)}</span>
+            </div>
+          `, { sticky: true });
+
+          layer.bindPopup(`
+            <div style="direction: ${lang === 'ar' ? 'rtl' : 'ltr'}; font-family: system-ui, -apple-system, sans-serif; font-size: 12px; padding: 6px; min-width: 220px;">
+              <div style="font-weight: 900; font-size: 13px; color: ${boundaryColor}; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+                <span>🏛️</span> <span>${escapeHtml(title)}</span>
+              </div>
+              <div style="color: #64748b; font-size: 10.5px; margin-bottom: 8px; line-height: 1.4;">
+                ${escapeHtml(sub)}
+              </div>
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; margin-bottom: 8px; font-size: 10px; color: #475569;">
+                <div style="font-weight: bold; margin-bottom: 2px;">📐 نوع الرسم: <span style="color: ${boundaryColor};">${boundaryRenderMode === 'boundary_lines' ? 'حدود جغرافية رسمية' : (boundaryRenderMode === 'boundary_with_tint' ? 'حدود مع تظليل خفيف' : 'مضلع كامل')}</span></div>
+                <div>نمط الخط: ${boundaryLineStyle === 'cadastral' ? 'مساحي إداري (── · ──)' : (boundaryLineStyle === 'dashed' ? 'متقطع' : 'متصل')}</div>
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <button onclick="window.__zoomToActiveBoundary && window.__zoomToActiveBoundary()" style="background: #0284c7; color: white; border: none; padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: bold; cursor: pointer; flex: 1;">
+                  ${lang === 'ar' ? '🔍 تكبير للحدود' : '🔍 Zoom to Boundary'}
+                </button>
+                <button onclick="window.__exportBoundaryKMZ && window.__exportBoundaryKMZ()" style="background: #059669; color: white; border: none; padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+                  📥 ${lang === 'ar' ? 'تصدير KMZ' : 'Export KMZ'}
+                </button>
+                <button onclick="window.__clearActiveBoundary && window.__clearActiveBoundary()" style="background: #ef4444; color: white; border: none; padding: 5px 10px; border-radius: 8px; font-size: 11px; font-weight: bold; cursor: pointer;">
+                  ✕ ${lang === 'ar' ? 'مسح' : 'Clear'}
+                </button>
+              </div>
+            </div>
+          `);
+        }
+      });
+      geoLayer.addTo(regionBoundaryGroup.current);
+
+      // Layer 3: Sample Key Boundary Corner Vertex Nodes (نقاط زوايا الحدود الجغرافية)
+      if (showBoundaryVertexNodes && activeRegionBoundary.geoJson) {
+        try {
+          const rawCoords: [number, number][] = [];
+          const gj = activeRegionBoundary.geoJson;
+
+          const extractRings = (geom: any) => {
+            if (!geom) return;
+            if (geom.type === 'Polygon' && Array.isArray(geom.coordinates) && geom.coordinates[0]) {
+              geom.coordinates[0].forEach((pt: any) => {
+                if (Array.isArray(pt) && pt.length >= 2) rawCoords.push([pt[1], pt[0]]);
+              });
+            } else if (geom.type === 'MultiPolygon' && Array.isArray(geom.coordinates)) {
+              geom.coordinates.forEach((poly: any) => {
+                if (Array.isArray(poly) && poly[0]) {
+                  poly[0].forEach((pt: any) => {
+                    if (Array.isArray(pt) && pt.length >= 2) rawCoords.push([pt[1], pt[0]]);
+                  });
+                }
+              });
+            } else if (geom.type === 'FeatureCollection' && Array.isArray(geom.features)) {
+              geom.features.forEach((f: any) => extractRings(f.geometry));
+            } else if (geom.type === 'Feature') {
+              extractRings(geom.geometry);
+            }
+          };
+
+          extractRings(gj);
+
+          if (rawCoords.length > 0) {
+            // Sample up to 14 distributed vertex nodes along the perimeter
+            const step = Math.max(1, Math.floor(rawCoords.length / 14));
+            const sampled = rawCoords.filter((_, idx) => idx % step === 0).slice(0, 14);
+
+            sampled.forEach(([lat, lng], nodeIdx) => {
+              const nodeMarker = L.circleMarker([lat, lng], {
+                radius: 4,
+                color: '#020617',
+                weight: 1.5,
+                fillColor: boundaryColor,
+                fillOpacity: 0.9,
+                opacity: 0.9
+              });
+
+              nodeMarker.bindTooltip(`
+                <div style="font-size: 10px; font-weight: bold; font-family: monospace; direction: ltr; padding: 2px 4px;">
+                  📌 [${nodeIdx + 1}] ${lat.toFixed(5)}, ${lng.toFixed(5)}
+                </div>
+              `, { direction: 'top', offset: [0, -4] });
+
+              nodeMarker.addTo(regionBoundaryGroup.current!);
+            });
+          }
+        } catch (vErr) {
+          console.warn('Could not render boundary vertex nodes:', vErr);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to render geographic boundary layer:', err);
+    }
+  }, [
+    activeRegionBoundary, 
+    showBoundaryPolygon, 
+    boundaryRenderMode,
+    boundaryLineStyle,
+    boundaryLineWeight,
+    boundaryLineOpacity,
+    boundaryFillOpacity, 
+    boundaryColor, 
+    showBoundaryVertexNodes,
+    layerOpacity, 
+    lang
+  ]);
+
 
   const activeHydraulicSummary = useMemo(() => {
     if (propHydraulicSummary) return propHydraulicSummary;
@@ -387,6 +661,16 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   }, [activeLineVertices]);
   
   const [showPolygons, setShowPolygons] = useState(true);
+  const [filePolygonFillOpacity, setFilePolygonFillOpacity] = useState<number>(0.35);
+  const [filePolygonStrokeWeight, setFilePolygonStrokeWeight] = useState<number>(2);
+  const [filePolygonStrokeOpacity, setFilePolygonStrokeOpacity] = useState<number>(0.95);
+  const [filePolygonBorderStyle, setFilePolygonBorderStyle] = useState<'solid' | 'dashed' | 'cadastral'>('solid');
+  const [filePolygonColorOverride, setFilePolygonColorOverride] = useState<string | null>(null);
+
+  const filePolygonsCount = useMemo(() => {
+    return points ? points.filter(p => p.type === 'Polygon').length : 0;
+  }, [points]);
+
   const [showLines, setShowLines] = useState(true);
   const [showPoints, setShowPoints] = useState(true);
   const [showOutfalls, setShowOutfalls] = useState(true);
@@ -929,6 +1213,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     asphaltLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
     asphaltDrawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
     searchHighlightGroup.current = L.layerGroup().addTo(mapInstance.current);
+    regionBoundaryGroup.current = L.layerGroup().addTo(mapInstance.current);
 
     // Add scale bar
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(mapInstance.current);
@@ -1570,11 +1855,24 @@ const MapPreview: React.FC<MapPreviewProps> = ({
             .map(p => [p.y, p.x] as [number, number]);
           
           if (latLngs.length >= 3) {
+            const polyStrokeColor = hasIssue 
+              ? '#ef4444' 
+              : (isOverlap ? '#000000' : (filePolygonColorOverride || (pt.color ? pt.color : '#ffffff')));
+            const polyFillColor = hasIssue 
+              ? '#f87171' 
+              : (isOverlap ? '#9c27b0' : (filePolygonColorOverride || featColor));
+            
+            const dashStyle = filePolygonBorderStyle === 'dashed' 
+              ? '6, 6' 
+              : (filePolygonBorderStyle === 'cadastral' ? '12, 4, 2, 4' : undefined);
+
             marker = L.polygon(latLngs, { 
-              color: hasIssue ? '#ef4444' : (isOverlap ? '#000000' : '#ffffff'), 
-              weight: hasIssue ? 5 : (isOverlap ? 4 : 2), 
-              fillColor: hasIssue ? '#f87171' : (isOverlap ? '#9c27b0' : featColor), 
-              fillOpacity: hasIssue ? 0.7 : (isOverlap ? 0.7 : 0.5)
+              color: polyStrokeColor, 
+              weight: hasIssue ? 5 : (isOverlap ? 4 : filePolygonStrokeWeight), 
+              opacity: hasIssue ? 1 : filePolygonStrokeOpacity,
+              dashArray: dashStyle,
+              fillColor: polyFillColor, 
+              fillOpacity: hasIssue ? 0.7 : (isOverlap ? 0.7 : filePolygonFillOpacity)
             });
             
             if (pt.layer === 'Split Polygons' || pt.layer === 'Split Boundaries') {
@@ -2223,7 +2521,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
         zoomToDataExtent();
         lastDataIdRef.current = dataId;
     }
-  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showOutfalls, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis, activeColorMode, activeHydraulicSummary, outfallTargets]);
+  }, [points, lang, focusedColor, isDrawing, dataId, zoomToDataExtent, overlapResults, showPolygons, showLines, showPoints, showOutfalls, showIssuesOnly, selectedProfilePoints, showFlowDirection, flowAnalysis, activeColorMode, activeHydraulicSummary, outfallTargets, filePolygonFillOpacity, filePolygonStrokeWeight, filePolygonStrokeOpacity, filePolygonBorderStyle, filePolygonColorOverride]);
 
   const toggleDrawing = () => {
     if (isDrawing) {
@@ -2512,7 +2810,15 @@ const MapPreview: React.FC<MapPreviewProps> = ({
               </div>
             ` : ''}
 
-            <div class="pt-2 border-t border-white/10 flex gap-1.5 mt-2">
+            <div class="pt-2 border-t border-white/10 flex flex-wrap gap-1.5 mt-2">
+              <button
+                type="button"
+                onclick="window.__loadBoundaryFromSearch && window.__loadBoundaryFromSearch('${escapeHtml(name.replace(/'/g, "\\'"))}', '${searchFilters.countryCode || ''}', '${searchFilters.city || ''}')"
+                class="w-full py-1.5 px-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-[10px] font-black transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
+              >
+                <span>🗺️</span>
+                <span>${lang === 'ar' ? 'تحديد وتظليل كمضلع على الخريطة' : 'Outline & Shade Boundary Polygon'}</span>
+              </button>
               <button
                 type="button"
                 onclick="window.__copySearchCoords && window.__copySearchCoords(${lat}, ${lng})"
@@ -3365,7 +3671,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                                 className={`py-2 px-2 rounded-xl transition-all border text-[9.5px] font-black uppercase flex items-center justify-center gap-1.5 ${showPolygons ? "bg-primary text-white border-primary shadow-md" : "bg-slate-50 text-slate-400 border-slate-100"}`}
                             >
                                 <Square className="w-3.5 h-3.5" />
-                                {lang === 'ar' ? 'مضلعات' : 'Polygons'}
+                                {lang === 'ar' ? `مضلعات ${filePolygonsCount > 0 ? `(${filePolygonsCount})` : ''}` : `Polygons ${filePolygonsCount > 0 ? `(${filePolygonsCount})` : ''}`}
                             </button>
                             <button 
                                 onClick={() => setShowLines(!showLines)}
@@ -3389,6 +3695,160 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                                 {lang === 'ar' ? 'المصبات' : 'Outfalls'}
                             </button>
                         </div>
+
+                        {/* File / URL / Google Maps Polygons Opacity & Styling Controls */}
+                        {showPolygons && (
+                            <div className="mt-2.5 p-3 rounded-2xl bg-slate-50/90 border border-slate-200/80 space-y-2.5 shadow-xs">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                        <span className="text-xs">📐</span>
+                                        <span className="text-[10px] font-black text-slate-700">
+                                            {lang === 'ar' ? 'شفافية وتنسيق مضلعات الملفات / الروابط' : 'File & Link Polygon Opacity'}
+                                        </span>
+                                    </div>
+                                    <span className="text-[9px] font-mono font-black text-cyan-600 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-2xs">
+                                        {Math.round(filePolygonFillOpacity * 100)}% {lang === 'ar' ? 'شفافية' : 'Opacity'}
+                                    </span>
+                                </div>
+
+                                {/* Fill Opacity Slider */}
+                                <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[9px] font-bold text-slate-500">
+                                        <span>{lang === 'ar' ? 'تعبئة المضلع (Fill Opacity):' : 'Polygon Fill:'}</span>
+                                        <span className="font-mono text-slate-700 font-bold">
+                                            {filePolygonFillOpacity === 0 ? (lang === 'ar' ? 'حدود فقط (0%)' : 'Outline Only (0%)') : `${Math.round(filePolygonFillOpacity * 100)}%`}
+                                        </span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={filePolygonFillOpacity}
+                                        onChange={(e) => setFilePolygonFillOpacity(parseFloat(e.target.value))}
+                                        className="w-full accent-cyan-600 h-1.5 bg-slate-200 rounded-lg cursor-pointer transition-all"
+                                    />
+                                    {/* Quick Percentage Presets */}
+                                    <div className="flex items-center justify-between gap-1 pt-0.5">
+                                        {[
+                                            { val: 0.0, labelAr: '0% (أطر فقط)', labelEn: '0% (Outline)' },
+                                            { val: 0.15, labelAr: '15%', labelEn: '15%' },
+                                            { val: 0.35, labelAr: '35%', labelEn: '35%' },
+                                            { val: 0.60, labelAr: '60%', labelEn: '60%' },
+                                            { val: 1.0, labelAr: '100% (معتم)', labelEn: '100% (Solid)' }
+                                        ].map((preset) => (
+                                            <button
+                                                key={preset.val}
+                                                type="button"
+                                                onClick={() => setFilePolygonFillOpacity(preset.val)}
+                                                className={cn(
+                                                    "px-1.5 py-0.5 rounded-md text-[8px] font-bold font-mono transition-all",
+                                                    Math.abs(filePolygonFillOpacity - preset.val) < 0.04
+                                                        ? "bg-cyan-600 text-white font-black shadow-xs"
+                                                        : "bg-white text-slate-600 hover:bg-slate-200 border border-slate-200"
+                                                )}
+                                            >
+                                                {lang === 'ar' ? preset.labelAr : preset.labelEn}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Polygon Border Weight & Style */}
+                                <div className="pt-2 border-t border-slate-200/60 space-y-1.5">
+                                    <div className="flex items-center justify-between text-[9px] font-bold text-slate-500">
+                                        <span>{lang === 'ar' ? 'سُمك ونمط حدود المضلع:' : 'Border Weight & Style:'}</span>
+                                        <span className="font-mono text-cyan-700 font-bold">{filePolygonStrokeWeight}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="8"
+                                        step="0.5"
+                                        value={filePolygonStrokeWeight}
+                                        onChange={(e) => setFilePolygonStrokeWeight(parseFloat(e.target.value))}
+                                        className="w-full accent-cyan-600 h-1 bg-slate-200 rounded-lg cursor-pointer transition-all"
+                                    />
+                                    <div className="grid grid-cols-3 gap-1 pt-0.5">
+                                        {[
+                                            { id: 'solid', labelAr: 'متصل (───)', labelEn: 'Solid' },
+                                            { id: 'dashed', labelAr: 'متقطع (── ──)', labelEn: 'Dashed' },
+                                            { id: 'cadastral', labelAr: 'مساحي (── · ──)', labelEn: 'Cadastral' }
+                                        ].map((pat) => (
+                                            <button
+                                                key={pat.id}
+                                                type="button"
+                                                onClick={() => setFilePolygonBorderStyle(pat.id as any)}
+                                                className={cn(
+                                                    "py-1 px-0.5 rounded-lg text-[8px] font-bold transition-all border text-center",
+                                                    filePolygonBorderStyle === pat.id
+                                                        ? "bg-slate-800 text-white border-slate-800 shadow-xs font-black"
+                                                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                                                )}
+                                            >
+                                                {lang === 'ar' ? pat.labelAr : pat.labelEn}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Color Override or Original Colors */}
+                                <div className="pt-2 border-t border-slate-200/60 space-y-1.5">
+                                    <div className="flex items-center justify-between text-[9px] font-bold text-slate-500">
+                                        <span>{lang === 'ar' ? 'تلوين المضلعات:' : 'Polygon Colors:'}</span>
+                                        {filePolygonColorOverride ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setFilePolygonColorOverride(null)}
+                                                className="text-[8.5px] text-cyan-600 hover:underline font-bold"
+                                            >
+                                                {lang === 'ar' ? '↺ استعادة ألوان الملف' : '↺ Reset to File Colors'}
+                                            </button>
+                                        ) : (
+                                            <span className="text-[8.5px] text-slate-400 font-bold">
+                                                {lang === 'ar' ? 'ألوان الملف الأصلية' : 'Original File Colors'}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center justify-between gap-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => setFilePolygonColorOverride(null)}
+                                            className={cn(
+                                                "px-2 py-1 rounded-lg text-[8px] font-bold border transition-all truncate",
+                                                !filePolygonColorOverride
+                                                    ? "bg-slate-800 text-white border-slate-800 font-black shadow-2xs"
+                                                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                                            )}
+                                        >
+                                            {lang === 'ar' ? '🎨 الملف الأصلي' : '🎨 Original'}
+                                        </button>
+                                        {[
+                                            { color: '#06b6d4', name: 'Cyan' },
+                                            { color: '#3b82f6', name: 'Blue' },
+                                            { color: '#10b981', name: 'Emerald' },
+                                            { color: '#8b5cf6', name: 'Violet' },
+                                            { color: '#f59e0b', name: 'Amber' },
+                                            { color: '#ec4899', name: 'Rose' }
+                                        ].map((c) => (
+                                            <button
+                                                key={c.color}
+                                                type="button"
+                                                onClick={() => setFilePolygonColorOverride(c.color)}
+                                                style={{ backgroundColor: c.color }}
+                                                className={cn(
+                                                    "w-4.5 h-4.5 rounded-full transition-all flex items-center justify-center text-white text-[9px] shrink-0",
+                                                    filePolygonColorOverride === c.color ? "ring-2 ring-offset-2 ring-primary scale-110 shadow-md" : "opacity-80 hover:opacity-100"
+                                                )}
+                                                title={c.name}
+                                            >
+                                                {filePolygonColorOverride === c.color ? '✓' : ''}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Hydraulic Layer Coloring Settings */}
@@ -3426,6 +3886,277 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                                 <LayersIcon className="w-3 h-3" />
                                 {lang === 'ar' ? 'ألوان الملف الأصلية' : 'Original Colors'}
                             </button>
+                        </div>
+                    </div>
+
+                    {/* Region / City Geographic Administrative Boundary Controls */}
+                    <div className="flex flex-col gap-2.5 mt-4 pt-4 border-t border-slate-100">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                                <span className="text-sm">🏛️</span>
+                                <h4 className="text-[11px] font-black uppercase text-primary tracking-wide">
+                                    {lang === 'ar' ? 'الحدود الجغرافية للحي / المدينة' : 'Geographic District/City Boundaries'}
+                                </h4>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowBoundaryPolygon(!showBoundaryPolygon)}
+                                className={cn(
+                                    "p-1.5 rounded-xl transition-all text-xs flex items-center gap-1",
+                                    showBoundaryPolygon ? "text-cyan-600 bg-cyan-50 font-bold border border-cyan-200" : "text-slate-400 bg-slate-100"
+                                )}
+                                title={showBoundaryPolygon ? (lang === 'ar' ? 'إخفاء رسم الحدود' : 'Hide Boundary') : (lang === 'ar' ? 'إظهار رسم الحدود' : 'Show Boundary')}
+                            >
+                                {showBoundaryPolygon ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                                <span className="text-[9.5px]">{showBoundaryPolygon ? (lang === 'ar' ? 'ظاهر' : 'On') : (lang === 'ar' ? 'مخفي' : 'Off')}</span>
+                            </button>
+                        </div>
+
+                        {/* Active Region Status & Quick Action */}
+                        {activeRegionBoundary ? (
+                            <div className="p-2.5 rounded-2xl bg-cyan-50/80 border border-cyan-200/80 text-[10.5px] space-y-2">
+                                <div className="flex items-center justify-between gap-1.5">
+                                    <span className="font-black text-cyan-900 truncate">
+                                        🏛️ {activeRegionBoundary.name}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={clearRegionBoundary}
+                                        className="text-rose-500 hover:text-rose-700 p-0.5 px-1.5 rounded-md hover:bg-rose-100/60 font-bold transition-all text-[10px]"
+                                        title={lang === 'ar' ? 'مسح الحدود' : 'Clear Boundary'}
+                                    >
+                                        ✕ {lang === 'ar' ? 'إلغاء' : 'Clear'}
+                                    </button>
+                                </div>
+
+                                <div className="flex items-center gap-1.5">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (activeRegionBoundary?.geoJson && mapInstance.current) {
+                                                const tempLayer = L.geoJSON(activeRegionBoundary.geoJson);
+                                                const bounds = tempLayer.getBounds();
+                                                if (bounds.isValid()) {
+                                                    mapInstance.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, animate: true });
+                                                }
+                                            }
+                                        }}
+                                        className="flex-1 py-1 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-[9.5px] flex items-center justify-center gap-1 shadow-sm transition-all active:scale-95 cursor-pointer"
+                                    >
+                                        <span>🔍</span>
+                                        <span>{lang === 'ar' ? 'تكبير للحدود' : 'Zoom to Boundary'}</span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        disabled={isExportingBoundaryKMZ}
+                                        onClick={handleExportActiveBoundaryKMZ}
+                                        className="py-1 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-[9.5px] flex items-center justify-center gap-1 shadow-sm transition-all active:scale-95 cursor-pointer"
+                                        title={lang === 'ar' ? 'تصدير ملف KMZ لحدود المنطقة/الحي' : 'Export Boundary KMZ File'}
+                                    >
+                                        {isExportingBoundaryKMZ ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                                        <span>{lang === 'ar' ? 'تصدير KMZ' : 'KMZ'}</span>
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="text-[10px] text-slate-400 bg-slate-50 p-2.5 rounded-xl border border-slate-100 leading-relaxed">
+                                {lang === 'ar' 
+                                    ? 'اختر حي أو مدينة من بحث الشوارع لرسم الحدود الجغرافية والإدارية بدقة.'
+                                    : 'Select a district or city from street search to outline authentic geographic boundaries.'}
+                            </div>
+                        )}
+
+                        {/* Boundary Visualization Mode (نوع الرسم: حدود جغرافية / تظليل / مضلع) */}
+                        <div className="space-y-1.5 bg-slate-50/90 p-2.5 rounded-2xl border border-slate-100">
+                            <span className="text-[9.5px] font-bold text-slate-500">
+                                {lang === 'ar' ? 'أسلوب عرض الحدود:' : 'Boundary Display Mode:'}
+                            </span>
+                            <div className="grid grid-cols-3 gap-1">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setBoundaryRenderMode('boundary_lines');
+                                        setBoundaryFillOpacity(0);
+                                    }}
+                                    className={cn(
+                                        "py-1.5 px-1 rounded-xl text-[9px] font-bold transition-all border text-center flex flex-col items-center gap-0.5",
+                                        boundaryRenderMode === 'boundary_lines'
+                                            ? "bg-cyan-600 text-white border-cyan-600 shadow-xs font-black"
+                                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                                    )}
+                                >
+                                    <span>🌐</span>
+                                    <span>{lang === 'ar' ? 'حدود جغرافية' : 'Border Lines'}</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setBoundaryRenderMode('boundary_with_tint');
+                                        setBoundaryFillOpacity(0.08);
+                                    }}
+                                    className={cn(
+                                        "py-1.5 px-1 rounded-xl text-[9px] font-bold transition-all border text-center flex flex-col items-center gap-0.5",
+                                        boundaryRenderMode === 'boundary_with_tint'
+                                            ? "bg-cyan-600 text-white border-cyan-600 shadow-xs font-black"
+                                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                                    )}
+                                >
+                                    <span>📐</span>
+                                    <span>{lang === 'ar' ? 'تظليل خفيف' : 'Light Tint'}</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setBoundaryRenderMode('full_polygon');
+                                        setBoundaryFillOpacity(0.35);
+                                    }}
+                                    className={cn(
+                                        "py-1.5 px-1 rounded-xl text-[9px] font-bold transition-all border text-center flex flex-col items-center gap-0.5",
+                                        boundaryRenderMode === 'full_polygon'
+                                            ? "bg-cyan-600 text-white border-cyan-600 shadow-xs font-black"
+                                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                                    )}
+                                >
+                                    <span>🟦</span>
+                                    <span>{lang === 'ar' ? 'مضلع كامل' : 'Polygon'}</span>
+                                </button>
+                            </div>
+
+                            {/* Line Pattern Style Selector */}
+                            <div className="pt-2 border-t border-slate-200/60 space-y-1">
+                                <span className="text-[9px] font-bold text-slate-400">
+                                    {lang === 'ar' ? 'نمط خط الحدود الجغرافية:' : 'Boundary Line Pattern:'}
+                                </span>
+                                <div className="grid grid-cols-4 gap-1">
+                                    {[
+                                        { id: 'cadastral', labelAr: 'مساحي (── · ──)', labelEn: 'Cadastral' },
+                                        { id: 'dashed', labelAr: 'متقطع (── ──)', labelEn: 'Dashed' },
+                                        { id: 'solid', labelAr: 'متصل (───)', labelEn: 'Solid' },
+                                        { id: 'double', labelAr: 'مزدوج (══)', labelEn: 'Double' }
+                                    ].map((pat) => (
+                                        <button
+                                            key={pat.id}
+                                            type="button"
+                                            onClick={() => setBoundaryLineStyle(pat.id as any)}
+                                            className={cn(
+                                                "py-1 px-0.5 rounded-lg text-[8px] font-bold transition-all border text-center",
+                                                boundaryLineStyle === pat.id
+                                                    ? "bg-slate-800 text-white border-slate-800 shadow-xs font-black"
+                                                    : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                                            )}
+                                        >
+                                            {lang === 'ar' ? pat.labelAr : pat.labelEn}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Line Thickness Slider */}
+                            <div className="pt-2 border-t border-slate-200/60 space-y-1">
+                                <div className="flex items-center justify-between text-[9.5px] font-bold text-slate-600">
+                                    <span>{lang === 'ar' ? 'سُمك خط الحدود:' : 'Line Weight:'}</span>
+                                    <span className="font-mono text-cyan-700 font-black">{boundaryLineWeight}px</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="1.5"
+                                    max="8"
+                                    step="0.5"
+                                    value={boundaryLineWeight}
+                                    onChange={(e) => setBoundaryLineWeight(parseFloat(e.target.value))}
+                                    className="w-full accent-cyan-600 h-1 bg-slate-200 rounded-lg cursor-pointer transition-all"
+                                />
+                            </div>
+
+                            {/* Vertex Corner Nodes Toggle */}
+                            <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                                <span className="text-[9.5px] font-bold text-slate-600">
+                                    {lang === 'ar' ? 'إظهار نقاط زوايا وإحداثيات الحدود:' : 'Show Boundary Corner Nodes:'}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowBoundaryVertexNodes(!showBoundaryVertexNodes)}
+                                    className={cn(
+                                        "px-2 py-0.5 rounded-lg text-[9px] font-bold transition-all border",
+                                        showBoundaryVertexNodes
+                                            ? "bg-cyan-600 text-white border-cyan-600"
+                                            : "bg-white text-slate-400 border-slate-200"
+                                    )}
+                                >
+                                    {showBoundaryVertexNodes ? (lang === 'ar' ? 'مفعل ✓' : 'On') : (lang === 'ar' ? 'معطل' : 'Off')}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Boundary Opacity Control */}
+                        {boundaryRenderMode !== 'boundary_lines' && (
+                            <div className="space-y-1.5 bg-slate-50/90 p-2.5 rounded-2xl border border-slate-100">
+                                <div className="flex items-center justify-between text-[10px] font-bold text-slate-700">
+                                    <span>{lang === 'ar' ? 'شفافية التظليل الداخلي' : 'Fill Opacity'}</span>
+                                    <span className="font-mono text-cyan-600 font-black bg-white px-2 py-0.5 rounded-md shadow-xs border border-slate-200">
+                                        {Math.round(boundaryFillOpacity * 100)}%
+                                    </span>
+                                </div>
+
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="1"
+                                    step="0.05"
+                                    value={boundaryFillOpacity}
+                                    onChange={(e) => setBoundaryFillOpacity(parseFloat(e.target.value))}
+                                    className="w-full accent-cyan-600 h-1.5 bg-slate-200 rounded-lg cursor-pointer transition-all"
+                                />
+
+                                <div className="flex items-center justify-between gap-1 pt-0.5">
+                                    {[0.05, 0.15, 0.35, 0.60, 1.0].map((opVal) => (
+                                        <button
+                                            key={opVal}
+                                            type="button"
+                                            onClick={() => setBoundaryFillOpacity(opVal)}
+                                            className={cn(
+                                                "px-1.5 py-0.5 rounded-md text-[8.5px] font-bold font-mono transition-all",
+                                                Math.abs(boundaryFillOpacity - opVal) < 0.04
+                                                    ? "bg-cyan-600 text-white font-black shadow-xs"
+                                                    : "bg-white text-slate-600 hover:bg-slate-200 border border-slate-200"
+                                            )}
+                                        >
+                                            {Math.round(opVal * 100)}%
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Boundary Color Palette */}
+                        <div className="space-y-1.5">
+                            <span className="text-[9.5px] font-bold text-slate-400">
+                                {lang === 'ar' ? 'لون خط الحدود الجغرافية:' : 'Boundary Color:'}
+                            </span>
+                            <div className="flex items-center justify-between gap-1.5">
+                                {[
+                                    { color: '#06b6d4', name: 'Cyan' },
+                                    { color: '#3b82f6', name: 'Blue' },
+                                    { color: '#10b981', name: 'Emerald' },
+                                    { color: '#8b5cf6', name: 'Violet' },
+                                    { color: '#f59e0b', name: 'Amber' },
+                                    { color: '#ec4899', name: 'Rose' }
+                                ].map((c) => (
+                                    <button
+                                        key={c.color}
+                                        type="button"
+                                        onClick={() => setBoundaryColor(c.color)}
+                                        style={{ backgroundColor: c.color }}
+                                        className={cn(
+                                            "w-5 h-5 rounded-full transition-all flex items-center justify-center text-white text-[10px] shrink-0",
+                                            boundaryColor === c.color ? "ring-2 ring-offset-2 ring-primary scale-110 shadow-md" : "opacity-75 hover:opacity-100"
+                                        )}
+                                        title={c.name}
+                                    >
+                                        {boundaryColor === c.color ? '✓' : ''}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </div>
 
@@ -3520,6 +4251,118 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                     >
                       {lang === 'ar' ? 'مسح الفلاتر ✕' : 'Clear All ✕'}
                     </button>
+                  </div>
+                )}
+
+                {/* Floating Active Region Boundary HUD Pill (شريط التحكم في الحدود الجغرافية) */}
+                {activeRegionBoundary && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 p-2 px-3.5 rounded-2xl bg-slate-950/95 backdrop-blur-xl border border-cyan-500/60 shadow-2xl text-white animate-in fade-in slide-in-from-bottom-1 text-xs w-full pointer-events-auto">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-xl bg-cyan-500/25 border border-cyan-400 flex items-center justify-center text-cyan-300 text-xs shrink-0">
+                        🏛️
+                      </div>
+                      <div className="flex flex-col min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-black text-cyan-300 text-[11px] truncate">
+                            {lang === 'ar' ? `الحدود الجغرافية: ${activeRegionBoundary.name}` : `Boundary: ${activeRegionBoundary.name}`}
+                          </span>
+                          <span className="text-[8px] font-bold px-1.5 py-0.2 rounded-md bg-cyan-950 border border-cyan-500/40 text-cyan-200">
+                            {boundaryRenderMode === 'boundary_lines' ? (lang === 'ar' ? 'حدود جغرافية' : 'Border Lines') : (boundaryRenderMode === 'boundary_with_tint' ? (lang === 'ar' ? 'تظليل خفيف' : 'Tinted') : (lang === 'ar' ? 'مضلع' : 'Polygon'))}
+                          </span>
+                        </div>
+                        <span className="text-[9px] text-slate-400 truncate max-w-[130px] sm:max-w-[200px]">
+                          {activeRegionBoundary.displayName}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Mode Toggle Button */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (boundaryRenderMode === 'boundary_lines') {
+                            setBoundaryRenderMode('boundary_with_tint');
+                            setBoundaryFillOpacity(0.08);
+                          } else if (boundaryRenderMode === 'boundary_with_tint') {
+                            setBoundaryRenderMode('full_polygon');
+                            setBoundaryFillOpacity(0.35);
+                          } else {
+                            setBoundaryRenderMode('boundary_lines');
+                            setBoundaryFillOpacity(0);
+                          }
+                        }}
+                        className="px-2 py-1 bg-white/10 hover:bg-white/20 text-cyan-200 rounded-xl text-[9px] font-bold border border-white/10 transition-all flex items-center gap-1"
+                        title={lang === 'ar' ? 'تبديل أسلوب الرسم (حدود / تظليل / مضلع)' : 'Toggle Display Mode'}
+                      >
+                        <span>{boundaryRenderMode === 'boundary_lines' ? '🌐' : (boundaryRenderMode === 'boundary_with_tint' ? '📐' : '🟦')}</span>
+                        <span className="hidden md:inline">{boundaryRenderMode === 'boundary_lines' ? (lang === 'ar' ? 'حدود فقط' : 'Lines') : (boundaryRenderMode === 'boundary_with_tint' ? (lang === 'ar' ? 'تظليل' : 'Tint') : (lang === 'ar' ? 'مضلع' : 'Polygon'))}</span>
+                      </button>
+
+                      {/* Interactive Opacity slider (if fill is active) */}
+                      {boundaryRenderMode !== 'boundary_lines' && (
+                        <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-xl border border-white/10" title={lang === 'ar' ? 'شفافية التظليل' : 'Fill Opacity'}>
+                          <span className="text-[9px] text-slate-300 font-medium hidden sm:inline">{lang === 'ar' ? 'الشفافية:' : 'Opacity:'}</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={boundaryFillOpacity}
+                            onChange={(e) => setBoundaryFillOpacity(parseFloat(e.target.value))}
+                            className="w-12 sm:w-16 accent-cyan-400 h-1 bg-slate-700 rounded-lg cursor-pointer"
+                          />
+                          <span className="text-[9px] font-mono font-bold text-cyan-300 min-w-[24px]">
+                            {Math.round(boundaryFillOpacity * 100)}%
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Zoom to Region Boundary */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (activeRegionBoundary?.geoJson && mapInstance.current) {
+                            const tempLayer = L.geoJSON(activeRegionBoundary.geoJson);
+                            const bounds = tempLayer.getBounds();
+                            if (bounds.isValid()) {
+                              mapInstance.current.fitBounds(bounds, { padding: [60, 60], maxZoom: 16, animate: true });
+                            }
+                          }
+                        }}
+                        className="px-2 py-1 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl text-[9.5px] flex items-center gap-1 shadow-sm transition-all active:scale-95 cursor-pointer"
+                        title={lang === 'ar' ? 'تكبير لنطاق الحدود الجغرافية' : 'Zoom to Geographic Boundary'}
+                      >
+                        <span>🔍</span>
+                        <span className="hidden sm:inline">{lang === 'ar' ? 'تكبير' : 'Zoom'}</span>
+                      </button>
+
+                      {/* Export KMZ Button */}
+                      <button
+                        type="button"
+                        disabled={isExportingBoundaryKMZ}
+                        onClick={handleExportActiveBoundaryKMZ}
+                        className="px-2.5 py-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white font-black rounded-xl text-[9.5px] flex items-center gap-1 shadow-md shadow-emerald-950/40 border border-emerald-400/40 transition-all active:scale-95 cursor-pointer"
+                        title={lang === 'ar' ? 'تصدير ملف KMZ لحدود المنطقة/الحي لمطابقتها في قوقل إيرث ونظم GIS' : 'Export Boundary KMZ File for Google Earth / GIS'}
+                      >
+                        {isExportingBoundaryKMZ ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Download className="w-3 h-3" />
+                        )}
+                        <span>KMZ</span>
+                      </button>
+
+                      {/* Clear Boundary */}
+                      <button
+                        type="button"
+                        onClick={clearRegionBoundary}
+                        className="p-1 text-slate-400 hover:text-rose-300 hover:bg-white/10 rounded-lg transition-all"
+                        title={lang === 'ar' ? 'مسح الحدود الجغرافية' : 'Clear Boundary'}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -3664,10 +4507,23 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
                     {/* Section 2: City Classification (المدينة) */}
                     <div className="space-y-2">
-                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-blue-300">
-                        <Building2 className="w-3.5 h-3.5" />
-                        <span>{(t as any).filterCity || 'المدينة'}</span>
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-[11px] font-bold text-blue-300">
+                          <Building2 className="w-3.5 h-3.5" />
+                          <span>{(t as any).filterCity || 'المدينة'}</span>
+                        </label>
+                        {searchFilters.city && (
+                          <button
+                            type="button"
+                            onClick={() => loadRegionBoundary(searchFilters.city, searchFilters.countryCode)}
+                            className="text-[9.5px] px-2 py-0.5 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/40 font-bold transition-all flex items-center gap-1"
+                            title={lang === 'ar' ? 'تحديد حدود المدينة كمضلع على الخريطة' : 'Outline city boundary as polygon'}
+                          >
+                            <span>🗺️</span>
+                            <span>{lang === 'ar' ? 'تظليل حدود المدينة كمضلع' : 'Outline City Polygon'}</span>
+                          </button>
+                        )}
+                      </div>
                       
                       <div className="flex items-center gap-2">
                         <input
@@ -3698,10 +4554,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                               <button
                                 key={city.nameAr}
                                 type="button"
-                                onClick={() => handleApplyFilterUpdate({ 
-                                  city: lang === 'ar' ? city.nameAr : city.nameEn,
-                                  district: ''
-                                })}
+                                onClick={() => {
+                                  const cName = lang === 'ar' ? city.nameAr : city.nameEn;
+                                  handleApplyFilterUpdate({ 
+                                    city: cName,
+                                    district: ''
+                                  });
+                                  loadRegionBoundary(cName, searchFilters.countryCode);
+                                }}
                                 className={cn(
                                   "px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all border",
                                   searchFilters.city === city.nameAr || searchFilters.city === city.nameEn
@@ -3719,10 +4579,23 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
                     {/* Section 3: District / Neighborhood Classification (الحي / المنطقة) */}
                     <div className="space-y-2">
-                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-amber-300">
-                        <Home className="w-3.5 h-3.5" />
-                        <span>{(t as any).filterDistrict || 'الحي / المنطقة'}</span>
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-[11px] font-bold text-amber-300">
+                          <Home className="w-3.5 h-3.5" />
+                          <span>{(t as any).filterDistrict || 'الحي / المنطقة'}</span>
+                        </label>
+                        {searchFilters.district && (
+                          <button
+                            type="button"
+                            onClick={() => loadRegionBoundary(searchFilters.district, searchFilters.countryCode, searchFilters.city)}
+                            className="text-[9.5px] px-2 py-0.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold transition-all flex items-center gap-1"
+                            title={lang === 'ar' ? 'تحديد حدود الحي كمضلع على الخريطة' : 'Outline district boundary as polygon'}
+                          >
+                            <span>🗺️</span>
+                            <span>{lang === 'ar' ? 'تظليل حدود الحي كمضلع' : 'Outline District Polygon'}</span>
+                          </button>
+                        )}
+                      </div>
                       
                       <div className="flex items-center gap-2">
                         <input
@@ -3763,7 +4636,10 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                                 <button
                                   key={district}
                                   type="button"
-                                  onClick={() => handleApplyFilterUpdate({ district })}
+                                  onClick={() => {
+                                    handleApplyFilterUpdate({ district });
+                                    loadRegionBoundary(district, searchFilters.countryCode, searchFilters.city || matchedCity.nameAr);
+                                  }}
                                   className={cn(
                                     "px-2.5 py-1 rounded-xl text-[9.5px] font-bold transition-all border",
                                     searchFilters.district === district
@@ -3796,6 +4672,11 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                         onClick={() => {
                           setShowSearchFiltersModal(false);
                           performStreetSearch(searchQuery, searchActiveTab);
+                          if (searchFilters.district) {
+                            loadRegionBoundary(searchFilters.district, searchFilters.countryCode, searchFilters.city);
+                          } else if (searchFilters.city) {
+                            loadRegionBoundary(searchFilters.city, searchFilters.countryCode);
+                          }
                         }}
                         className="px-6 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black shadow-lg transition-all active:scale-95 flex items-center gap-1.5"
                       >
@@ -3895,7 +4776,22 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1 flex-shrink-0">
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {item.type === 'global_street' && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  loadRegionBoundary(item.name, searchFilters.countryCode, searchFilters.city);
+                                  setShowSearchResultsDropdown(false);
+                                }}
+                                className="px-2 py-1 bg-cyan-500/20 hover:bg-cyan-500 text-cyan-300 hover:text-white rounded-lg text-[9px] font-bold border border-cyan-500/30 transition-all flex items-center gap-1"
+                                title={lang === 'ar' ? 'رسم وتحديد الحدود الجغرافية للحي / المنطقة' : 'Outline geographic district boundary'}
+                              >
+                                <span>🏛️</span>
+                                <span className="hidden sm:inline">{lang === 'ar' ? 'حدود جغرافية' : 'Boundary'}</span>
+                              </button>
+                            )}
                             <span className="text-[9px] font-mono font-bold text-slate-500 group-hover:text-cyan-400 transition-colors">
                               {item.lat.toFixed(3)}, {item.lng.toFixed(3)}
                             </span>

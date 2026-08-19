@@ -8265,8 +8265,15 @@ const App: React.FC = () => {
 
 
          {showSettingsModal && (
-             <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-                 <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
+             <div 
+               className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" 
+               onClick={() => setShowSettingsModal(false)}
+               dir={lang === 'ar' ? 'rtl' : 'ltr'}
+             >
+                 <div 
+                   className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden"
+                   onClick={(e) => e.stopPropagation()}
+                 >
                      <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
                          <div className="flex items-center gap-3">
                              <Settings2 className="w-6 h-6 text-accent" />
@@ -8592,8 +8599,15 @@ const App: React.FC = () => {
 
           {/* Auto-Alert Modal for Unresolved Spatial Overlaps upon File Import */}
           {showAutoAlertModal && autoAlertInfo && (
-              <div className="fixed inset-0 z-[2500] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-                  <div className="bg-gradient-to-br from-[#0e3547] via-[#08222e] to-[#041620] border-2 border-amber-400/80 rounded-[2.5rem] w-full max-w-xl p-6 sm:p-8 shadow-[0_0_50px_rgba(245,158,11,0.25)] space-y-6 relative overflow-hidden">
+              <div 
+                className="fixed inset-0 z-[2500] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300" 
+                onClick={() => setShowAutoAlertModal(false)}
+                dir={lang === 'ar' ? 'rtl' : 'ltr'}
+              >
+                  <div 
+                    className="bg-gradient-to-br from-[#0e3547] via-[#08222e] to-[#041620] border-2 border-amber-400/80 rounded-[2.5rem] w-full max-w-xl p-6 sm:p-8 shadow-[0_0_50px_rgba(245,158,11,0.25)] space-y-6 relative overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                       {/* Glow Effect */}
                       <div className="absolute -top-24 -right-24 w-48 h-48 bg-amber-500/20 rounded-full blur-3xl pointer-events-none" />
 
@@ -8713,8 +8727,15 @@ const App: React.FC = () => {
           )}
 
          {showOverlapModal && overlapResults && (
-             <div className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-                 <div className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden">
+             <div 
+               className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" 
+               onClick={() => setShowOverlapModal(false)}
+               dir={lang === 'ar' ? 'rtl' : 'ltr'}
+             >
+                 <div 
+                   className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden"
+                   onClick={(e) => e.stopPropagation()}
+                 >
                      <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
                          <div className="flex items-center gap-3">
                              {overlapModalType === 'duplicates' ? (
@@ -9126,9 +9147,13 @@ export const CheckResultModalPopup: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300">
+    <div 
+      className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300"
+      onClick={() => setCheckResultModal(null)}
+    >
       <div 
         className="bg-[#0b2d3d] border border-accent/40 rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] max-w-xl w-full overflow-hidden flex flex-col text-right animate-in zoom-in-95 duration-200"
+        onClick={(e) => e.stopPropagation()}
         dir={lang === 'ar' ? 'rtl' : 'ltr'}
       >
         {/* Modal Header */}

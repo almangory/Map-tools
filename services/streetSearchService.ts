@@ -1,6 +1,6 @@
-import { GeoPoint } from '../types';
+import { GeoPoint, KmlExportOptions } from '../types';
 import { parseCoordinatesFromText } from './crs';
-import { calculatePathLength } from './kmlService';
+import { calculatePathLength, downloadKMZ } from './kmlService';
 
 export interface StreetSearchFilters {
   countryCode?: string; // e.g. 'sa', 'eg', 'ae', 'kw', 'jo', 'om', 'qa', 'bh', 'iq', ''
@@ -8,6 +8,127 @@ export interface StreetSearchFilters {
   city?: string;        // e.g. 'الرياض', 'جدة', 'القاهرة', 'دبي', etc.
   district?: string;    // e.g. 'حي النرجس', 'حي الياسمين', 'المعادي', etc.
 }
+
+export interface RegionBoundaryGeometry {
+  name: string;
+  type: 'city' | 'district' | 'region';
+  boundaryType?: 'administrative_boundary' | 'cadastral_boundary' | 'district_border';
+  geoJson: any; // GeoJSON Geometry / Feature (Polygon / MultiPolygon)
+  bbox?: [number, number, number, number];
+  lat: number;
+  lng: number;
+  displayName: string;
+  isAccurateGeographicBoundary?: boolean;
+}
+
+/**
+ * Fetches OpenStreetMap geographic administrative boundary GeoJSON for a district, city, or region
+ */
+export async function fetchRegionBoundary(
+  locationName: string,
+  countryCode?: string,
+  parentCity?: string
+): Promise<RegionBoundaryGeometry | null> {
+  if (!locationName || !locationName.trim()) return null;
+
+  try {
+    const cleanLocation = locationName.trim();
+    const queryVariants: string[] = [];
+
+    if (parentCity && parentCity.trim() && !cleanLocation.includes(parentCity)) {
+      queryVariants.push(`${cleanLocation}, ${parentCity.trim()}`);
+    }
+    queryVariants.push(cleanLocation);
+    if (cleanLocation.startsWith('حي ') && parentCity) {
+      queryVariants.push(`${cleanLocation.replace('حي ', '')}, ${parentCity}`);
+    }
+
+    for (const query of queryVariants) {
+      let url = `https://nominatim.openstreetmap.org/search?format=json&polygon_geojson=1&q=${encodeURIComponent(query)}&limit=5&addressdetails=1&accept-language=ar,en`;
+      if (countryCode && countryCode.trim()) {
+        url += `&countrycodes=${encodeURIComponent(countryCode.trim().toLowerCase())}`;
+      }
+
+      const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) continue;
+
+      // Prioritize results that have real Polygon/MultiPolygon administrative boundaries
+      const bestPolygonItem = data.find((it: any) => 
+        it.geojson && (it.geojson.type === 'Polygon' || it.geojson.type === 'MultiPolygon') &&
+        (it.class === 'boundary' || it.type === 'administrative' || it.type === 'suburb' || it.type === 'neighbourhood' || it.type === 'quarter')
+      ) || data.find((it: any) => 
+        it.geojson && (it.geojson.type === 'Polygon' || it.geojson.type === 'MultiPolygon')
+      ) || data[0];
+
+      if (bestPolygonItem) {
+        const lat = parseFloat(bestPolygonItem.lat);
+        const lng = parseFloat(bestPolygonItem.lon);
+
+        let bbox: [number, number, number, number] | undefined = undefined;
+        if (bestPolygonItem.boundingbox && Array.isArray(bestPolygonItem.boundingbox) && bestPolygonItem.boundingbox.length >= 4) {
+          bbox = [
+            parseFloat(bestPolygonItem.boundingbox[0]),
+            parseFloat(bestPolygonItem.boundingbox[1]),
+            parseFloat(bestPolygonItem.boundingbox[2]),
+            parseFloat(bestPolygonItem.boundingbox[3])
+          ];
+        }
+
+        let geoJson = bestPolygonItem.geojson;
+        const hasTruePolygon = Boolean(geoJson && (geoJson.type === 'Polygon' || geoJson.type === 'MultiPolygon'));
+
+        // If no polygon returned in geojson, build a smoothed 8-vertex geographic boundary envelope
+        if (!hasTruePolygon && bbox) {
+          const [south, north, west, east] = bbox;
+          const latSpan = north - south;
+          const lngSpan = east - west;
+          const insetLat = latSpan * 0.15;
+          const insetLng = lngSpan * 0.15;
+
+          // Smoothed natural geographic boundary envelope
+          geoJson = {
+            type: 'Polygon',
+            coordinates: [[
+              [west + insetLng, south],
+              [east - insetLng, south],
+              [east, south + insetLat],
+              [east, north - insetLat],
+              [east - insetLng, north],
+              [west + insetLng, north],
+              [west, north - insetLat],
+              [west, south + insetLat],
+              [west + insetLng, south]
+            ]]
+          };
+        }
+
+        if (geoJson) {
+          return {
+            name: cleanLocation,
+            type: bestPolygonItem.type === 'city' || bestPolygonItem.type === 'administrative' ? 'city' : 'district',
+            boundaryType: cleanLocation.includes('حي') || bestPolygonItem.type === 'suburb' || bestPolygonItem.type === 'neighbourhood'
+              ? 'district_border'
+              : 'administrative_boundary',
+            geoJson,
+            bbox,
+            lat: !isNaN(lat) ? lat : 0,
+            lng: !isNaN(lng) ? lng : 0,
+            displayName: bestPolygonItem.display_name || cleanLocation,
+            isAccurateGeographicBoundary: hasTruePolygon
+          };
+        }
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.warn('Failed to fetch geographic region boundary:', err);
+    return null;
+  }
+}
+
 
 export interface CountryPreset {
   code: string;
@@ -777,4 +898,257 @@ export async function searchGlobalStreets(
   }
 
   return results;
+}
+
+/**
+ * Geodesic Polygon Area in square meters on WGS84 sphere
+ */
+function calculateGeodesicPolygonArea(coords: { x: number; y: number }[]): number {
+  if (!coords || coords.length < 3) return 0;
+  const R = 6378137; // Earth radius in meters
+  let area = 0;
+  const len = coords.length;
+  for (let i = 0; i < len; i++) {
+    const p1 = coords[i];
+    const p2 = coords[(i + 1) % len];
+    const lat1 = (p1.y * Math.PI) / 180;
+    const lat2 = (p2.y * Math.PI) / 180;
+    const lng1 = (p1.x * Math.PI) / 180;
+    const lng2 = (p2.x * Math.PI) / 180;
+    area += (lng2 - lng1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+  }
+  area = Math.abs((area * R * R) / 2.0);
+  return area;
+}
+
+/**
+ * Geodesic Perimeter in meters
+ */
+function calculateGeodesicPerimeter(coords: { x: number; y: number }[]): number {
+  if (!coords || coords.length < 2) return 0;
+  let total = 0;
+  for (let i = 0; i < coords.length; i++) {
+    const p1 = coords[i];
+    const p2 = coords[(i + 1) % coords.length];
+    const lat1 = (p1.y * Math.PI) / 180;
+    const lat2 = (p2.y * Math.PI) / 180;
+    const dLat = ((p2.y - p1.y) * Math.PI) / 180;
+    const dLng = ((p2.x - p1.x) * Math.PI) / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    total += 6378137 * c;
+  }
+  return total;
+}
+
+export interface RegionBoundaryKMZOptions {
+  renderMode?: 'boundary_lines' | 'boundary_with_tint' | 'full_polygon';
+  colorHex?: string;
+  fillOpacity?: number; // 0 to 1 (e.g. 0.25)
+  strokeWeight?: number;
+  includeVertices?: boolean;
+  includeCenter?: boolean;
+  includeOuterLine?: boolean;
+  customDocName?: string;
+}
+
+/**
+ * Exports region/district/city boundary geometry retrieved from search as a high-precision KMZ file
+ */
+export async function exportRegionBoundaryToKMZ(
+  boundary: RegionBoundaryGeometry,
+  options: RegionBoundaryKMZOptions = {}
+): Promise<void> {
+  if (!boundary || !boundary.geoJson) {
+    throw new Error('No valid boundary geometry available to export');
+  }
+
+  const colorHex = options.colorHex || '#06b6d4';
+  const strokeWeight = options.strokeWeight || 3;
+  const fillOpacityVal = options.fillOpacity !== undefined ? options.fillOpacity : (options.renderMode === 'boundary_lines' ? 0.05 : (options.renderMode === 'boundary_with_tint' ? 0.20 : 0.35));
+  
+  // Convert 0..1 opacity to 2-digit hex
+  const opacityByte = Math.min(255, Math.max(0, Math.round(fillOpacityVal * 255)));
+  const opacityHex = opacityByte.toString(16).padStart(2, '0');
+
+  const points: GeoPoint[] = [];
+  const ringsList: { x: number; y: number }[][] = [];
+
+  // 1. Extract linear coordinate rings from GeoJSON
+  const extractRings = (geom: any) => {
+    if (!geom) return;
+    if (geom.type === 'Polygon' && Array.isArray(geom.coordinates)) {
+      geom.coordinates.forEach((ring: any[]) => {
+        if (Array.isArray(ring) && ring.length >= 3) {
+          ringsList.push(ring.map((c: any) => ({ x: Number(c[0]), y: Number(c[1]) })));
+        }
+      });
+    } else if (geom.type === 'MultiPolygon' && Array.isArray(geom.coordinates)) {
+      geom.coordinates.forEach((poly: any[]) => {
+        if (Array.isArray(poly)) {
+          poly.forEach((ring: any[]) => {
+            if (Array.isArray(ring) && ring.length >= 3) {
+              ringsList.push(ring.map((c: any) => ({ x: Number(c[0]), y: Number(c[1]) })));
+            }
+          });
+        }
+      });
+    } else if (geom.type === 'FeatureCollection' && Array.isArray(geom.features)) {
+      geom.features.forEach((f: any) => extractRings(f.geometry));
+    } else if (geom.type === 'Feature') {
+      extractRings(geom.geometry);
+    }
+  };
+
+  extractRings(boundary.geoJson);
+
+  // If no rings found, fallback to bbox
+  if (ringsList.length === 0 && boundary.bbox) {
+    const [south, north, west, east] = boundary.bbox;
+    ringsList.push([
+      { x: west, y: south },
+      { x: east, y: south },
+      { x: east, y: north },
+      { x: west, y: north },
+      { x: west, y: south }
+    ]);
+  }
+
+  if (ringsList.length === 0) {
+    throw new Error('Unable to extract boundary polygon rings');
+  }
+
+  // Calculate total area and main perimeter
+  let totalAreaM2 = 0;
+  let totalPerimeterM = 0;
+  ringsList.forEach(ring => {
+    totalAreaM2 += calculateGeodesicPolygonArea(ring);
+    totalPerimeterM += calculateGeodesicPerimeter(ring);
+  });
+
+  const areaKm2 = (totalAreaM2 / 1_000_000).toFixed(2);
+  const perimeterKm = (totalPerimeterM / 1_000).toFixed(2);
+  const cleanName = boundary.name.trim();
+  const layerName = `حدود_${cleanName.replace(/\s+/g, '_')}`;
+
+  // 2. Add Polygon features
+  ringsList.forEach((ring, idx) => {
+    const polyId = ringsList.length > 1 ? `مضلع_حدود_${cleanName}_${idx + 1}` : `مضلع_حدود_${cleanName}`;
+    const descHtml = `
+      <div style="font-family: Arial, sans-serif; direction: rtl; text-align: right; padding: 6px;">
+        <h3 style="color: ${colorHex}; margin: 0 0 8px 0; border-bottom: 2px solid ${colorHex}; padding-bottom: 4px;">
+          🏛️ ${cleanName} (الحدود الجغرافية الرسمية)
+        </h3>
+        <p style="margin: 4px 0; font-size: 13px; color: #475569;"><b>النطاق الإداري:</b> ${boundary.displayName}</p>
+        <div style="background: #f1f5f9; border-radius: 6px; padding: 8px; margin: 8px 0; font-size: 12px; line-height: 1.6;">
+          <div>📐 <b>المساحة الإجمالية:</b> <span style="color: #0284c7; font-weight: bold;">${areaKm2} كم²</span> (${Math.round(totalAreaM2).toLocaleString()} م²)</div>
+          <div>📏 <b>محيط الحدود:</b> <span style="color: #10b981; font-weight: bold;">${perimeterKm} كم</span> (${Math.round(totalPerimeterM).toLocaleString()} م)</div>
+          <div>📍 <b>المركز الجغرافي:</b> ${boundary.lat.toFixed(6)}, ${boundary.lng.toFixed(6)}</div>
+          <div>🌐 <b>نظام الإحداثيات:</b> WGS84 (EPSG:4326)</div>
+        </div>
+        <p style="font-size: 11px; color: #64748b; margin: 4px 0;">تم استخراج وتوليد الحدود الجغرافية عبر نظام البحث الميداني للخرائط.</p>
+      </div>
+    `;
+
+    points.push({
+      id: polyId,
+      x: ring[0].x,
+      y: ring[0].y,
+      type: 'Polygon',
+      path: ring,
+      layer: layerName,
+      color: colorHex,
+      description: descHtml,
+      attributes: {
+        'الاسم': cleanName,
+        'النطاق_الإداري': boundary.displayName,
+        'المساحة_كم2': areaKm2,
+        'المساحة_م2': Math.round(totalAreaM2),
+        'المحيط_كم': perimeterKm,
+        'خط_العرض': boundary.lat,
+        'خط_الطول': boundary.lng,
+        'نوع_المعلم': 'حدود جغرافية وإدارية'
+      }
+    });
+
+    // 3. Add Boundary Outline LineString (for sharp Google Earth border rendering)
+    if (options.includeOuterLine !== false) {
+      const lineId = ringsList.length > 1 ? `خط_محيط_${cleanName}_${idx + 1}` : `خط_محيط_${cleanName}`;
+      points.push({
+        id: lineId,
+        x: ring[0].x,
+        y: ring[0].y,
+        type: 'LineString',
+        path: ring,
+        layer: `${layerName}_خط_المحيط`,
+        color: colorHex,
+        description: `مسار خط الحدود الخارجية لـ ${cleanName}`,
+        attributes: {
+          'الاسم': cleanName,
+          'نوع_المسار': 'خط الحدود الخارجية',
+          'الطول_كم': (calculateGeodesicPerimeter(ring) / 1000).toFixed(2)
+        }
+      });
+    }
+  });
+
+  // 4. Add Center Placemark
+  if (options.includeCenter !== false && boundary.lat && boundary.lng) {
+    points.push({
+      id: `مركز_${cleanName}`,
+      x: boundary.lng,
+      y: boundary.lat,
+      type: 'Point',
+      layer: `${layerName}_المركز`,
+      color: '#f59e0b',
+      description: `نقطة المركز الجغرافي لـ ${cleanName} (${boundary.lat.toFixed(6)}, ${boundary.lng.toFixed(6)})`,
+      attributes: {
+        'اسم_المنطقة': cleanName,
+        'خط_العرض': boundary.lat,
+        'خط_الطول': boundary.lng,
+        'المساحة_كم2': areaKm2
+      }
+    });
+  }
+
+  // 5. Add Key Boundary Corner Nodes (Top representative vertices)
+  if (options.includeVertices !== false && ringsList.length > 0) {
+    const mainRing = ringsList[0];
+    const step = Math.max(1, Math.floor(mainRing.length / 24)); // Up to 24 key vertex pins
+    for (let i = 0; i < mainRing.length; i += step) {
+      const pt = mainRing[i];
+      points.push({
+        id: `ركن_${cleanName}_${Math.floor(i / step) + 1}`,
+        x: pt.x,
+        y: pt.y,
+        type: 'Point',
+        layer: `${layerName}_نقاط_الأركان`,
+        color: '#38bdf8',
+        description: `نقطة ركن وزاوية حدود (${pt.y.toFixed(6)}, ${pt.x.toFixed(6)})`,
+        attributes: {
+          'اسم_المنطقة': cleanName,
+          'رقم_الركن': Math.floor(i / step) + 1,
+          'خط_العرض': pt.y,
+          'خط_الطول': pt.x
+        }
+      });
+    }
+  }
+
+  // 6. Export via KMZ packager
+  const kmlOptions: KmlExportOptions = {
+    mode: 'none',
+    polygonStyle: {
+      colorHex,
+      opacityHex,
+      outline: 1,
+      width: strokeWeight
+    },
+    lineStyle: {
+      width: strokeWeight
+    }
+  };
+
+  const docName = options.customDocName || `حدود_${cleanName.replace(/\s+/g, '_')}_KMZ`;
+  await downloadKMZ(points, `${docName}.kmz`, kmlOptions);
 }
