@@ -32,7 +32,7 @@
     "shpjs": "^6.2.0",
     "tailwind-merge": "^3.4.0",
     "tsx": "^4.23.1",
-    "xlsx": "latest"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
