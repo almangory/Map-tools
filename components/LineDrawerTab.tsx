@@ -7,14 +7,16 @@ import {
   Square, Sliders, Palette, Info, ListOrdered, Hash, Ruler, Tag,
   FileCheck, ShieldAlert, CheckCircle2, ChevronRight, CornerDownLeft,
   Building2, Home, Route, Split, SlidersHorizontal, Layers3, Box, HelpCircle,
-  Loader2, Activity, Cpu, Clock
+  Loader2, Activity, Cpu, Clock, Filter, Compass
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import * as XLSX from 'xlsx';
 
 import { GeoPoint, ParsedFile } from '../types';
-import { parseExcel } from '../services/parserService';
+import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, geoJsonToGeoPoints } from '../services/parserService';
+import { transformPoints, identifyPotentialCRS } from '../services/crs';
+import { COMMON_EPSG } from '../constants';
 import { calculatePathLength, downloadKMZ } from '../services/kmlService';
 import { downloadShapefile } from '../services/shapefileExportService';
 import { downloadDXF } from '../services/dxfExportService';
@@ -190,6 +192,21 @@ export const LineDrawerTab: React.FC<Props> = ({
   const [segmentCol, setSegmentCol] = useState<string>('');
   const [notesCol, setNotesCol] = useState<string>('');
 
+  // --- Universal Imported File & Layer Visibility State ---
+  const [importedFileInfo, setImportedFileInfo] = useState<{
+    filename: string;
+    fileType: string;
+    totalFeatures: number;
+    totalLines: number;
+    totalPoints: number;
+    totalPolygons: number;
+    totalLengthMeters: number;
+    detectedCrs: string;
+    layers: Array<{ name: string; count: number; lengthMeters: number; color: string; visible: boolean }>;
+  } | null>(null);
+  const [rawImportedPoints, setRawImportedPoints] = useState<GeoPoint[]>([]);
+  const [importedCrs, setImportedCrs] = useState<string>('EPSG:32638');
+
   // --- Manual Coordinate Input State ---
   const [manualStartX, setManualStartX] = useState<string>('');
   const [manualStartY, setManualStartY] = useState<string>('');
@@ -282,7 +299,7 @@ export const LineDrawerTab: React.FC<Props> = ({
     return calculatePathLength(currentVertices);
   }, [currentVertices]);
 
-  // --- Excel File Upload & Auto-Mapping Handler ---
+  // --- Universal File Upload & Instant Map Display Handler ---
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFile = e.target.files?.[0];
     if (!uploadedFile) return;
@@ -291,64 +308,279 @@ export const LineDrawerTab: React.FC<Props> = ({
     setError(null);
     setSuccess(null);
 
+    const fName = uploadedFile.name.toLowerCase();
+
     try {
-      const parsed = await parseExcel(uploadedFile);
-      setFile(parsed);
+      let rawPoints: GeoPoint[] = [];
+      let detectedFileType = 'unknown';
 
-      // Auto-detect columns intelligently
-      const headers = parsed.headers || [];
-      
-      const findCol = (regexes: RegExp[]) => {
-        return headers.find(h => regexes.some(r => r.test(h.trim()))) || '';
-      };
+      if (fName.endsWith('.dxf')) {
+        detectedFileType = 'AutoCAD DXF';
+        const parsed = await parseDXF(uploadedFile);
+        rawPoints = extractPointsFromDXF(parsed.data);
+      } else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.shp') || fName.endsWith('.gdb')) {
+        detectedFileType = fName.endsWith('.kml') ? 'Google Earth KML' : fName.endsWith('.kmz') ? 'Google Earth KMZ' : fName.endsWith('.zip') ? 'GIS Shapefile ZIP' : 'GIS Vector';
+        const parsed = await parseKMZ(uploadedFile);
+        rawPoints = parsed.data;
+      } else if (fName.endsWith('.geojson') || fName.endsWith('.json')) {
+        detectedFileType = 'GeoJSON';
+        const text = await uploadedFile.text();
+        const json = JSON.parse(text);
+        rawPoints = geoJsonToGeoPoints(json, uploadedFile.name);
+      } else if (fName.endsWith('.xlsx') || fName.endsWith('.xls') || fName.endsWith('.csv')) {
+        detectedFileType = fName.endsWith('.csv') ? 'CSV Table' : 'Excel Spreadsheet';
+        const parsed = await parseExcel(uploadedFile);
+        setFile(parsed);
 
-      // 1. Start X
-      const sx = findCol([/^start.*x/i, /^from.*x/i, /^x.*1/i, /^sx$/i, /^x.*start/i, /^بداية.*x/i, /^س.*بداية/i, /^x_start/i, /^start_lon/i, /^lon.*1/i]);
-      // 2. Start Y
-      const sy = findCol([/^start.*y/i, /^from.*y/i, /^y.*1/i, /^sy$/i, /^y.*start/i, /^بداية.*y/i, /^ص.*بداية/i, /^y_start/i, /^start_lat/i, /^lat.*1/i]);
-      // 3. End X
-      const ex = findCol([/^end.*x/i, /^to.*x/i, /^x.*2/i, /^ex$/i, /^x.*end/i, /^نهاية.*x/i, /^س.*نهاية/i, /^x_end/i, /^end_lon/i, /^lon.*2/i]);
-      // 4. End Y
-      const ey = findCol([/^end.*y/i, /^to.*y/i, /^y.*2/i, /^ey$/i, /^y.*end/i, /^نهاية.*y/i, /^ص.*نهاية/i, /^y_end/i, /^end_lat/i, /^lat.*2/i]);
+        // Auto-detect columns intelligently
+        const headers = parsed.headers || [];
+        const findCol = (regexes: RegExp[]) => headers.find(h => regexes.some(r => r.test(h.trim()))) || '';
 
-      // 5. ID & Layer
-      const id = findCol([/^id$/i, /^line.*id/i, /^name$/i, /^معرف/i, /^رقم/i, /^اسم/i]);
-      const layer = findCol([/^layer/i, /^طبقة/i, /^نوع/i, /^type/i, /^network/i]);
-      const color = findCol([/^color/i, /^لون/i, /^hex/i]);
-      
-      // 6. Diameter, Material, Permit, Segment
-      const diam = findCol([/^dia/i, /^size/i, /^قطر/i, /^القطر/i, /^dn/i]);
-      const mat = findCol([/^mat/i, /^مادة/i, /^المادة/i, /^pipe.*type/i]);
-      const permit = findCol([/^permit/i, /^تصريح/i, /^ترخيص/i, /^رقم.*تصريح/i, /^permit.*no/i]);
-      const seg = findCol([/^segment/i, /^شريحة/i, /^segment.*id/i, /^قطاع/i]);
-      const nots = findCol([/^note/i, /^ملاحظ/i, /^وصف/i, /^desc/i]);
+        const sx = findCol([/^start.*x/i, /^from.*x/i, /^x.*1/i, /^sx$/i, /^x.*start/i, /^بداية.*x/i, /^س.*بداية/i, /^x_start/i, /^start_lon/i, /^lon.*1/i]);
+        const sy = findCol([/^start.*y/i, /^from.*y/i, /^y.*1/i, /^sy$/i, /^y.*start/i, /^بداية.*y/i, /^ص.*بداية/i, /^y_start/i, /^start_lat/i, /^lat.*1/i]);
+        const ex = findCol([/^end.*x/i, /^to.*x/i, /^x.*2/i, /^ex$/i, /^x.*end/i, /^نهاية.*x/i, /^س.*نهاية/i, /^x_end/i, /^end_lon/i, /^lon.*2/i]);
+        const ey = findCol([/^end.*y/i, /^to.*y/i, /^y.*2/i, /^ey$/i, /^y.*end/i, /^نهاية.*y/i, /^ص.*نهاية/i, /^y_end/i, /^end_lat/i, /^lat.*2/i]);
+        const id = findCol([/^id$/i, /^line.*id/i, /^name$/i, /^معرف/i, /^رقم/i, /^اسم/i]);
+        const layer = findCol([/^layer/i, /^طبقة/i, /^نوع/i, /^type/i, /^network/i]);
+        const color = findCol([/^color/i, /^لون/i, /^hex/i]);
+        const diam = findCol([/^dia/i, /^size/i, /^قطر/i, /^القطر/i, /^dn/i]);
+        const mat = findCol([/^mat/i, /^مادة/i, /^المادة/i, /^pipe.*type/i]);
+        const permit = findCol([/^permit/i, /^تصريح/i, /^ترخيص/i, /^رقم.*تصريح/i, /^permit.*no/i]);
+        const seg = findCol([/^segment/i, /^شريحة/i, /^segment.*id/i, /^قطاع/i]);
+        const nots = findCol([/^note/i, /^ملاحظ/i, /^وصف/i, /^desc/i]);
 
-      if (sx) setStartXCol(sx);
-      if (sy) setStartYCol(sy);
-      if (ex) setEndXCol(ex);
-      if (ey) setEndYCol(ey);
-      if (id) setIdCol(id);
-      if (layer) setLayerCol(layer);
-      if (color) setColorCol(color);
-      if (diam) setDiameterCol(diam);
-      if (mat) setMaterialCol(mat);
-      if (permit) setPermitCol(permit);
-      if (seg) setSegmentCol(seg);
-      if (nots) setNotesCol(nots);
+        if (sx) setStartXCol(sx);
+        if (sy) setStartYCol(sy);
+        if (ex) setEndXCol(ex);
+        if (ey) setEndYCol(ey);
+        if (id) setIdCol(id);
+        if (layer) setLayerCol(layer);
+        if (color) setColorCol(color);
+        if (diam) setDiameterCol(diam);
+        if (mat) setMaterialCol(mat);
+        if (permit) setPermitCol(permit);
+        if (seg) setSegmentCol(seg);
+        if (nots) setNotesCol(nots);
 
+        // Auto-extract lines/points from Excel data directly!
+        if (sx && sy && ex && ey) {
+          parsed.data.forEach((row, index) => {
+            const numSx = parseFloat(row[sx]);
+            const numSy = parseFloat(row[sy]);
+            const numEx = parseFloat(row[endXCol || ex]);
+            const numEy = parseFloat(row[endYCol || ey]);
+            if (isNaN(numSx) || isNaN(numSy) || isNaN(numEx) || isNaN(numEy)) return;
+
+            const lineId = id && row[id] ? String(row[id]) : `LINE_${index + 1}`;
+            const lineLayer = layer && row[layer] ? String(row[layer]) : (lineConfig.layer || 'شبكة المياه');
+            const lineColor = color && row[color] ? String(row[color]) : (lineConfig.color || '#3b82f6');
+            const lineDiam = diam && row[diam] ? String(row[diam]) : lineConfig.diameter;
+            const lineMat = mat && row[mat] ? String(row[mat]) : lineConfig.material;
+            const linePermit = permit && row[permit] ? String(row[permit]) : lineConfig.permitNo;
+            const lineSeg = seg && row[seg] ? String(row[seg]) : lineConfig.segmentId;
+            const lineNotes = nots && row[nots] ? String(row[nots]) : lineConfig.notes;
+
+            const path = [{ x: numSx, y: numSy }, { x: numEx, y: numEy }];
+            const customAttributes: Record<string, any> = { ...row };
+            if (lineDiam) { customAttributes['Diameter'] = lineDiam; customAttributes['القطر'] = lineDiam; }
+            if (lineMat) { customAttributes['Material'] = lineMat; customAttributes['المادة'] = lineMat; }
+            if (linePermit) { customAttributes['Permit No'] = linePermit; customAttributes['رقم التصريح'] = linePermit; }
+            if (lineSeg) { customAttributes['segment id'] = lineSeg; customAttributes['معرف الشريحة'] = lineSeg; }
+            if (lineNotes) { customAttributes['Notes'] = lineNotes; customAttributes['ملاحظات'] = lineNotes; }
+
+            rawPoints.push({
+              id: lineId,
+              x: numSx,
+              y: numSy,
+              type: 'LineString',
+              path,
+              color: lineColor,
+              layer: lineLayer,
+              attributes: customAttributes
+            });
+          });
+        } else if (parsed.suggestedMapping?.xColumn && parsed.suggestedMapping?.yColumn) {
+          const xCol = parsed.suggestedMapping.xColumn;
+          const yCol = parsed.suggestedMapping.yColumn;
+          parsed.data.forEach((row, index) => {
+            const numX = parseFloat(row[xCol]);
+            const numY = parseFloat(row[yCol]);
+            if (isNaN(numX) || isNaN(numY)) return;
+            rawPoints.push({
+              id: id && row[id] ? String(row[id]) : `PT_${index + 1}`,
+              x: numX,
+              y: numY,
+              type: 'Point',
+              color: color && row[color] ? String(row[color]) : '#3b82f6',
+              layer: layer && row[layer] ? String(row[layer]) : 'Imported',
+              attributes: { ...row }
+            });
+          });
+        }
+      } else {
+        throw new Error(lang === 'ar' ? 'نوع الملف غير مدعوم.' : 'Unsupported file format.');
+      }
+
+      if (rawPoints.length === 0) {
+        throw new Error(lang === 'ar' ? 'لم يتم العثور على عناصر أو خطوط هندسية داخل الملف المرفوع.' : 'No geometric elements or lines found in file.');
+      }
+
+      setRawImportedPoints(rawPoints);
+
+      // Coordinate transformation check
+      let detectedCrs = identifyPotentialCRS(rawPoints) || cadSourceCrs || 'EPSG:32638';
+      setImportedCrs(detectedCrs);
+
+      let transformedPts = rawPoints;
+      if (detectedCrs && detectedCrs !== 'EPSG:4326') {
+        const crsDef = COMMON_EPSG.find(e => e.code === detectedCrs)?.def || detectedCrs;
+        transformedPts = transformPoints(rawPoints, crsDef);
+      }
+
+      // Group layers summary
+      const layerMap = new Map<string, { count: number; lengthMeters: number; color: string }>();
+      let linesCount = 0;
+      let pointsCount = 0;
+      let polygonsCount = 0;
+      let totalLength = 0;
+
+      transformedPts.forEach(pt => {
+        const layName = String(pt.layer || 'Default');
+        const layColor = pt.color || '#3b82f6';
+        const len = pt.path ? calculatePathLength(pt.path) : 0;
+        totalLength += len;
+
+        if (pt.type === 'Polygon') polygonsCount++;
+        else if (pt.type === 'LineString' || pt.path) linesCount++;
+        else pointsCount++;
+
+        const cur = layerMap.get(layName) || { count: 0, lengthMeters: 0, color: layColor };
+        cur.count++;
+        cur.lengthMeters += len;
+        layerMap.set(layName, cur);
+      });
+
+      const layersSummary = Array.from(layerMap.entries()).map(([name, val]) => ({
+        name,
+        count: val.count,
+        lengthMeters: val.lengthMeters,
+        color: val.color,
+        visible: true
+      }));
+
+      setImportedFileInfo({
+        filename: uploadedFile.name,
+        fileType: detectedFileType,
+        totalFeatures: transformedPts.length,
+        totalLines: linesCount,
+        totalPoints: pointsCount,
+        totalPolygons: polygonsCount,
+        totalLengthMeters: totalLength,
+        detectedCrs,
+        layers: layersSummary
+      });
+
+      // RENDER IMMEDIATELY AS SOURCE FILE ON MAP!
+      const linesOnly = transformedPts.filter(p => p.type === 'LineString' || p.path);
+      setDrawnLines(linesOnly.length > 0 ? linesOnly : transformedPts);
+      setGlobalPoints(transformedPts);
+      setDataId(`imported-file-${Date.now()}`);
+
+      if (onFocusPoint && transformedPts.length > 0) {
+        onFocusPoint(transformedPts[0]);
+      }
+
+      const crsName = COMMON_EPSG.find(c => c.code === detectedCrs)?.name || detectedCrs;
       setSuccess(
-        lang === 'ar' 
-          ? `تم تحميل الملف (${uploadedFile.name}) بنجاح بواقع ${parsed.data.length} صف! يرجى تأكيد مطابقة الأعمدة أدناه.` 
-          : `File loaded successfully with ${parsed.data.length} rows!`
+        lang === 'ar'
+          ? `✅ تم تحميل وعرض الملف (${uploadedFile.name}) كما هو بالمصدر بنجاح على الخريطة! بواقع ${transformedPts.length} عنصراً (${linesCount} خط | ${(totalLength / 1000).toFixed(2)} كم | نظام: ${crsName}).`
+          : `✅ Successfully loaded and rendered (${uploadedFile.name}) exactly as source on map with ${transformedPts.length} features!`
       );
     } catch (err: any) {
-      setError(err.message || (lang === 'ar' ? 'فشل قراءة الملف. يرجى التأكد من الصيغة.' : 'Failed to parse file.'));
+      console.error('File Upload Error:', err);
+      setError(err?.message || (lang === 'ar' ? 'فشل تحليل وعرض ملف المصدر.' : 'Failed to parse and display source file.'));
     } finally {
       setLoading(false);
+      e.target.value = '';
     }
   };
 
-  // --- Generate Lines From Excel File ---
+  // --- Toggle Individual Layer Visibility on Map ---
+  const handleToggleLayerVisibility = (layerName: string) => {
+    if (!importedFileInfo || rawImportedPoints.length === 0) return;
+    const updatedLayers = importedFileInfo.layers.map(l => l.name === layerName ? { ...l, visible: !l.visible } : l);
+    setImportedFileInfo({ ...importedFileInfo, layers: updatedLayers });
+
+    const visibleLayerSet = new Set(updatedLayers.filter(l => l.visible).map(l => l.name));
+    
+    // Re-project active visible points
+    const crsDef = COMMON_EPSG.find(e => e.code === importedCrs)?.def || importedCrs;
+    const transformed = importedCrs !== 'EPSG:4326' ? transformPoints(rawImportedPoints, crsDef) : rawImportedPoints;
+    const filtered = transformed.filter(p => visibleLayerSet.has(String(p.layer || 'Default')));
+    
+    const linesOnly = filtered.filter(p => p.type === 'LineString' || p.path);
+    setDrawnLines(linesOnly);
+    setGlobalPoints(filtered);
+    setDataId(`layer-filter-${Date.now()}`);
+  };
+
+  // --- Live Coordinate Reference System (CRS) Switcher ---
+  const handleChangeImportedCrs = (newCrs: string) => {
+    setImportedCrs(newCrs);
+    if (!rawImportedPoints.length) return;
+    
+    const crsDef = COMMON_EPSG.find(e => e.code === newCrs)?.def || newCrs;
+    const transformed = newCrs !== 'EPSG:4326' ? transformPoints(rawImportedPoints, crsDef) : rawImportedPoints;
+    
+    const visibleLayerSet = importedFileInfo ? new Set(importedFileInfo.layers.filter(l => l.visible).map(l => l.name)) : null;
+    const filtered = visibleLayerSet ? transformed.filter(p => visibleLayerSet.has(String(p.layer || 'Default'))) : transformed;
+
+    const linesOnly = filtered.filter(p => p.type === 'LineString' || p.path);
+    setDrawnLines(linesOnly);
+    setGlobalPoints(filtered);
+    setDataId(`crs-change-${Date.now()}`);
+
+    if (importedFileInfo) {
+      setImportedFileInfo({ ...importedFileInfo, detectedCrs: newCrs });
+    }
+
+    setSuccess(
+      lang === 'ar' 
+        ? `تم تحديث نظام الإسقاط وإعادة رسم العناصر فوراً على الخريطة بنظام: ${COMMON_EPSG.find(c => c.code === newCrs)?.name || newCrs}` 
+        : `CRS updated & map re-projected to ${newCrs}`
+    );
+  };
+
+  // --- Apply Hydraulics & Flow Direction to Uploaded Network ---
+  const handleApplyHydraulicsToImported = () => {
+    if (!drawnLines || drawnLines.length === 0) return;
+    try {
+      const cascade = orientNetworkTowardsOutfall(drawnLines);
+      const enriched = cascade.orientedPoints.map(pt => {
+        try {
+          const calc = computeGravityPipeSegment(pt, {
+            defaultDiameterMm: pt.attributes?.['Diameter'] ? parseFloat(pt.attributes['Diameter']) : 200
+          });
+          return enrichGeoPointWithHydraulics(pt, calc);
+        } catch {
+          return pt;
+        }
+      });
+
+      setDrawnLines(enriched);
+      setGlobalPoints(enriched);
+      setDataId(`hydraulic-oriented-${Date.now()}`);
+      setSuccess(
+        lang === 'ar'
+          ? `🌊 تم حساب وتوجيه المناسيب والانحدار لـ ${enriched.length} خطاً مع تعيين المصبات تلقائياً!`
+          : `🌊 Hydraulics and gravity flow calculated & oriented towards outfall!`
+      );
+    } catch (err: any) {
+      setError(err?.message || 'Error applying hydraulics');
+    }
+  };
+
+  // --- Re-Generate Lines From Excel File with custom column mappings ---
   const generateLinesFromFile = () => {
     if (!file || !startXCol || !startYCol || !endXCol || !endYCol) {
       setError(lang === 'ar' ? 'يرجى تحديد أعمدة إحداثيات البداية والنهاية (X, Y).' : 'Please map start and end coordinates.');
@@ -432,7 +664,6 @@ export const LineDrawerTab: React.FC<Props> = ({
           ? `تم استيراد ورسم ${finalOriented.length} خطاً بنجاح وتوجيه الفلو تلقائياً نحو المصب على الخريطة الرئيسية!`
           : `Successfully imported, drew ${finalOriented.length} lines, and auto-oriented flow towards outfall!`
       );
-      setActiveMode('lines-inventory');
     } catch (err: any) {
       setError(err.message || 'Error generating lines.');
     } finally {
@@ -731,6 +962,43 @@ export const LineDrawerTab: React.FC<Props> = ({
 
       if (summary) {
         setCadSelectedLayers(summary.detectedStreetLayers.length > 0 ? summary.detectedStreetLayers : summary.availableLayers.map(l => l.name));
+        
+        // Immediately project and display extracted CAD lines on the map as in the source file!
+        if (summary.extractedLines && summary.extractedLines.length > 0) {
+          const cadGeoPoints: GeoPoint[] = summary.extractedLines.map(l => {
+            const linePath = l.vertices || (l as any).path || [];
+            const startX = linePath.length > 0 ? (linePath[0]?.x || 0) : 0;
+            const startY = linePath.length > 0 ? (linePath[0]?.y || 0) : 0;
+            const lengthStr = typeof l.lengthMeters === 'number' ? `${l.lengthMeters.toFixed(2)} m` : '0.00 m';
+
+            return {
+              id: l.id || `CAD_LINE_${Math.random().toString(36).substring(2, 7)}`,
+              x: startX,
+              y: startY,
+              type: 'LineString',
+              path: linePath,
+              layer: l.layer || 'CAD_Layer',
+              color: (l as any).color || '#3b82f6',
+              attributes: {
+                Layer: l.layer || 'CAD_Layer',
+                Length: lengthStr,
+                'طول المسار': lengthStr.replace('m', 'م'),
+                'الطبقة': l.layer || 'CAD_Layer'
+              }
+            };
+          }).filter(pt => pt.path && pt.path.length > 0);
+
+          if (cadGeoPoints.length > 0) {
+            setDrawnLines(prev => [...cadGeoPoints, ...prev]);
+            if (setGlobalPoints) {
+              setGlobalPoints(prev => [...cadGeoPoints, ...prev]);
+            }
+            setDataId(`cad-extracted-${Date.now()}`);
+            if (onFocusPoint) {
+              onFocusPoint(cadGeoPoints[0]);
+            }
+          }
+        }
       }
       
       const parcelsMsg = analysis ? ` [🏡 ${analysis.detectedParcelsCount} عقار وبلوك | 🛣️ ${analysis.detectedStreetsCount} شارع | 📏 ${analysis.streetWidths.length} لافتات عرض الشوارع]` : '';
@@ -1137,8 +1405,8 @@ export const LineDrawerTab: React.FC<Props> = ({
                   : "text-white/70 hover:text-white hover:bg-white/5"
               )}
             >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span className="leading-tight">{lang === 'ar' ? 'استيراد إكسل' : 'Excel Import'}</span>
+              <FolderArchive className="w-4 h-4 shrink-0" />
+              <span className="leading-tight">{lang === 'ar' ? 'عرض ملف المصدر' : 'Source File View'}</span>
             </button>
 
             <button
@@ -1599,240 +1867,375 @@ export const LineDrawerTab: React.FC<Props> = ({
         )}
 
         {/* ======================================================== */}
-        {/* MODE 2: EXCEL FILE IMPORT & COLUMN MAPPING */}
+        {/* MODE 2: UNIVERSAL FILE IMPORT & SOURCE FILE DISPLAY */}
         {/* ======================================================== */}
         {activeMode === 'file-import' && (
           <div className="space-y-6 animate-in fade-in duration-200">
-            {!file ? (
+            {!importedFileInfo && !file ? (
               <div className="w-full relative group">
                 <input
                   type="file"
-                  accept=".xlsx,.xls,.csv"
+                  accept=".xlsx,.xls,.csv,.dxf,.kml,.kmz,.geojson,.json,.zip,.shp,.gdb"
                   onChange={handleFileUpload}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                   disabled={loading}
                 />
                 <div className={cn(
                   "w-full rounded-3xl border-2 border-dashed transition-all p-8 sm:p-12 flex flex-col items-center justify-center gap-4 text-center",
-                  loading ? "border-accent/20 bg-accent/5" : "border-white/15 bg-white/[0.02] group-hover:border-accent/50 group-hover:bg-accent/5"
+                  loading ? "border-accent/30 bg-accent/5" : "border-white/15 bg-white/[0.02] group-hover:border-accent/50 group-hover:bg-accent/5"
                 )}>
                   <div className={cn(
                     "w-16 h-16 sm:w-20 sm:h-20 rounded-full flex items-center justify-center transition-all shadow-xl",
                     loading ? "bg-accent/20" : "bg-white/5 group-hover:bg-accent/20"
                   )}>
-                    <FileSpreadsheet className={cn(
-                      "w-8 h-8 sm:w-10 sm:h-10",
-                      loading ? "text-accent animate-pulse" : "text-white/40 group-hover:text-accent"
-                    )} />
+                    {loading ? (
+                      <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 text-accent animate-spin" />
+                    ) : (
+                      <Upload className="w-8 h-8 sm:w-10 sm:h-10 text-white/40 group-hover:text-accent transition-colors" />
+                    )}
                   </div>
                   <div>
                     <p className="text-base sm:text-lg font-black text-white mb-1.5">
-                      {loading ? (lang === 'ar' ? 'جاري قراءة ملف الإكسل...' : 'Reading Excel file...') : (lang === 'ar' ? 'اضغط أو اسحب ملف إكسل هنا' : 'Click or drag Excel / CSV file here')}
+                      {loading 
+                        ? (lang === 'ar' ? 'جاري قراءة الملف وتجهيز العرض كما هو بالمصدر على الخريطة...' : 'Parsing file & projecting exactly as in source on map...') 
+                        : (lang === 'ar' ? 'اضغط أو اسحب ملف المخطط / الشبكة هنا' : 'Click or drag CAD / GIS / Excel file here')}
                     </p>
-                    <p className="text-xs text-white/50 font-medium">
+                    <p className="text-xs text-white/60 font-medium max-w-xl mx-auto leading-relaxed">
                       {lang === 'ar' 
-                        ? 'يدعم ملفات إكسل (.xlsx, .xls) و .csv التي تحتوي على إحداثيات البداية والنهاية (Start X, Start Y, End X, End Y)' 
-                        : 'Supports .xlsx, .xls, and .csv with start & end coordinates columns'}
+                        ? 'يدعم المخططات الهندسية (.dxf)، ملفات قوقل إيرث (.kml, .kmz)، نظم المعلومات الجغرافية (.shp, .zip, .geojson)، وجداول الإكسل (.xlsx, .csv) — يتم عرضها فوراً كما هي بالملف المصدر على الخريطة!' 
+                        : 'Supports AutoCAD (.dxf), Google Earth (.kml, .kmz), Shapefile (.zip, .shp), GeoJSON, and Excel (.xlsx, .csv) — immediately displayed as in source on the map!'}
                     </p>
+                  </div>
+
+                  {/* Format Badges */}
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                    <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-bold text-emerald-300 flex items-center gap-1.5">
+                      <FileSpreadsheet className="w-3.5 h-3.5" /> Excel (.xlsx, .csv)
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-[11px] font-bold text-cyan-300 flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5" /> AutoCAD (.dxf)
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/30 text-[11px] font-bold text-blue-300 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5" /> Google Earth (.kml, .kmz)
+                    </span>
+                    <span className="px-2.5 py-1 rounded-lg bg-purple-500/10 border border-purple-500/30 text-[11px] font-bold text-purple-300 flex items-center gap-1.5">
+                      <FolderArchive className="w-3.5 h-3.5" /> GIS Shapefile (.zip, .shp)
+                    </span>
                   </div>
                 </div>
               </div>
             ) : (
               <div className="bg-[#0b2d3d] p-5 sm:p-7 rounded-3xl border border-white/10 space-y-6">
-                {/* File Header */}
-                <div className="flex items-center justify-between pb-4 border-b border-white/10">
-                  <div className="flex items-center gap-3">
-                    <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30">
-                      <FileSpreadsheet className="w-6 h-6" />
+                {/* Active Source File Header Card */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-white/10">
+                  <div className="flex items-center gap-3.5">
+                    <div className="p-3 bg-emerald-500/20 text-emerald-400 rounded-2xl border border-emerald-500/30 shrink-0">
+                      <CheckCircle2 className="w-6 h-6" />
                     </div>
                     <div>
-                      <h3 className="font-black text-white text-sm sm:text-base">{file.filename}</h3>
-                      <p className="text-xs text-white/50">{file.data.length} {lang === 'ar' ? 'صف بيانات' : 'data rows'}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-black text-white text-sm sm:text-base">
+                          {importedFileInfo?.filename || file?.filename || 'Uploaded File'}
+                        </h3>
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-accent/20 text-accent border border-accent/30 uppercase">
+                          {importedFileInfo?.fileType || 'Source Data'}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                          <Eye className="w-3 h-3" />
+                          {lang === 'ar' ? 'معروض كما هو بالمصدر' : 'Active On Map As Source'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/50 mt-0.5">
+                        {importedFileInfo?.totalFeatures || file?.data.length || 0} {lang === 'ar' ? 'عنصراً هندسياً مفعلاً بالخريطة' : 'elements active on map'}
+                      </p>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => { setFile(null); setSuccess(null); setError(null); }}
-                    className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all text-xs font-bold border border-white/10"
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button 
+                      onClick={() => {
+                        if (drawnLines && drawnLines.length > 0 && onFocusPoint) {
+                          onFocusPoint(drawnLines[0]);
+                        }
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-accent/15 hover:bg-accent/25 text-accent border border-accent/30 transition-all text-xs font-black flex items-center gap-1.5 shadow-sm"
+                      title={lang === 'ar' ? 'تركيز الخريطة على بيانات الملف' : 'Focus map to file extent'}
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span>{lang === 'ar' ? 'تركيز الخريطة' : 'Focus Map'}</span>
+                    </button>
+
+                    <button 
+                      onClick={() => { 
+                        setImportedFileInfo(null); 
+                        setFile(null); 
+                        setRawImportedPoints([]);
+                        setSuccess(null); 
+                        setError(null); 
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-all text-xs font-bold border border-white/10"
+                    >
+                      {lang === 'ar' ? 'استبدال / تغيير الملف' : 'Change File'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Source File Key Statistics Dashboard */}
+                {importedFileInfo && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div className="p-3.5 bg-[#071c27] rounded-2xl border border-white/10 space-y-1">
+                      <span className="text-[11px] font-bold text-white/60 flex items-center gap-1">
+                        <Route className="w-3.5 h-3.5 text-accent" />
+                        {lang === 'ar' ? 'عدد الخطوط والمسارات' : 'Lines & Polylines'}
+                      </span>
+                      <p className="text-base sm:text-lg font-black text-white font-mono">
+                        {importedFileInfo.totalLines} <span className="text-xs font-normal text-white/50">{lang === 'ar' ? 'خط' : 'lines'}</span>
+                      </p>
+                    </div>
+
+                    <div className="p-3.5 bg-[#071c27] rounded-2xl border border-white/10 space-y-1">
+                      <span className="text-[11px] font-bold text-white/60 flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                        {lang === 'ar' ? 'النقاط والمناهيل' : 'Points / Nodes'}
+                      </span>
+                      <p className="text-base sm:text-lg font-black text-white font-mono">
+                        {importedFileInfo.totalPoints} <span className="text-xs font-normal text-white/50">{lang === 'ar' ? 'نقطة' : 'pts'}</span>
+                      </p>
+                    </div>
+
+                    <div className="p-3.5 bg-[#071c27] rounded-2xl border border-white/10 space-y-1">
+                      <span className="text-[11px] font-bold text-white/60 flex items-center gap-1">
+                        <Ruler className="w-3.5 h-3.5 text-cyan-400" />
+                        {lang === 'ar' ? 'إجمالي الأطوال' : 'Total Length'}
+                      </span>
+                      <p className="text-base sm:text-lg font-black text-white font-mono">
+                        {importedFileInfo.totalLengthMeters >= 1000 
+                          ? `${(importedFileInfo.totalLengthMeters / 1000).toFixed(2)} ${lang === 'ar' ? 'كم' : 'km'}` 
+                          : `${importedFileInfo.totalLengthMeters.toFixed(1)} ${lang === 'ar' ? 'م' : 'm'}`}
+                      </p>
+                    </div>
+
+                    <div className="p-3.5 bg-[#071c27] rounded-2xl border border-white/10 space-y-1">
+                      <span className="text-[11px] font-bold text-white/60 flex items-center gap-1">
+                        <Layers className="w-3.5 h-3.5 text-purple-400" />
+                        {lang === 'ar' ? 'الطبقات بالمصدر' : 'Source Layers'}
+                      </span>
+                      <p className="text-base sm:text-lg font-black text-white font-mono">
+                        {importedFileInfo.layers.length} <span className="text-xs font-normal text-white/50">{lang === 'ar' ? 'طبقة' : 'layers'}</span>
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Coordinate Reference System (CRS) Live Switcher */}
+                <div className="p-4 bg-[#071c27] rounded-2xl border border-white/10 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-xs font-black text-white flex items-center gap-1.5">
+                      <Compass className="w-4 h-4 text-accent" />
+                      <span>{lang === 'ar' ? 'نظام الإحداثيات والإسقاط (CRS):' : 'Coordinate Reference System (CRS):'}</span>
+                    </label>
+                    <span className="text-[11px] text-white/50">
+                      {lang === 'ar' ? 'تغيير النظام يعيد الإسقاط فوراً على الخريطة' : 'Live re-projection on map'}
+                    </span>
+                  </div>
+
+                  <select 
+                    value={importedCrs}
+                    onChange={(e) => handleChangeImportedCrs(e.target.value)}
+                    className="w-full bg-[#0b2d3d] border border-white/15 rounded-xl px-3.5 py-2.5 text-xs font-bold text-white focus:border-accent outline-none"
                   >
-                    {lang === 'ar' ? 'تغيير الملف' : 'Change File'}
+                    {COMMON_EPSG.map(epsg => (
+                      <option key={epsg.code} value={epsg.code}>
+                        {epsg.code} — {epsg.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Source File Layers Visibility Controller */}
+                {importedFileInfo && importedFileInfo.layers.length > 0 && (
+                  <div className="p-4 bg-[#071c27] rounded-2xl border border-white/10 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-white flex items-center gap-1.5">
+                        <Layers3 className="w-4 h-4 text-cyan-400" />
+                        <span>{lang === 'ar' ? 'طبقات الملف المصدر والتحكم بالظهور على الخريطة:' : 'Source File Layers & Visibility Controls:'}</span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!importedFileInfo) return;
+                            const allVisible = importedFileInfo.layers.map(l => ({ ...l, visible: true }));
+                            setImportedFileInfo({ ...importedFileInfo, layers: allVisible });
+                            const crsDef = COMMON_EPSG.find(e => e.code === importedCrs)?.def || importedCrs;
+                            const transformed = importedCrs !== 'EPSG:4326' ? transformPoints(rawImportedPoints, crsDef) : rawImportedPoints;
+                            const linesOnly = transformed.filter(p => p.type === 'LineString' || p.path);
+                            setDrawnLines(linesOnly);
+                            setGlobalPoints(transformed);
+                            setDataId(`layer-all-${Date.now()}`);
+                          }}
+                          className="text-[10px] font-bold text-accent hover:underline px-2 py-1 rounded bg-white/5"
+                        >
+                          {lang === 'ar' ? 'تحديد الكل' : 'Select All'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!importedFileInfo) return;
+                            const allHidden = importedFileInfo.layers.map(l => ({ ...l, visible: false }));
+                            setImportedFileInfo({ ...importedFileInfo, layers: allHidden });
+                            setDrawnLines([]);
+                            setGlobalPoints([]);
+                            setDataId(`layer-none-${Date.now()}`);
+                          }}
+                          className="text-[10px] font-bold text-white/50 hover:text-white px-2 py-1 rounded bg-white/5"
+                        >
+                          {lang === 'ar' ? 'إلغاء التحديد' : 'Deselect All'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 max-h-48 overflow-y-auto pr-1">
+                      {importedFileInfo.layers.map(lay => (
+                        <label 
+                          key={lay.name}
+                          className={cn(
+                            "flex items-center justify-between p-2.5 rounded-xl border transition-all cursor-pointer text-xs",
+                            lay.visible 
+                              ? "bg-[#0b2d3d] border-white/15 text-white" 
+                              : "bg-white/[0.02] border-white/5 text-white/40 line-through opacity-60"
+                          )}
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            <input 
+                              type="checkbox"
+                              checked={lay.visible}
+                              onChange={() => handleToggleLayerVisibility(lay.name)}
+                              className="accent-accent w-4 h-4 rounded cursor-pointer shrink-0"
+                            />
+                            <span 
+                              className="w-3 h-3 rounded-full shrink-0 border border-white/20" 
+                              style={{ backgroundColor: lay.color }}
+                            />
+                            <span className="font-bold truncate">{lay.name}</span>
+                          </div>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 shrink-0">
+                            {lay.count} {lang === 'ar' ? 'عنصر' : 'items'}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Engineering Actions Toolbar */}
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    onClick={handleApplyHydraulicsToImported}
+                    className="flex-1 py-3 px-4 rounded-xl bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 font-black text-xs border border-blue-500/30 flex items-center justify-center gap-2 active:scale-95 transition-all shadow-md"
+                  >
+                    <Route className="w-4 h-4" />
+                    <span>{lang === 'ar' ? '🌊 تطبيق وتوجيه الهيدروليكا والمناسيب' : '🌊 Apply Hydraulics & Invert Levels'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveMode('map-interactive')}
+                    className="flex-1 py-3 px-4 rounded-xl bg-accent text-primary font-black text-xs flex items-center justify-center gap-2 active:scale-95 transition-all shadow-md"
+                  >
+                    <PenTool className="w-4 h-4" />
+                    <span>{lang === 'ar' ? '➕ متابعة الرسم والإضافة على المخطط' : '➕ Direct Draw On Map'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveMode('lines-inventory')}
+                    className="py-3 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white font-bold text-xs border border-white/10 flex items-center justify-center gap-2 active:scale-95 transition-all"
+                  >
+                    <ListOrdered className="w-4 h-4" />
+                    <span>{lang === 'ar' ? 'سجل الخطوط والتصدير' : 'Inventory & Export'}</span>
                   </button>
                 </div>
 
-                {/* Mandatory Coordinate Mappings */}
-                <div className="space-y-3">
-                  <span className="text-xs font-black text-accent uppercase tracking-wider block">
-                    {lang === 'ar' ? '1. مطابقة أعمدة الإحداثيات الإلزامية' : '1. Mandatory Coordinate Columns'}
-                  </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-                    {/* Start X */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/80">
-                        {lang === 'ar' ? 'X البداية (Start X / Lon)' : 'Start X (Lon)'} <span className="text-red-400">*</span>
-                      </label>
-                      <select 
-                        value={startXCol}
-                        onChange={(e) => setStartXCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
+                {/* Optional: Excel Column Remapping Accordion (if user wants to customize Excel columns) */}
+                {file && (
+                  <div className="pt-4 border-t border-white/10 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-cyan-300 uppercase tracking-wider block">
+                        {lang === 'ar' ? 'تعديل مطابقة أعمدة الإكسل (اختياري)' : 'Optional Excel Column Remapping'}
+                      </span>
                     </div>
 
-                    {/* Start Y */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/80">
-                        {lang === 'ar' ? 'Y البداية (Start Y / Lat)' : 'Start Y (Lat)'} <span className="text-red-400">*</span>
-                      </label>
-                      <select 
-                        value={startYCol}
-                        onChange={(e) => setStartYCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                      {/* Start X */}
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-white/80">
+                          {lang === 'ar' ? 'X البداية (Start X / Lon)' : 'Start X (Lon)'} <span className="text-red-400">*</span>
+                        </label>
+                        <select 
+                          value={startXCol}
+                          onChange={(e) => setStartXCol(e.target.value)}
+                          className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                        >
+                          <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
+                          {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+
+                      {/* Start Y */}
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-white/80">
+                          {lang === 'ar' ? 'Y البداية (Start Y / Lat)' : 'Start Y (Lat)'} <span className="text-red-400">*</span>
+                        </label>
+                        <select 
+                          value={startYCol}
+                          onChange={(e) => setStartYCol(e.target.value)}
+                          className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                        >
+                          <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
+                          {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+
+                      {/* End X */}
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-white/80">
+                          {lang === 'ar' ? 'X النهاية (End X / Lon)' : 'End X (Lon)'} <span className="text-red-400">*</span>
+                        </label>
+                        <select 
+                          value={endXCol}
+                          onChange={(e) => setEndXCol(e.target.value)}
+                          className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                        >
+                          <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
+                          {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
+
+                      {/* End Y */}
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-white/80">
+                          {lang === 'ar' ? 'Y النهاية (End Y / Lat)' : 'End Y (Lat)'} <span className="text-red-400">*</span>
+                        </label>
+                        <select 
+                          value={endYCol}
+                          onChange={(e) => setEndYCol(e.target.value)}
+                          className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3 py-2 text-xs text-white focus:border-accent outline-none"
+                        >
+                          <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
+                          {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
+                        </select>
+                      </div>
                     </div>
 
-                    {/* End X */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/80">
-                        {lang === 'ar' ? 'X النهاية (End X / Lon)' : 'End X (Lon)'} <span className="text-red-400">*</span>
-                      </label>
-                      <select 
-                        value={endXCol}
-                        onChange={(e) => setEndXCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-
-                    {/* End Y */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/80">
-                        {lang === 'ar' ? 'Y النهاية (End Y / Lat)' : 'End Y (Lat)'} <span className="text-red-400">*</span>
-                      </label>
-                      <select 
-                        value={endYCol}
-                        onChange={(e) => setEndYCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'اختر عمود...' : 'Select column...'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
+                    <button
+                      onClick={generateLinesFromFile}
+                      disabled={loading || !startXCol || !startYCol || !endXCol || !endYCol}
+                      className="w-full py-3 rounded-xl bg-accent/20 hover:bg-accent/30 text-accent font-black flex items-center justify-center gap-2 transition-all disabled:opacity-50 text-xs border border-accent/30"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>{lang === 'ar' ? 'إعادة توليد وتحديث الخطوط من الأعمدة المحددة' : 'Re-generate lines with updated columns'}</span>
+                    </button>
                   </div>
-                </div>
-
-                {/* Optional Attribute Mappings */}
-                <div className="space-y-3 pt-3 border-t border-white/10">
-                  <span className="text-xs font-black text-cyan-300 uppercase tracking-wider block">
-                    {lang === 'ar' ? '2. مطابقة أعمدة الخصائص الهندسية والترخيص (اختياري)' : '2. Optional Attributes & Engineering Fields'}
-                  </span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-                    {/* ID */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/70">
-                        {lang === 'ar' ? 'عمود المعرف (ID)' : 'ID Column'}
-                      </label>
-                      <select 
-                        value={idCol}
-                        onChange={(e) => setIdCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'توليد تلقائي' : 'Auto generate'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Layer */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/70">
-                        {lang === 'ar' ? 'عمود الطبقة (Layer)' : 'Layer Column'}
-                      </label>
-                      <select 
-                        value={layerCol}
-                        onChange={(e) => setLayerCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'استخدام الطبقة المحددة' : 'Use default layer'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Diameter */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/70">
-                        {lang === 'ar' ? 'عمود القطر (Diameter)' : 'Diameter Column'}
-                      </label>
-                      <select 
-                        value={diameterCol}
-                        onChange={(e) => setDiameterCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'غير محدد' : 'None'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Material */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/70">
-                        {lang === 'ar' ? 'عمود المادة (Material)' : 'Material Column'}
-                      </label>
-                      <select 
-                        value={materialCol}
-                        onChange={(e) => setMaterialCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'غير محدد' : 'None'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Permit No */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/70">
-                        {lang === 'ar' ? 'عمود رقم التصريح (Permit No)' : 'Permit No Column'}
-                      </label>
-                      <select 
-                        value={permitCol}
-                        onChange={(e) => setPermitCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'غير محدد' : 'None'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-
-                    {/* Segment ID */}
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-white/70">
-                        {lang === 'ar' ? 'عمود الشريحة (Segment ID)' : 'Segment ID Column'}
-                      </label>
-                      <select 
-                        value={segmentCol}
-                        onChange={(e) => setSegmentCol(e.target.value)}
-                        className="w-full bg-[#071c27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white focus:border-accent outline-none"
-                      >
-                        <option value="">{lang === 'ar' ? 'غير محدد' : 'None'}</option>
-                        {file.headers?.map(h => <option key={h} value={h}>{h}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Import Action Button */}
-                <button
-                  onClick={generateLinesFromFile}
-                  disabled={loading || !startXCol || !startYCol || !endXCol || !endYCol}
-                  className="w-full py-4 rounded-2xl bg-accent text-primary font-black flex items-center justify-center gap-2 hover:bg-accent/90 active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-xl shadow-accent/20 text-sm"
-                >
-                  <PenTool className="w-5 h-5" />
-                  {loading ? (lang === 'ar' ? 'جاري التحويل ورسم الخطوط...' : 'Generating...') : (lang === 'ar' ? 'رسم وتحويل الخطوط إلى الخريطة' : 'Import & Draw Lines on Map')}
-                </button>
+                )}
               </div>
             )}
           </div>

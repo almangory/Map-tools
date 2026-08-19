@@ -7,7 +7,8 @@ import {
   Globe, Maximize, Download, Navigation2, MapPin, RotateCcw, Info, 
   X, Sparkles, Compass, Mountain, Activity, ArrowDownRight, Waves, 
   FileSpreadsheet, ChevronDown, ChevronUp, Gauge, Droplet, Ruler,
-  PenTool, Undo2, Check, Target
+  PenTool, Undo2, Check, Target, Route, Milestone, Copy, SlidersHorizontal,
+  Building2, Home, Flag
 } from 'lucide-react';
 import { cn, escapeHtml, sanitizeImageUrl } from '../utils';
 import { 
@@ -20,6 +21,10 @@ import { translations, Language } from '../translations';
 import { parseCoordinatesFromText } from '../services/crs';
 import { NetworkFlowAnalysis } from '../services/flowDirectionService';
 import { calculatePathLength } from '../services/kmlService';
+import { 
+  StreetSearchResult, searchProjectStreets, searchGlobalStreets,
+  StreetSearchFilters, COUNTRY_PRESETS, CountryPreset
+} from '../services/streetSearchService';
 import { 
   analyzeNetworkHydraulics, exportHydraulicFlowExcel, 
   DEFAULT_ASPHALT_PARAMS, DEFAULT_MANNING_N 
@@ -219,6 +224,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
   const lineDrawLayerGroup = useRef<L.LayerGroup | null>(null);
   const asphaltLayerGroup = useRef<L.LayerGroup | null>(null);
   const asphaltDrawLayerGroup = useRef<L.LayerGroup | null>(null);
+  const searchHighlightGroup = useRef<L.LayerGroup | null>(null);
   const hoverMarkerRef = useRef<L.Marker | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const issueMarkersMap = useRef<Map<string | number, L.Marker | L.CircleMarker | L.Polyline>>(new Map());
@@ -282,6 +288,21 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<StreetSearchResult[]>([]);
+  const [showSearchResultsDropdown, setShowSearchResultsDropdown] = useState(false);
+  const [selectedSearchResult, setSelectedSearchResult] = useState<StreetSearchResult | null>(null);
+  const [searchActiveTab, setSearchActiveTab] = useState<'all' | 'project' | 'global'>('all');
+  const [searchFilters, setSearchFilters] = useState<StreetSearchFilters>({
+    countryCode: 'sa',
+    countryName: 'المملكة العربية السعودية',
+    city: '',
+    district: ''
+  });
+  const [showSearchFiltersModal, setShowSearchFiltersModal] = useState(false);
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const filterModalRef = useRef<HTMLDivElement>(null);
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasPolygon, setHasPolygon] = useState(false);
   const [cursorCoords, setCursorCoords] = useState<{lat: number, lng: number} | null>(null);
@@ -322,6 +343,14 @@ const MapPreview: React.FC<MapPreviewProps> = ({
       if (onClearOutfallTargetsRef.current) {
         onClearOutfallTargetsRef.current();
       }
+    };
+    (window as any).__copySearchCoords = (lat: number, lng: number) => {
+      navigator.clipboard?.writeText(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+    };
+    (window as any).__clearSearchHighlight = () => {
+      mapInstance.current?.closePopup();
+      searchHighlightGroup.current?.clearLayers();
+      setSelectedSearchResult(null);
     };
     (window as any).__focusFurthestPipe = (pipeX: number, pipeY: number, outfallX?: number, outfallY?: number) => {
       if (!mapInstance.current) return;
@@ -895,6 +924,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     lineDrawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
     asphaltLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
     asphaltDrawLayerGroup.current = L.layerGroup().addTo(mapInstance.current);
+    searchHighlightGroup.current = L.layerGroup().addTo(mapInstance.current);
 
     // Add scale bar
     L.control.scale({ imperial: false, position: 'bottomright' }).addTo(mapInstance.current);
@@ -2211,21 +2241,284 @@ const MapPreview: React.FC<MapPreviewProps> = ({
     currentDrawGroup.current?.clearLayers();
   };
 
-  const handleSearch = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!searchQuery.trim() || !mapInstance.current) return;
+  // Close search results dropdown and filter modal when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowSearchResultsDropdown(false);
+      }
+      if (filterModalRef.current && !filterModalRef.current.contains(e.target as Node) && !(e.target as HTMLElement).closest('.filter-toggle-btn')) {
+        setShowSearchFiltersModal(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Street & Location Search Execution
+  const performStreetSearch = useCallback(async (
+    query: string, 
+    tab: 'all' | 'project' | 'global',
+    filtersOverride?: StreetSearchFilters
+  ) => {
+    const activeFilters = filtersOverride || searchFilters;
+    const trimmed = query.trim();
+    const hasActiveFilter = !!(activeFilters.countryCode || activeFilters.city || activeFilters.district);
+
+    if (!trimmed && !hasActiveFilter) {
+      setSearchResults([]);
+      setShowSearchResultsDropdown(false);
+      setIsSearching(false);
+      return;
+    }
+
     setIsSearching(true);
     try {
-        const query = searchQuery.trim();
-        const extracted = parseCoordinatesFromText(query);
-        if (extracted) {
-            mapInstance.current.flyTo([extracted.lat, extracted.lon], 16);
-        } else {
-            const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
-            const data = await response.json();
-            if (data && data.length > 0) mapInstance.current.flyTo([parseFloat(data[0].lat), parseFloat(data[0].lon)], 13);
+      let projectMatches: StreetSearchResult[] = [];
+      let globalMatches: StreetSearchResult[] = [];
+
+      // 1. Search local project dataset (streets, lines, points)
+      if (tab === 'all' || tab === 'project') {
+        projectMatches = searchProjectStreets(points, trimmed, lang, activeFilters, 10);
+      }
+
+      // 2. Search global OpenStreetMap geocoder across all map types with classification filters
+      if (tab === 'all' || tab === 'global') {
+        let center: { lat: number; lng: number } | undefined = undefined;
+        if (mapInstance.current) {
+          const mapCenter = mapInstance.current.getCenter();
+          center = { lat: mapCenter.lat, lng: mapCenter.lng };
         }
-    } catch (e) {} finally { setIsSearching(false); }
+        globalMatches = await searchGlobalStreets(trimmed, lang, center, activeFilters, 10);
+      }
+
+      let combined: StreetSearchResult[] = [];
+      if (tab === 'project') {
+        combined = projectMatches;
+      } else if (tab === 'global') {
+        combined = globalMatches;
+      } else {
+        combined = [...projectMatches, ...globalMatches];
+      }
+
+      setSearchResults(combined);
+      setShowSearchResultsDropdown(combined.length > 0);
+    } catch (err) {
+      console.warn('Error during street search:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  }, [points, lang, searchFilters]);
+
+  const handleSearchInputChange = (value: string) => {
+    setSearchQuery(value);
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    if (!value.trim() && !searchFilters.city && !searchFilters.district) {
+      setSearchResults([]);
+      setShowSearchResultsDropdown(false);
+      return;
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      performStreetSearch(value, searchActiveTab);
+    }, 280);
+  };
+
+  const handleSearchTabChange = (newTab: 'all' | 'project' | 'global') => {
+    setSearchActiveTab(newTab);
+    if (searchQuery.trim() || searchFilters.city || searchFilters.district) {
+      performStreetSearch(searchQuery, newTab);
+    }
+  };
+
+  const handleApplyFilterUpdate = (newFilters: Partial<StreetSearchFilters>) => {
+    const updated: StreetSearchFilters = { ...searchFilters, ...newFilters };
+    setSearchFilters(updated);
+    performStreetSearch(searchQuery, searchActiveTab, updated);
+  };
+
+  const handleClearSingleFilter = (key: keyof StreetSearchFilters) => {
+    const updated = { ...searchFilters };
+    if (key === 'countryCode') {
+      updated.countryCode = '';
+      updated.countryName = '';
+      updated.city = '';
+      updated.district = '';
+    } else if (key === 'city') {
+      updated.city = '';
+      updated.district = '';
+    } else if (key === 'district') {
+      updated.district = '';
+    }
+    setSearchFilters(updated);
+    performStreetSearch(searchQuery, searchActiveTab, updated);
+  };
+
+  const handleResetFilters = () => {
+    const emptyFilters: StreetSearchFilters = {
+      countryCode: '',
+      countryName: '',
+      city: '',
+      district: ''
+    };
+    setSearchFilters(emptyFilters);
+    performStreetSearch(searchQuery, searchActiveTab, emptyFilters);
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+    if (searchQuery.trim()) {
+      performStreetSearch(searchQuery, searchActiveTab);
+      // If there's already a top result, select it on Enter
+      if (searchResults.length > 0) {
+        handleSelectSearchResult(searchResults[0]);
+      }
+    }
+  };
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setSearchResults([]);
+    setShowSearchResultsDropdown(false);
+    setSelectedSearchResult(null);
+    if (searchHighlightGroup.current) {
+      searchHighlightGroup.current.clearLayers();
+    }
+    mapInstance.current?.closePopup();
+  };
+
+  const handleSelectSearchResult = (item: StreetSearchResult) => {
+    if (!mapInstance.current) return;
+    
+    setSelectedSearchResult(item);
+    setShowSearchResultsDropdown(false);
+    if (searchHighlightGroup.current) {
+      searchHighlightGroup.current.clearLayers();
+    }
+
+    const { lat, lng, bbox, path, name, secondaryText, badge, badgeColor } = item;
+
+    // A) If result has a full vector path (CAD / GIS LineString)
+    if (path && path.length > 0) {
+      const validLatLngs = path.filter(p => isValidLatLng(p.y, p.x)).map(p => [p.y, p.x] as [number, number]);
+      if (validLatLngs.length >= 2) {
+        // Outer glowing outline
+        L.polyline(validLatLngs, {
+          color: '#ffffff',
+          weight: 9,
+          opacity: 0.9,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(searchHighlightGroup.current!);
+
+        // Inner vibrant animated dashed line
+        L.polyline(validLatLngs, {
+          color: badgeColor || '#06b6d4',
+          weight: 5,
+          opacity: 1,
+          dashArray: '8, 8',
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(searchHighlightGroup.current!);
+
+        const bounds = L.latLngBounds(validLatLngs);
+        mapInstance.current.fitBounds(bounds, { padding: [100, 100], maxZoom: 18, animate: true });
+      }
+    } else if (bbox && bbox.length >= 4 && isValidLatLng(bbox[0], bbox[2]) && isValidLatLng(bbox[1], bbox[3])) {
+      // B) If result has a bounding box (Global Street / District)
+      mapInstance.current.fitBounds([[bbox[0], bbox[2]], [bbox[1], bbox[3]]], {
+        padding: [90, 90],
+        maxZoom: 18,
+        animate: true
+      });
+    } else if (isValidLatLng(lat, lng)) {
+      // C) Point / Coordinates flight
+      mapInstance.current.flyTo([lat, lng], 17, { animate: true, duration: 1.2 });
+    }
+
+    // Add animated Pulsing Street Marker on Map
+    if (isValidLatLng(lat, lng)) {
+      const streetMarkerIcon = L.divIcon({
+        className: 'bg-transparent border-0',
+        html: `
+          <div style="position:relative; width:44px; height:44px; display:flex; align-items:center; justify-content:center;">
+            <div style="position:absolute; width:100%; height:100%; background-color:${badgeColor || '#06b6d4'}; border-radius:50%; opacity:0.45; animation: ping 1.8s cubic-bezier(0,0,0.2,1) infinite;"></div>
+            <div style="position:relative; width:34px; height:34px; background:linear-gradient(135deg, #091e2b, #030d14); border:2.5px solid ${badgeColor || '#06b6d4'}; border-radius:50%; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:16px; box-shadow:0 6px 18px rgba(0,0,0,0.8);">
+              🛣️
+            </div>
+          </div>
+        `,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22]
+      });
+
+      const highlightMarker = L.marker([lat, lng], { icon: streetMarkerIcon, zIndexOffset: 25000 });
+      
+      const popupHtml = `
+        <div class="p-3.5 bg-[#081e2b] text-white rounded-2xl font-sans min-w-[260px] shadow-2xl border border-cyan-500/40" dir="${lang === 'ar' ? 'rtl' : 'ltr'}">
+          <div class="flex items-center justify-between border-b border-cyan-500/30 pb-2 mb-2">
+            <div class="flex items-center gap-2 text-cyan-300 font-bold text-xs">
+              <span class="text-base">🛣️</span>
+              <span class="truncate max-w-[170px]">${escapeHtml(name)}</span>
+            </div>
+            <span class="text-[9px] px-2 py-0.5 rounded-full font-mono font-bold" style="background:${badgeColor || '#06b6d4'}33; color:${badgeColor || '#06b6d4'}; border:1px solid ${badgeColor || '#06b6d4'}66;">
+              ${escapeHtml(badge)}
+            </span>
+          </div>
+
+          <div class="text-[11px] space-y-1.5 text-slate-200">
+            ${secondaryText ? `
+              <div class="text-[10px] text-slate-300 bg-slate-900/80 p-2 rounded-xl border border-white/10">
+                ${escapeHtml(secondaryText)}
+              </div>
+            ` : ''}
+
+            <div class="flex items-center justify-between pt-1">
+              <b class="text-slate-400">${lang === 'ar' ? 'الإحداثيات:' : 'Coords'}:</b>
+              <span class="font-mono text-cyan-200 text-[10px] dir-ltr">${lat.toFixed(6)}, ${lng.toFixed(6)}</span>
+            </div>
+
+            ${item.lengthM ? `
+              <div class="flex items-center justify-between">
+                <b class="text-slate-400">${lang === 'ar' ? 'الطول الإجمالي:' : 'Total Length'}:</b>
+                <span class="font-bold text-emerald-400 font-mono">
+                  ${item.lengthM >= 1000 ? `${(item.lengthM / 1000).toFixed(2)} كم` : `${item.lengthM.toFixed(1)} م`}
+                </span>
+              </div>
+            ` : ''}
+
+            <div class="pt-2 border-t border-white/10 flex gap-1.5 mt-2">
+              <button
+                type="button"
+                onclick="window.__copySearchCoords && window.__copySearchCoords(${lat}, ${lng})"
+                class="flex-1 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 rounded-xl text-[10px] font-bold transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+              >
+                <span>📋</span>
+                <span>${lang === 'ar' ? 'نسخ الإحداثيات' : 'Copy Coords'}</span>
+              </button>
+              <button
+                type="button"
+                onclick="window.__clearSearchHighlight && window.__clearSearchHighlight()"
+                class="py-1.5 px-3 bg-red-950/80 hover:bg-red-900 text-rose-200 border border-red-500/40 rounded-xl text-[10px] font-bold transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+              >
+                <span>✕</span>
+                <span>${lang === 'ar' ? 'إزالة' : 'Clear'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      highlightMarker.bindPopup(popupHtml, { offset: [0, -10] });
+      highlightMarker.addTo(searchHighlightGroup.current!);
+      setTimeout(() => {
+        highlightMarker.openPopup();
+      }, 300);
+    }
   };
 
   return (
@@ -3129,19 +3422,456 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 </div>
              )}
              
-             <form onSubmit={handleSearch} className="bg-white/95 backdrop-blur-md rounded-[2rem] shadow-2xl flex items-center p-2 border border-slate-200/50 w-full pointer-events-auto ring-1 ring-black/5">
-                <button type="submit" className="p-3.5 bg-primary text-white rounded-2xl shadow-lg hover:bg-secondary transition-all shrink-0 active:scale-90">
-                   {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <SearchIcon className="w-4 h-4" />}
-                </button>
-                <input 
-                  type="text" 
-                  value={searchQuery} 
-                  onChange={(e) => setSearchQuery(e.target.value)} 
-                  placeholder={t.searchPlaceholder} 
-                  className="outline-none text-[13px] px-5 py-2 w-full bg-transparent text-slate-900 font-bold placeholder:text-slate-400/60" 
-                  dir={lang === 'ar' ? 'rtl' : 'ltr'}
-                />
-             </form>
+              {/* Interactive Street & Multi-Map Search Bar with Classification & Filters */}
+              <div ref={searchContainerRef} className="relative w-full pointer-events-auto">
+                
+                {/* Active Classification Filter Badges (Country / City / District) */}
+                {(searchFilters.countryCode || searchFilters.city || searchFilters.district) && (
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2 px-1 text-[10px] font-bold" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+                    <span className="text-white/70 text-[9px] select-none flex items-center gap-1">
+                      <span>🎯</span>
+                      <span>{lang === 'ar' ? 'نطاق البحث:' : 'Scope:'}</span>
+                    </span>
+
+                    {/* Country Badge */}
+                    {searchFilters.countryCode && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 backdrop-blur-md">
+                        <span>{COUNTRY_PRESETS.find(c => c.code === searchFilters.countryCode)?.flag || '🌐'}</span>
+                        <span>{lang === 'ar' ? (COUNTRY_PRESETS.find(c => c.code === searchFilters.countryCode)?.nameAr || searchFilters.countryName) : (COUNTRY_PRESETS.find(c => c.code === searchFilters.countryCode)?.nameEn || searchFilters.countryName)}</span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleClearSingleFilter('countryCode')}
+                          className="hover:text-white ml-1 text-[11px]"
+                          title={lang === 'ar' ? 'إزالة تصنيف الدولة' : 'Remove country'}
+                        >✕</button>
+                      </span>
+                    )}
+
+                    {/* City Badge */}
+                    {searchFilters.city && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 backdrop-blur-md">
+                        <Building2 className="w-3 h-3 text-blue-300" />
+                        <span>{searchFilters.city}</span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleClearSingleFilter('city')}
+                          className="hover:text-white ml-1 text-[11px]"
+                          title={lang === 'ar' ? 'إزالة تصنيف المدينة' : 'Remove city'}
+                        >✕</button>
+                      </span>
+                    )}
+
+                    {/* District Badge */}
+                    {searchFilters.district && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 backdrop-blur-md">
+                        <Home className="w-3 h-3 text-amber-300" />
+                        <span>{searchFilters.district}</span>
+                        <button 
+                          type="button" 
+                          onClick={() => handleClearSingleFilter('district')}
+                          className="hover:text-white ml-1 text-[11px]"
+                          title={lang === 'ar' ? 'إزالة تصنيف الحي' : 'Remove district'}
+                        >✕</button>
+                      </span>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleResetFilters}
+                      className="px-2 py-0.5 rounded-full bg-red-500/20 text-rose-300 hover:bg-red-500/30 border border-red-500/30 transition-all text-[9px]"
+                      title={lang === 'ar' ? 'إعادة ضبط كل التصنيفات' : 'Reset all filters'}
+                    >
+                      {lang === 'ar' ? 'مسح الفلاتر ✕' : 'Clear All ✕'}
+                    </button>
+                  </div>
+                )}
+
+                <form 
+                  onSubmit={handleSearchSubmit} 
+                  className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-md rounded-[2rem] shadow-2xl flex items-center p-1.5 sm:p-2 border border-slate-200/80 dark:border-white/10 w-full ring-1 ring-black/5"
+                >
+                  <button 
+                    type="submit" 
+                    className="p-3 sm:p-3.5 bg-gradient-to-tr from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-2xl shadow-lg transition-all shrink-0 active:scale-90 flex items-center justify-center"
+                    title={lang === 'ar' ? 'بحث في جميع أنواع الخرائط والشوارع' : 'Search Streets Across All Map Types'}
+                  >
+                    {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <SearchIcon className="w-4 h-4" />}
+                  </button>
+
+                  <div className="flex-1 flex items-center min-w-0 px-2 sm:px-3">
+                    <input 
+                      type="text" 
+                      value={searchQuery} 
+                      onChange={(e) => handleSearchInputChange(e.target.value)}
+                      onFocus={() => {
+                        if (searchResults.length > 0) setShowSearchResultsDropdown(true);
+                      }}
+                      placeholder={(t as any).searchPlaceholder || 'بحث باسم الشارع، الموقع، المعرف، أو الإحداثيات...'} 
+                      className="outline-none text-[12px] sm:text-[13px] w-full bg-transparent text-slate-900 dark:text-white font-bold placeholder:text-slate-400 placeholder:font-medium" 
+                      dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                    />
+                  </div>
+
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={handleClearSearch}
+                      className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-white rounded-xl transition-all mr-1"
+                      title={lang === 'ar' ? 'مسح نص البحث' : 'Clear search text'}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+
+                  {/* Filter & Classification Trigger Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowSearchFiltersModal(prev => !prev)}
+                    className={cn(
+                      "filter-toggle-btn flex items-center gap-1.5 px-3 py-2 rounded-2xl text-[11px] font-black transition-all shadow-sm select-none shrink-0",
+                      showSearchFiltersModal || (searchFilters.city || searchFilters.district || (searchFilters.countryCode && searchFilters.countryCode !== 'sa'))
+                        ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-amber-500/20"
+                        : "bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-white/10"
+                    )}
+                    title={lang === 'ar' ? 'تصنيف الدولة والمدينة والأحياء' : 'Country, City & District Filters'}
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">
+                      {searchFilters.city 
+                        ? `${searchFilters.city}` 
+                        : (searchFilters.countryCode ? (COUNTRY_PRESETS.find(c => c.code === searchFilters.countryCode)?.flag || '🌍') : (lang === 'ar' ? 'تصنيف' : 'Filter'))}
+                    </span>
+                    {(searchFilters.city || searchFilters.district) && (
+                      <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                    )}
+                  </button>
+                </form>
+
+                {/* ======================================================== */}
+                {/* ADVANCED CLASSIFICATION & FILTERS POPOVER MODAL */}
+                {/* ======================================================== */}
+                {showSearchFiltersModal && (
+                  <div 
+                    ref={filterModalRef}
+                    className="absolute bottom-full mb-3 left-0 right-0 max-h-[30rem] overflow-y-auto bg-slate-950/95 backdrop-blur-2xl border border-cyan-500/40 rounded-3xl shadow-2xl p-4 sm:p-5 space-y-4 z-[950] animate-in fade-in slide-in-from-bottom-3 custom-scrollbar text-white"
+                    dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                  >
+                    <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center text-white shadow-md">
+                          <SlidersHorizontal className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-black text-white">
+                            {(t as any).searchFilterTitle || 'تصنيف وفلترة بحث الشوارع'}
+                          </h4>
+                          <p className="text-[10px] text-slate-400">
+                            {lang === 'ar' ? 'حدد الدولة والمدينة والحي لتوسيع ودقة البحث' : 'Select country, city & district for precise search'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowSearchFiltersModal(false)}
+                        className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-white/10 transition-all"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    {/* Section 1: Country Classification (الدولة) */}
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-cyan-300">
+                        <Flag className="w-3.5 h-3.5" />
+                        <span>{(t as any).filterCountry || 'الدولة'}</span>
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleApplyFilterUpdate({ countryCode: '', countryName: '', city: '', district: '' })}
+                          className={cn(
+                            "px-3 py-1.5 rounded-xl text-[10.5px] font-bold transition-all flex items-center gap-1.5 border",
+                            !searchFilters.countryCode 
+                              ? "bg-cyan-500 text-white border-cyan-400 shadow-md font-black" 
+                              : "bg-slate-900/80 text-slate-300 border-white/10 hover:border-cyan-500/40 hover:bg-slate-800"
+                          )}
+                        >
+                          <span>🌐</span>
+                          <span>{(t as any).allCountries || 'جميع الدول (بحث عالمي)'}</span>
+                        </button>
+
+                        {COUNTRY_PRESETS.map((country) => (
+                          <button
+                            key={country.code}
+                            type="button"
+                            onClick={() => handleApplyFilterUpdate({ 
+                              countryCode: country.code, 
+                              countryName: lang === 'ar' ? country.nameAr : country.nameEn,
+                              city: '',
+                              district: ''
+                            })}
+                            className={cn(
+                              "px-3 py-1.5 rounded-xl text-[10.5px] font-bold transition-all flex items-center gap-1.5 border",
+                              searchFilters.countryCode === country.code 
+                                ? "bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-400 shadow-md font-black" 
+                                : "bg-slate-900/80 text-slate-300 border-white/10 hover:border-emerald-500/40 hover:bg-slate-800"
+                            )}
+                          >
+                            <span>{country.flag}</span>
+                            <span>{lang === 'ar' ? country.nameAr.replace('المملكة العربية ', '').replace('جمهورية ', '').replace('دولة ', '') : country.nameEn}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Section 2: City Classification (المدينة) */}
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-blue-300">
+                        <Building2 className="w-3.5 h-3.5" />
+                        <span>{(t as any).filterCity || 'المدينة'}</span>
+                      </label>
+                      
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={searchFilters.city || ''}
+                          onChange={(e) => handleApplyFilterUpdate({ city: e.target.value, district: '' })}
+                          placeholder={(t as any).selectCity || 'اختر أو اكتب المدينة...'}
+                          className="w-full bg-slate-900 border border-white/10 rounded-2xl px-3.5 py-2 text-xs text-white placeholder:text-slate-500 font-bold outline-none focus:border-blue-500 transition-all"
+                        />
+                        {searchFilters.city && (
+                          <button
+                            type="button"
+                            onClick={() => handleClearSingleFilter('city')}
+                            className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
+                      {/* City Quick Select Chips */}
+                      {(() => {
+                        const selectedCountryPreset = COUNTRY_PRESETS.find(c => c.code === (searchFilters.countryCode || 'sa'));
+                        const cityList = selectedCountryPreset ? selectedCountryPreset.cities : COUNTRY_PRESETS[0].cities;
+                        return (
+                          <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto custom-scrollbar p-1">
+                            {cityList.map((city) => (
+                              <button
+                                key={city.nameAr}
+                                type="button"
+                                onClick={() => handleApplyFilterUpdate({ 
+                                  city: lang === 'ar' ? city.nameAr : city.nameEn,
+                                  district: ''
+                                })}
+                                className={cn(
+                                  "px-2.5 py-1 rounded-xl text-[10px] font-bold transition-all border",
+                                  searchFilters.city === city.nameAr || searchFilters.city === city.nameEn
+                                    ? "bg-blue-600 text-white border-blue-400 shadow-sm font-black"
+                                    : "bg-slate-900/60 text-slate-300 border-white/10 hover:border-blue-400/40 hover:bg-slate-800"
+                                )}
+                              >
+                                {lang === 'ar' ? city.nameAr : city.nameEn}
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Section 3: District / Neighborhood Classification (الحي / المنطقة) */}
+                    <div className="space-y-2">
+                      <label className="flex items-center gap-1.5 text-[11px] font-bold text-amber-300">
+                        <Home className="w-3.5 h-3.5" />
+                        <span>{(t as any).filterDistrict || 'الحي / المنطقة'}</span>
+                      </label>
+                      
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={searchFilters.district || ''}
+                          onChange={(e) => handleApplyFilterUpdate({ district: e.target.value })}
+                          placeholder={(t as any).typeDistrict || 'اكتب اسم الحي (مثال: حي النرجس، حي الروضة)...'}
+                          className="w-full bg-slate-900 border border-white/10 rounded-2xl px-3.5 py-2 text-xs text-white placeholder:text-slate-500 font-bold outline-none focus:border-amber-500 transition-all"
+                        />
+                        {searchFilters.district && (
+                          <button
+                            type="button"
+                            onClick={() => handleClearSingleFilter('district')}
+                            className="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+
+                      {/* District Quick Select Chips for selected city */}
+                      {(() => {
+                        const selectedCountryPreset = COUNTRY_PRESETS.find(c => c.code === (searchFilters.countryCode || 'sa')) || COUNTRY_PRESETS[0];
+                        const matchedCity = selectedCountryPreset.cities.find(
+                          c => c.nameAr === searchFilters.city || c.nameEn === searchFilters.city || searchFilters.city?.includes(c.nameAr)
+                        ) || selectedCountryPreset.cities[0];
+
+                        const districtList = matchedCity?.popularDistricts || [];
+                        if (districtList.length === 0) return null;
+
+                        return (
+                          <div className="space-y-1">
+                            <span className="text-[9.5px] text-slate-400 font-medium">
+                              {lang === 'ar' ? `أحياء شهيرة في ${matchedCity.nameAr}:` : `Popular districts in ${matchedCity.nameEn}:`}
+                            </span>
+                            <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto custom-scrollbar p-1">
+                              {districtList.map((district) => (
+                                <button
+                                  key={district}
+                                  type="button"
+                                  onClick={() => handleApplyFilterUpdate({ district })}
+                                  className={cn(
+                                    "px-2.5 py-1 rounded-xl text-[9.5px] font-bold transition-all border",
+                                    searchFilters.district === district
+                                      ? "bg-amber-600 text-white border-amber-400 shadow-sm font-black"
+                                      : "bg-slate-900/60 text-slate-300 border-white/10 hover:border-amber-400/40 hover:bg-slate-800"
+                                  )}
+                                >
+                                  {district}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Modal Footer Controls */}
+                    <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                      <button
+                        type="button"
+                        onClick={handleResetFilters}
+                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>{(t as any).clearFilters || 'إعادة ضبط'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowSearchFiltersModal(false);
+                          performStreetSearch(searchQuery, searchActiveTab);
+                        }}
+                        className="px-6 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black shadow-lg transition-all active:scale-95 flex items-center gap-1.5"
+                      >
+                        <Check className="w-4 h-4" />
+                        <span>{(t as any).applyFilters || 'تطبيق وتوسيع البحث'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Autocomplete / Search Results Popover Dropdown */}
+                {showSearchResultsDropdown && searchResults.length > 0 && (
+                  <div 
+                    className="absolute bottom-full mb-2 sm:mb-3 left-0 right-0 max-h-80 sm:max-h-96 overflow-y-auto bg-slate-950/95 backdrop-blur-2xl border border-cyan-500/40 rounded-3xl shadow-2xl p-2.5 space-y-2 z-[900] animate-in fade-in slide-in-from-bottom-2 custom-scrollbar text-white"
+                    dir={lang === 'ar' ? 'rtl' : 'ltr'}
+                  >
+                    {/* Header Tabs: [ All | Project Streets | Global Maps ] */}
+                    <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                      <div className="flex items-center gap-1 text-[10px] font-bold">
+                        <button
+                          type="button"
+                          onClick={() => handleSearchTabChange('all')}
+                          className={cn(
+                            "px-2.5 py-1 rounded-xl transition-all",
+                            searchActiveTab === 'all' 
+                              ? "bg-cyan-500 text-white font-black shadow-sm" 
+                              : "text-slate-400 hover:text-white hover:bg-white/10"
+                          )}
+                        >
+                          {(t as any).searchStreetsTabAll || 'الكل'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSearchTabChange('project')}
+                          className={cn(
+                            "px-2.5 py-1 rounded-xl transition-all flex items-center gap-1",
+                            searchActiveTab === 'project' 
+                              ? "bg-cyan-500 text-white font-black shadow-sm" 
+                              : "text-slate-400 hover:text-white hover:bg-white/10"
+                          )}
+                        >
+                          <span>📁</span>
+                          <span>{(t as any).searchStreetsTabProject || 'شوارع المخطط'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSearchTabChange('global')}
+                          className={cn(
+                            "px-2.5 py-1 rounded-xl transition-all flex items-center gap-1",
+                            searchActiveTab === 'global' 
+                              ? "bg-cyan-500 text-white font-black shadow-sm" 
+                              : "text-slate-400 hover:text-white hover:bg-white/10"
+                          )}
+                        >
+                          <span>🌍</span>
+                          <span>{(t as any).searchStreetsTabGlobal || 'خرائط العالم'}</span>
+                        </button>
+                      </div>
+
+                      <span className="text-[9.5px] font-mono text-cyan-300 font-bold px-2 py-0.5 rounded-full bg-cyan-500/20">
+                        {searchResults.length} {lang === 'ar' ? 'نتيجة' : 'results'}
+                      </span>
+                    </div>
+
+                    {/* Results Items List */}
+                    <div className="space-y-1.5">
+                      {searchResults.map((item) => (
+                        <div
+                          key={item.id}
+                          onClick={() => handleSelectSearchResult(item)}
+                          className="p-2.5 rounded-2xl bg-slate-900/90 hover:bg-cyan-950/80 border border-white/10 hover:border-cyan-500/50 cursor-pointer transition-all flex items-center justify-between gap-3 group active:scale-[0.99]"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div 
+                              className="w-8 h-8 rounded-xl flex items-center justify-center text-sm flex-shrink-0 transition-all group-hover:scale-110 shadow-sm"
+                              style={{ backgroundColor: `${item.badgeColor || '#06b6d4'}22`, border: `1px solid ${item.badgeColor || '#06b6d4'}55` }}
+                            >
+                              {item.type === 'project_street' ? '📐' : item.type === 'coordinate' ? '🎯' : '🛣️'}
+                            </div>
+
+                            <div className="flex flex-col min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-white text-xs truncate group-hover:text-cyan-300 transition-colors">
+                                  {item.name}
+                                </span>
+                                <span 
+                                  className="text-[8.5px] px-1.5 py-0.5 rounded-md font-bold truncate flex-shrink-0"
+                                  style={{ backgroundColor: `${item.badgeColor || '#06b6d4'}26`, color: item.badgeColor || '#06b6d4' }}
+                                >
+                                  {item.badge}
+                                </span>
+                              </div>
+
+                              <span className="text-[10px] text-slate-400 truncate leading-tight mt-0.5">
+                                {item.secondaryText}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            <span className="text-[9px] font-mono font-bold text-slate-500 group-hover:text-cyan-400 transition-colors">
+                              {item.lat.toFixed(3)}, {item.lng.toFixed(3)}
+                            </span>
+                            <div className="w-6 h-6 rounded-lg bg-white/5 group-hover:bg-cyan-500 group-hover:text-white flex items-center justify-center text-slate-400 transition-all text-xs">
+                              ↗
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
         </div>
 
         {isDrawing && (

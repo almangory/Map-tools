@@ -395,7 +395,7 @@ export const analyzeSubdivisionDxf = async (
     } else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
       rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
       isClosed = !!(entity.shape || entity.closed || (rawPts.length >= 3 && Math.hypot((rawPts[0]?.x ?? 0) - (rawPts[rawPts.length - 1]?.x ?? 0), (rawPts[0]?.y ?? 0) - (rawPts[rawPts.length - 1]?.y ?? 0)) < 0.1));
-      if (isClosed && rawPts.length >= 2 && (rawPts[0].x !== rawPts[rawPts.length - 1].x || rawPts[0].y !== rawPts[rawPts.length - 1].y)) {
+      if (isClosed && rawPts.length >= 2 && rawPts[0] && rawPts[rawPts.length - 1] && (rawPts[0].x !== rawPts[rawPts.length - 1].x || rawPts[0].y !== rawPts[rawPts.length - 1].y)) {
         rawPts.push({ ...rawPts[0] });
       }
     } else if (entity.type === 'ARC' && entity.center && isValidCoord(entity.center.x) && isValidCoord(entity.center.y) && isValidCoord(entity.radius)) {
