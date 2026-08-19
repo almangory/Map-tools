@@ -518,12 +518,18 @@ const distLocalMeters = (p1: { x: number; y: number }, p2: { x: number; y: numbe
  * Extracts the true street road corridors in front of the properties, completely discarding
  * transverse lot dividers (قواطع الأراضي بين البيوت) and placing pipelines strictly in the street rights-of-way.
  */
+/**
+ * 1.5. Synthesize Continuous Street Corridors in front of Properties (تمديد الشبكات على ممرات الشوارع ومحاورها)
+ * Extracts the true street road corridors in the open spaces between property blocks,
+ * completely discarding transverse lot dividers and internal block spines,
+ * and computing true street centerlines between facing parallel block frontages.
+ */
 export const extractContinuousStreetFrontages = (
   parcels: ExtractedCadEntity[],
   streets: ExtractedCadEntity[],
   offsetMeters: number = 3.5
 ): { x: number; y: number }[][] => {
-  const allEntities = [...parcels, ...streets];
+  const allEntities = [...streets, ...parcels];
   if (allEntities.length === 0) return [];
 
   const avgLat = allEntities[0]?.vertices?.[0]?.y || 24.7;
@@ -540,7 +546,6 @@ export const extractContinuousStreetFrontages = (
     return a;
   };
 
-  // Helper: Normal angle difference [0, PI/2]
   const angleDiff = (a1: number, a2: number): number => {
     let diff = Math.abs(a1 - a2);
     if (diff > Math.PI / 2) diff = Math.PI - diff;
@@ -569,31 +574,17 @@ export const extractContinuousStreetFrontages = (
       const p1 = ent.vertices[i];
       const p2 = ent.vertices[i + 1];
       const lenM = distLocalMeters(p1, p2, degLng, degLat);
-      if (lenM >= 0.8) {
-        segments.push({
-          p1,
-          p2,
-          lenM,
-          angle: getAngle(p1, p2)
-        });
+      if (lenM >= 1.0) {
+        segments.push({ p1, p2, lenM, angle: getAngle(p1, p2) });
       }
     }
   });
 
   if (segments.length === 0) return [];
 
-  // =========================================================================
-  // STEP 1: BUILD TOPOLOGICAL GRAPH OF ALL CAD SEGMENTS
-  // =========================================================================
-  const snapTolM = 4.0; // 4m node snap tolerance
-
-  interface GNode {
-    id: number;
-    x: number;
-    y: number;
-    edges: number[];
-  }
-
+  // 1. Build Node Graph
+  const snapTolM = 3.5;
+  interface GNode { id: number; x: number; y: number; edges: number[]; }
   const nodes: GNode[] = [];
 
   function getNode(pt: { x: number; y: number }): GNode {
@@ -611,10 +602,9 @@ export const extractContinuousStreetFrontages = (
     v: number;
     lenM: number;
     angle: number;
-    isLotDivider: boolean; // Transverse divider between lots
+    isLotDivider: boolean;
     used: boolean;
   }
-
   const edges: GEdge[] = [];
 
   segments.forEach(seg => {
@@ -642,28 +632,19 @@ export const extractContinuousStreetFrontages = (
     }
   });
 
-  // =========================================================================
-  // STEP 2: CLASSIFY & PURGE TRANSVERSE LOT DIVIDERS (حذف قواطع الأراضي بين البيوت)
-  // =========================================================================
-  // In subdivision CAD files, lot dividers are short (length < 45m) and meet longitudinal
-  // block lines at ~90-degree T-junctions or have dead-end tips on the street side.
+  // 2. Strict Filter for Transverse Lot Dividers (قواطع الأراضي العرضية)
   edges.forEach(e => {
-    if (e.lenM > 50.0) return; // Main road or long spine lines are never dividers
-
     const degU = nodes[e.u].edges.length;
     const degV = nodes[e.v].edges.length;
 
-    // Check if it forms a transverse T-junction with another continuous curve at u or v
+    // A lot divider is short (length < 45m) and meets other lines at roughly right angles (T-junctions)
     const checkTJunction = (nodeId: number): boolean => {
       const inc = nodes[nodeId].edges.filter(eid => eid !== e.id).map(eid => edges[eid]);
       if (inc.length >= 2) {
-        // Two other edges continue longitudinally through this node
         const diffOther = angleDiff(inc[0].angle, inc[1].angle);
         if (diffOther < (40 * Math.PI) / 180) {
-          // The other two form a continuous curve! Check angle with our edge e:
           const diffWithCurve = angleDiff(e.angle, inc[0].angle);
-          if (diffWithCurve > (50 * Math.PI) / 180) {
-            // e is transverse (perpendicular) to the continuous curve!
+          if (diffWithCurve > (45 * Math.PI) / 180) {
             return true;
           }
         }
@@ -671,23 +652,17 @@ export const extractContinuousStreetFrontages = (
       return false;
     };
 
-    if (checkTJunction(e.u) || checkTJunction(e.v)) {
-      e.isLotDivider = true;
-    } else if ((degU === 1 || degV === 1) && e.lenM < 45.0) {
-      // Dead-end rib of a lot
+    if (e.lenM <= 45.0 && (checkTJunction(e.u) || checkTJunction(e.v) || degU === 1 || degV === 1)) {
       e.isLotDivider = true;
     }
   });
 
-  // =========================================================================
-  // STEP 3: CHAIN LONGITUDINAL ROAD & FRONTAGE CURVES (سلاسل الشوارع الطولية)
-  // =========================================================================
-  const longitudinalEdges = edges.filter(e => !e.isLotDivider);
+  // 3. Chain Longitudinal Curves (Long Block Boundaries & Curbs)
+  const candidateEdges = edges.filter(e => !e.isLotDivider);
   const longitudinalChains: { x: number; y: number }[][] = [];
 
-  longitudinalEdges.forEach(startEdge => {
+  candidateEdges.forEach(startEdge => {
     if (startEdge.used) return;
-
     const pathNodes: number[] = [startEdge.u, startEdge.v];
     startEdge.used = true;
     let currentAng = startEdge.angle;
@@ -708,9 +683,8 @@ export const extractContinuousStreetFrontages = (
       for (const cand of candidates) {
         const nextId = cand.u === lastId ? cand.v : cand.u;
         if (nextId === prevId || pathNodes.includes(nextId)) continue;
-
         const diff = angleDiff(cand.angle, currentAng);
-        if (diff < (55 * Math.PI) / 180 && diff < minDiff) {
+        if (diff < (50 * Math.PI) / 180 && diff < minDiff) {
           minDiff = diff;
           bestEdge = cand;
         }
@@ -742,9 +716,8 @@ export const extractContinuousStreetFrontages = (
       for (const cand of candidates) {
         const prevId = cand.u === firstId ? cand.v : cand.u;
         if (prevId === secondId || pathNodes.includes(prevId)) continue;
-
         const diff = angleDiff(cand.angle, currentAng);
-        if (diff < (55 * Math.PI) / 180 && diff < minDiff) {
+        if (diff < (50 * Math.PI) / 180 && diff < minDiff) {
           minDiff = diff;
           bestEdge = cand;
         }
@@ -762,119 +735,87 @@ export const extractContinuousStreetFrontages = (
     if (pathNodes.length >= 2) {
       const pathPts = pathNodes.map(nid => ({ x: nodes[nid].x, y: nodes[nid].y }));
       const totalLen = calculateGeoPathLength(pathPts);
-      // Keep only substantial street curves (> 35 meters)
-      if (totalLen >= 35.0 || pathPts.length >= 3) {
+      // Keep only substantial street & block boundary curves (> 25m)
+      if (totalLen >= 25.0) {
         longitudinalChains.push(pathPts);
       }
     }
   });
 
-  // =========================================================================
-  // STEP 4: EXTRACT FRONT TIPS OF LOT DIVIDERS (IF FRONTAGE IS DEFINED BY RIBS)
-  // =========================================================================
-  // In comb-like subdivision drawings where only spine + ribs exist:
-  // The outer free tips of the ribs form the actual front curb of the street!
-  const dividerTips: { x: number; y: number }[] = [];
-  edges.filter(e => e.isLotDivider).forEach(e => {
-    const degU = nodes[e.u].edges.length;
-    const degV = nodes[e.v].edges.length;
-    if (degU === 1 && degV > 1) {
-      dividerTips.push({ x: nodes[e.u].x, y: nodes[e.u].y });
-    } else if (degV === 1 && degU > 1) {
-      dividerTips.push({ x: nodes[e.v].x, y: nodes[e.v].y });
-    }
-  });
+  // 4. Compute Street Centerlines between Parallel Facing Chains (Medial Axis)
+  const streetCenterlines: { x: number; y: number }[][] = [];
+  const pairedChains = new Set<number>();
 
-  // If we have divider tips, chain them into a front street line
-  if (dividerTips.length >= 4) {
-    // Sort tips along their principal curve progression
-    const usedTips = new Set<number>();
-    const tipPaths: { x: number; y: number }[][] = [];
+  for (let i = 0; i < longitudinalChains.length; i++) {
+    if (pairedChains.has(i)) continue;
+    const c1 = longitudinalChains[i];
+    const mid1 = c1[Math.floor(c1.length / 2)];
 
-    for (let i = 0; i < dividerTips.length; i++) {
-      if (usedTips.has(i)) continue;
-      const currentChain: { x: number; y: number }[] = [dividerTips[i]];
-      usedTips.add(i);
+    let bestOppositeIdx = -1;
+    let bestOppositeDist = Infinity;
 
-      let finding = true;
-      while (finding) {
-        finding = false;
-        const lastPt = currentChain[currentChain.length - 1];
-        let bestIdx = -1;
-        let bestDist = Infinity;
+    for (let j = i + 1; j < longitudinalChains.length; j++) {
+      if (pairedChains.has(j)) continue;
+      const c2 = longitudinalChains[j];
+      const mid2 = c2[Math.floor(c2.length / 2)];
 
-        for (let j = 0; j < dividerTips.length; j++) {
-          if (usedTips.has(j)) continue;
-          const d = distLocalMeters(lastPt, dividerTips[j], degLng, degLat);
-          // Tips of adjacent lots are spaced 12m - 35m apart along the street!
-          if (d >= 8.0 && d <= 45.0 && d < bestDist) {
-            bestDist = d;
-            bestIdx = j;
+      const distM = distLocalMeters(mid1, mid2, degLng, degLat);
+      // A standard street corridor width is between 9m and 50m (e.g. 10m, 12m, 15m, 20m, 30m)
+      if (distM >= 9.0 && distM <= 50.0) {
+        // Check if curves are approximately parallel
+        const ang1 = getAngle(c1[0], c1[c1.length - 1]);
+        const ang2 = getAngle(c2[0], c2[c2.length - 1]);
+        if (angleDiff(ang1, ang2) < (35 * Math.PI) / 180) {
+          if (distM < bestOppositeDist) {
+            bestOppositeDist = distM;
+            bestOppositeIdx = j;
           }
         }
-
-        if (bestIdx !== -1) {
-          usedTips.add(bestIdx);
-          currentChain.push(dividerTips[bestIdx]);
-          finding = true;
-        }
-      }
-
-      if (currentChain.length >= 3) {
-        tipPaths.push(currentChain);
       }
     }
 
-    // Add synthesized frontage tip chains
-    tipPaths.forEach(tp => {
-      const len = calculateGeoPathLength(tp);
-      if (len >= 35.0) {
-        longitudinalChains.push(tp);
+    if (bestOppositeIdx !== -1) {
+      // We found a facing street pair! Compute the exact Medial Axis Centerline between them!
+      const c2 = longitudinalChains[bestOppositeIdx];
+      pairedChains.add(i);
+      pairedChains.add(bestOppositeIdx);
+
+      // Ensure both curves have the same direction
+      const dStartStart = distLocalMeters(c1[0], c2[0], degLng, degLat);
+      const dStartEnd = distLocalMeters(c1[0], c2[c2.length - 1], degLng, degLat);
+      const alignedC2 = dStartEnd < dStartStart ? [...c2].reverse() : c2;
+
+      // Resample and interpolate midline
+      const numSamples = Math.max(c1.length, alignedC2.length, 6);
+      const centerline: { x: number; y: number }[] = [];
+
+      for (let s = 0; s < numSamples; s++) {
+        const t = s / (numSamples - 1);
+        const idx1 = Math.min(Math.floor(t * (c1.length - 1)), c1.length - 1);
+        const idx2 = Math.min(Math.floor(t * (alignedC2.length - 1)), alignedC2.length - 1);
+
+        centerline.push({
+          x: (c1[idx1].x + alignedC2[idx2].x) / 2,
+          y: (c1[idx1].y + alignedC2[idx2].y) / 2
+        });
       }
-    });
+
+      if (centerline.length >= 2) {
+        streetCenterlines.push(centerline);
+      }
+    }
   }
 
-  // =========================================================================
-  // STEP 5: OFFSET THE CONTINUOUS CORRIDORS INTO THE STREET IN FRONT OF HOUSES
-  // (تمديد خط الأنابيب في حرم الشارع المفتوح أمام واجهات المنازل)
-  // =========================================================================
-  const streetCorridors: { x: number; y: number }[][] = [];
-
-  longitudinalChains.forEach(chain => {
-    if (chain.length < 2) return;
-
-    // Smooth and sample the street curve
-    const streetPath: { x: number; y: number }[] = [];
-    const n = chain.length;
-
-    for (let i = 0; i < n; i++) {
-      const prev = chain[Math.max(0, i - 1)];
-      const next = chain[Math.min(n - 1, i + 1)];
-
-      const dxM = (next.x - prev.x) * degLng;
-      const dyM = (next.y - prev.y) * degLat;
-      const lenM = Math.hypot(dxM, dyM) || 1;
-
-      // Normal vector pointing into street corridor
-      const nx = -dyM / lenM;
-      const ny = dxM / lenM;
-
-      // Offset into the open street corridor in front of properties
-      const shiftLng = (nx * offsetMeters) / degLng;
-      const shiftLat = (ny * offsetMeters) / degLat;
-
-      streetPath.push({
-        x: chain[i].x + shiftLng,
-        y: chain[i].y + shiftLat
-      });
+  // 5. For remaining unpaired longitudinal curves (e.g. boundary streets facing open land)
+  for (let i = 0; i < longitudinalChains.length; i++) {
+    if (pairedChains.has(i)) continue;
+    const chain = longitudinalChains[i];
+    if (chain.length >= 2) {
+      streetCenterlines.push(chain);
     }
+  }
 
-    if (streetPath.length >= 2) {
-      streetCorridors.push(streetPath);
-    }
-  });
-
-  return streetCorridors.length > 0 ? streetCorridors : longitudinalChains;
+  return streetCenterlines.length > 0 ? streetCenterlines : longitudinalChains;
 };
 
 /**
@@ -1014,7 +955,7 @@ export const generateSubdivisionUtilities = (
   // STRATEGY 2: Street Centerline & Corridor Pipelines (خطوط سناتر الشوارع)
   // =========================================================================
   else if (options.placementMode === 'street_centerline') {
-    const streetPaths = extractContinuousStreetFrontages([], activeStreets.length > 0 ? activeStreets : analysis.streets, 0.0);
+    const streetPaths = extractContinuousStreetFrontages(activeParcels, activeStreets, 0.0);
     const pathsToUse = streetPaths.length > 0 ? streetPaths : activeStreets.map(s => s.vertices).filter(v => v && v.length >= 2);
 
     pathsToUse.forEach((path, idx) => {
@@ -1058,7 +999,7 @@ export const generateSubdivisionUtilities = (
   // STRATEGY 3: Dual-Sided Sidewalk Pipelines (على جانبي الشارع)
   // =========================================================================
   else if (options.placementMode === 'dual_sidewalk') {
-    const streetPaths = extractContinuousStreetFrontages([], activeStreets.length > 0 ? activeStreets : analysis.streets, 0.0);
+    const streetPaths = extractContinuousStreetFrontages(activeParcels, activeStreets, 0.0);
     const pathsToUse = streetPaths.length > 0 ? streetPaths : activeStreets.map(s => s.vertices).filter(v => v && v.length >= 2);
 
     pathsToUse.forEach((streetVertices, idx) => {
