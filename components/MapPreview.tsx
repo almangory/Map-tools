@@ -706,11 +706,16 @@ const MapPreview: React.FC<MapPreviewProps> = ({
 
 
   const baseMapConfigs: Record<BaseMapType, { url: string, name: string, icon: React.ReactNode }> = {
-    satellite: { url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', name: t.layerSatellite, icon: <Globe className="w-5 h-5" /> },
-    streets: { url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', name: t.layerStreets, icon: <MapIcon className="w-5 h-5" /> },
-    terrain: { url: 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', name: t.layerTerrain, icon: <Square className="w-5 h-5" /> },
-    osm: { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', name: t.layerOSM, icon: <Globe className="w-5 h-5 opacity-50" /> }
+    satellite: { url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', name: (t as any).layerSatellite || 'Google Satellite', icon: <Globe className="w-5 h-5" /> },
+    esriSatellite: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', name: (t as any).layerEsriSatellite || 'Esri High-Res', icon: <Globe className="w-5 h-5 text-cyan-400" /> },
+    streets: { url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', name: (t as any).layerStreets || 'Google Streets', icon: <MapIcon className="w-5 h-5" /> },
+    cartoVoyager: { url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', name: (t as any).layerCartoVoyager || 'Carto Voyager', icon: <MapIcon className="w-5 h-5 text-emerald-400" /> },
+    darkMatrix: { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', name: (t as any).layerDarkMatrix || 'CAD Dark Matrix', icon: <Square className="w-5 h-5 text-purple-400" /> },
+    terrain: { url: 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', name: (t as any).layerTerrain || 'Google Terrain', icon: <Mountain className="w-5 h-5 text-amber-400" /> },
+    esriTopo: { url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', name: (t as any).layerEsriTopo || 'Esri Topo', icon: <Mountain className="w-5 h-5 text-teal-400" /> },
+    osm: { url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', name: (t as any).layerOSM || 'OpenStreetMap', icon: <Globe className="w-5 h-5 opacity-50" /> }
   };
+
 
 
   const exportMapToSVG = useCallback(() => {
