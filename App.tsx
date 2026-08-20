@@ -34,7 +34,7 @@ import { formatProjectIdForExcel, cleanSegmentId, getCanonicalSegmentKey } from 
 import { downloadDXF } from './services/dxfExportService';
 import { downloadDataPDF, downloadNetworkGapsPDF } from './services/pdfExportService';
 import { downloadShapefile } from './services/shapefileExportService';
-import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance, checkColorCompliance, EXACT_APPROVED_CODES, NON_COMPLIANT_CATEGORY } from './services/colorUtils';
+import { getCanonicalColorMap, STATUS_CATEGORIES, matchStatusByColor, colorDistance, checkColorCompliance, EXACT_APPROVED_CODES, NON_COMPLIANT_CATEGORY, isRemainingWorkColor, REMAINING_WORK_COLOR, normalizeHexToRgbHex } from './services/colorUtils';
 import { findNearestPerpendicularPoint } from './services/spatialPerpendicularService';
 import { orientNetworkTowardsOutfall, computeGravityPipeSegment, enrichGeoPointWithHydraulics } from './services/gravitySewerEngine';
 import MapPreview from './components/MapPreview';
@@ -2248,6 +2248,244 @@ const App: React.FC = () => {
     }
   };
 
+  const verifyRemainingLinesSegmentId = async () => {
+    setActiveIssueItems([]);
+    setLoading(true);
+    setProgressPercent(15);
+    setStatusMessage(
+      lang === 'ar'
+        ? 'جاري فحص Segment ID لعناصر الأعمال المتبقية (#A52714)...'
+        : 'Auditing Segment ID on Remaining Work elements (#A52714)...'
+    );
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 60))));
+
+    try {
+      setProgressPercent(45);
+      let totalLinesChecked = 0;
+      let totalRemainingLines = 0;
+      let compliantRemainingCount = 0;
+      let missingSegmentCount = 0;
+      let totalMissingLength = 0;
+      let totalCompliantLength = 0;
+      const flaggedIssuesList: GeoPoint[] = [];
+
+      const stripHtmlStr = (html: any): string => {
+        if (!html) return '';
+        return String(html)
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&#160;/gi, ' ')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/[\s\u00A0]+/g, ' ')
+          .trim();
+      };
+
+      const isValidAttrValue = (val: any, keyName?: string): boolean => {
+        if (val === undefined || val === null) return false;
+        const cleanStr = stripHtmlStr(val);
+        if (!cleanStr) return false;
+        if (!/[a-zA-Z0-9\u0600-\u06FF]/.test(cleanStr)) return false;
+        const lower = String(cleanStr || '').toLowerCase();
+        const emptyValues = new Set([
+          '0', '0.0', '00', '000', 'null', 'undefined', 'none', '-', '--', '---', '_', '=',
+          'n/a', 'na', 'no', 'false', 'unknown', 'nil', 'empty', '[empty]', '<null>', '<empty>',
+          'no data', 'nodata', 'no_data', 'not available', 'not applicable',
+          'غير محدد', 'لا يوجد', 'لايوجد', 'بدون', 'غير متاح', 'غير متوفر', 'لا يوجد بيان',
+          'لاشيء', 'لا شيء', 'صفر', 'معدوم', 'غير معروف'
+        ]);
+        if (emptyValues.has(lower)) return false;
+
+        const labelValues = new Set([
+          'segment id', 'segment_id', 'segmentid', 'segment no', 'segment_no', 'segmentno',
+          'segment number', 'segment', 'seg id', 'seg_id', 'segid', 'seg no', 'seg_no', 'segno',
+          'layer', 'شريحة', 'رقم الشريحة', 'كود الشريحة', 'معرف الشريحة', 'رقم شريحة', 'كود شريحة',
+          'معرف شريحة', 'شريحة خريطة'
+        ]);
+        if (labelValues.has(lower)) return false;
+        if (keyName && lower === String(stripHtmlStr(keyName) || '').toLowerCase()) return false;
+        if (/^(segment|feature|line|polyline|point|layer|element|shape|object)[\s_#-]*\d+$/i.test(cleanStr)) return false;
+        return true;
+      };
+
+      const normalizeKeyStr = (key: string): string => String(key || '').toLowerCase().replace(/[\s_#-]/g, '');
+
+      const isSegmentAttributeKey = (key: string): boolean => {
+        if (!key) return false;
+        const norm = normalizeKeyStr(key);
+        if (!norm) return false;
+        const segmentKeys = new Set([
+          'segment', 'segmentid', 'segmentno', 'segmentnumber', 'segid', 'segno', 'seg',
+          'شريحة', 'شريحه', 'رقمالشريحة', 'كودالشريحة', 'معرفالشريحة', 'رقمشريحة', 'كودشريحة', 'معرفشريحة',
+          'رقمالقطع', 'كودالقطع', 'معرفالقطع', 'قطاع', 'رقمالقطاع', 'كودالقطاع', 'معرفالقطاع'
+        ]);
+        return (
+          segmentKeys.has(norm) ||
+          norm.startsWith('segment') ||
+          norm.startsWith('segid') ||
+          norm.includes('segmentid') ||
+          norm.includes('segment_id') ||
+          norm.includes('رقمالشريحة') ||
+          norm.includes('كودالشريحة')
+        );
+      };
+
+      const extractSegmentVal = (pt: GeoPoint): string | null => {
+        if (pt.attributes) {
+          for (const [key, val] of Object.entries(pt.attributes)) {
+            if (isSegmentAttributeKey(key) && isValidAttrValue(val, key)) {
+              return stripHtmlStr(val);
+            }
+          }
+        }
+        if (pt.attr1 && isSegmentAttributeKey('attr1') && isValidAttrValue(pt.attr1)) return stripHtmlStr(pt.attr1);
+        if (pt.attr2 && isSegmentAttributeKey('attr2') && isValidAttrValue(pt.attr2)) return stripHtmlStr(pt.attr2);
+        if (pt.description) {
+          const tableCellRegex = /<tr[^>]*>\s*<t[dh][^>]*>(?:\s*|&nbsp;)*(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)(?:\s*|&nbsp;)*<\/t[dh]>\s*<t[dh][^>]*>([\s\S]*?)<\/t[dh]>\s*<\/tr>/i;
+          const match = pt.description.match(tableCellRegex);
+          if (match && match[1] && isValidAttrValue(stripHtmlStr(match[1]), 'segment id')) {
+            return stripHtmlStr(match[1]);
+          }
+          const textRegex = /(?:segment\s*id|segment_id|segmentid|segment\s*no|segment_no|segmentno|segment\s*number|seg\s*id|seg_id|segid|seg\s*no|seg_no|segno|segment|seg|رقم\s*الشريحة|كود\s*الشريحة|معرف\s*الشريحة|مُعرّف\s*الشريحة|شريحة|شريحه|رقم\s*القطاع|كود\s*القطاع|معرف\s*القطاع|قطاع)\s*[:=]\s*([^\r\n,;<>&|/]+)/i;
+          const match2 = pt.description.match(textRegex);
+          if (match2 && match2[1] && isValidAttrValue(stripHtmlStr(match2[1]), 'segment id')) {
+            return stripHtmlStr(match2[1]);
+          }
+        }
+        return null;
+      };
+
+      const processPoints = (pts: GeoPoint[]) => {
+        return pts.map(pt => {
+          if (!pt || pt.isDuplicateOverlay) return pt;
+          if (!isLineElement(pt)) return pt;
+
+          totalLinesChecked++;
+          const origColor = (pt as any).originalColor || pt.color || '#DCB13C';
+          const origLayer = (pt as any).originalLayer || pt.layer;
+
+          const isRemaining = isRemainingWorkColor(pt.color || '', canonicalColorMap);
+          if (!isRemaining) {
+            return {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              isIssue: false,
+              issueReason: undefined
+            };
+          }
+
+          totalRemainingLines++;
+          let len = pt.originalLength || 0;
+          if (len === 0 && pt.type === 'LineString' && pt.path) {
+            len = calculatePathLength(pt.path);
+          }
+
+          const segmentVal = extractSegmentVal(pt);
+
+          if (!segmentVal) {
+            missingSegmentCount++;
+            totalMissingLength += len;
+            const issueReason = lang === 'ar'
+              ? '⚠️ خط أعمال متبقية (#A52714): لا يوجد محتوى بيان لـ (Segment ID)'
+              : '⚠️ Remaining Works Line (#A52714): Missing Segment ID content';
+            const flaggedPt: GeoPoint = {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#FF0055',
+              isIssue: true,
+              issueReason
+            };
+            flaggedIssuesList.push(flaggedPt);
+            return flaggedPt;
+          } else {
+            compliantRemainingCount++;
+            totalCompliantLength += len;
+            return {
+              ...pt,
+              originalColor: origColor,
+              originalLayer: origLayer,
+              color: '#A52714',
+              isIssue: false,
+              issueReason: undefined
+            };
+          }
+        });
+      };
+
+      if (globalPoints.length > 0) {
+        setGlobalPoints(processPoints(globalPoints));
+      }
+      if (plannedStreets.length > 0) {
+        setPlannedStreets(processPoints(plannedStreets));
+      }
+
+      setDataId(`remaining-segment-check-${Date.now()}`);
+      setProgressPercent(100);
+
+      setCheckResultModal({
+        type: 'essential',
+        titleAr: 'نتائج فحص Segment ID لعناصر الأعمال المتبقية (#A52714)',
+        titleEn: 'Remaining Works (#A52714) Segment ID Audit',
+        icon: 'segment',
+        totalChecked: totalRemainingLines,
+        issuesCount: missingSegmentCount,
+        successCount: compliantRemainingCount,
+        badgeTextAr: missingSegmentCount > 0
+          ? `وُجدت ${missingSegmentCount} عناصر متبقية بدون Segment ID`
+          : totalRemainingLines > 0
+          ? 'جميع عناصر الأعمال المتبقية تحوي Segment ID بالكامل'
+          : 'لا توجد عناصر أعمال متبقية (#A52714) في هذا المخطط',
+        badgeTextEn: missingSegmentCount > 0
+          ? `${missingSegmentCount} Remaining elements missing Segment ID`
+          : totalRemainingLines > 0
+          ? 'All remaining elements have valid Segment ID'
+          : 'No remaining elements (#A52714) found',
+        detailsAr: missingSegmentCount > 0
+          ? `تم فحص ${totalRemainingLines} عنصر خطي للأعمال المتبقية (#A52714)، وتبين وجود ${missingSegmentCount} عنصر ينقصه Segment ID (بطول إجمالي ${(totalMissingLength / 1000).toFixed(2)} كم). تم تظليلها باللون الوردي/الأحمر على الخريطة لتسهيل المعاينة والتصحيح.`
+          : totalRemainingLines > 0
+          ? `تم فحص ${totalRemainingLines} عنصر خطي للأعمال المتبقية (#A52714) بطول ${(totalCompliantLength / 1000).toFixed(2)} كم، وجميعها تحتوي على Segment ID صالح ومطابق 100%.`
+          : `تم فحص كامل الخطوط بالمخطط (${totalLinesChecked} خط)، ولا يوجد أي مسار بلون الأعمال المتبقية (#A52714).`,
+        detailsEn: missingSegmentCount > 0
+          ? `Audited ${totalRemainingLines} Remaining work lines (#A52714). Found ${missingSegmentCount} elements missing Segment ID (Total length: ${(totalMissingLength / 1000).toFixed(2)} km). Highlighted in red on map.`
+          : totalRemainingLines > 0
+          ? `Audited ${totalRemainingLines} Remaining work lines (#A52714). 100% of remaining lines have valid Segment IDs.`
+          : `No remaining work elements (#A52714) detected among ${totalLinesChecked} total lines.`,
+        issueItems: flaggedIssuesList,
+        stats: [
+          { labelAr: 'إجمالي عناصر الأعمال المتبقية (#A52714)', labelEn: 'Total Remaining Elements (#A52714)', value: totalRemainingLines, colorClass: 'text-white' },
+          { labelAr: 'عناصر مكتملة بـ Segment ID', labelEn: 'Valid Segment ID', value: compliantRemainingCount, colorClass: 'text-emerald-400 font-black' },
+          { labelAr: 'عناصر مفقود منها Segment ID', labelEn: 'Missing Segment ID', value: missingSegmentCount, colorClass: missingSegmentCount > 0 ? 'text-rose-400 font-black animate-pulse' : 'text-emerald-400 font-black' }
+        ]
+      });
+
+      if (missingSegmentCount > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `⚠️ تم اكتشاف وتظليل ${missingSegmentCount} عنصر من الأعمال المتبقية (#A52714) بدون Segment ID.`
+            : `⚠️ Detected and highlighted ${missingSegmentCount} remaining work elements (#A52714) missing Segment ID.`
+        );
+      } else if (totalRemainingLines > 0) {
+        setStatusMessage(
+          lang === 'ar'
+            ? `✅ جميع عناصر الأعمال المتبقية (#A52714) البالغ عددها ${totalRemainingLines} تحوي Segment ID مكتمل ومطابق.`
+            : `✅ All ${totalRemainingLines} remaining work elements (#A52714) have valid Segment IDs.`
+        );
+      } else {
+        setStatusMessage(
+          lang === 'ar'
+            ? 'لا توجد عناصر بلون الأعمال المتبقية (#A52714) في هذا المخطط.'
+            : 'No remaining work elements (#A52714) in this dataset.'
+        );
+      }
+      setTimeout(() => setStatusMessage(''), 6000);
+    } catch (e: any) {
+      console.error("Error in verifyRemainingLinesSegmentId:", e);
+    } finally {
+      setLoading(false);
+      setProgressPercent(null);
+    }
+  };
+
   const verifySaudiBuildingCodeSbc = async () => {
     const pts = getPointsToCheck();
 
@@ -3747,14 +3985,64 @@ const App: React.FC = () => {
       };
     }).sort((a, b) => b.count - a.count);
 
+    let totalRemainingCount = 0;
+    let remainingValidSegmentCount = 0;
+    let remainingMissingSegmentCount = 0;
+    let totalRemainingLength = 0;
+    let remainingValidLength = 0;
+    let remainingMissingLength = 0;
+
+    pointsToAnalyze.forEach(pt => {
+      if (!pt || !isLineElement(pt)) return;
+      const isRem = isRemainingWorkColor(pt.color || '', canonicalColorMap);
+      if (isRem) {
+        totalRemainingCount++;
+        let len = pt.originalLength || 0;
+        if (len === 0 && pt.type === 'LineString' && pt.path) {
+          len = calculatePathLength(pt.path);
+        }
+        totalRemainingLength += len;
+
+        let hasSeg = false;
+        if (pt.attributes) {
+          for (const [key, val] of Object.entries(pt.attributes)) {
+            if (isSegmentKey(key) && isValidValueLocal(val, key)) {
+              hasSeg = true;
+              break;
+            }
+          }
+        }
+        if (!hasSeg && pt.description) {
+          hasSeg = Boolean(extractSegmentIdFromDesc(pt.description));
+        }
+
+        if (hasSeg) {
+          remainingValidSegmentCount++;
+          remainingValidLength += len;
+        } else {
+          remainingMissingSegmentCount++;
+          remainingMissingLength += len;
+        }
+      }
+    });
+
     return {
       totalElements: pointsToAnalyze.length,
       validElementsCount: validCount,
       uniqueSegmentIdsCount: uniqueDetails.length,
       totalLengthWithSegmentId,
-      uniqueDetails
+      uniqueDetails,
+      remainingStats: {
+        totalRemainingCount,
+        remainingValidSegmentCount,
+        remainingMissingSegmentCount,
+        totalRemainingLength,
+        remainingValidLength,
+        remainingMissingLength,
+        isCompliant: totalRemainingCount > 0 ? remainingMissingSegmentCount === 0 : true
+      }
     };
-  }, [globalPoints, plannedStreets, activeTab, activeFile, analyzerNetworkType]);
+  }, [globalPoints, plannedStreets, activeTab, activeFile, analyzerNetworkType, canonicalColorMap]);
 
   const highlightSpecificSegmentId = (pts: GeoPoint[]) => {
     if (!pts || pts.length === 0) return;
@@ -7166,6 +7454,10 @@ const App: React.FC = () => {
                                 <AlertOctagon className="w-6 h-6 group-hover:scale-110 transition-transform text-[#FFE600] group-hover:text-black animate-pulse" />
                                 {lang === 'ar' ? 'فحص الخطوط الصفراء فقط بدون (Permit No / segment id)' : 'Audit Yellow Lines Only (Missing Permit / Segment ID)'}
                             </button>
+                            <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص Segment ID للأعمال المتبقية (#A52714)...' : 'Auditing Remaining Works Segment ID (#A52714)...', verifyRemainingLinesSegmentId)} className="w-full bg-[#3d0b0b] border-2 border-[#A52714]/80 text-[#ff9999] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-2xl hover:bg-[#A52714] hover:text-white transition-all text-sm group scale-[1.01] hover:scale-[1.02]">
+                                <AlertOctagon className="w-6 h-6 group-hover:scale-110 transition-transform text-[#ff6666] group-hover:text-white animate-pulse" />
+                                {lang === 'ar' ? 'فحص Segment ID للأعمال المتبقية (#A52714)' : 'Audit Remaining Works Segment ID (#A52714)'}
+                            </button>
                             <button onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص البيانات الإلزامية (ZONE / INNERDIAMETER / OUTERDIAMETER / DIAMETER)...' : 'Auditing mandatory line attributes...', verifyEssentialAttributes)} className="w-full bg-[#3d0b1a] border border-[#ff0055]/40 text-[#ff0055] font-black py-5 rounded-full flex items-center justify-center gap-3 shadow-xl hover:bg-[#ff0055] hover:text-white transition-all text-sm group">
                                 <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
                                 {lang === 'ar' ? 'فحص رقم المنطقة او القطر' : 'Audit Zone Number or Diameter'}
@@ -7260,6 +7552,58 @@ const App: React.FC = () => {
                                     </span>
                                   </div>
                                 </div>
+
+                                {/* Remaining Works (#A52714) Segment ID Compliance Section */}
+                                {segmentIdAnalysis.remainingStats && segmentIdAnalysis.remainingStats.totalRemainingCount > 0 && (
+                                  <div className={`p-4 rounded-2xl border ${segmentIdAnalysis.remainingStats.isCompliant ? 'bg-emerald-950/30 border-emerald-500/40' : 'bg-rose-950/40 border-rose-500/50'} space-y-3`}>
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="w-3.5 h-3.5 rounded-full bg-[#A52714] shrink-0 border border-white/20" />
+                                        <div>
+                                          <span className="text-xs font-black text-white block">
+                                            {lang === 'ar' ? 'فحص Segment ID للأعمال المتبقية (#A52714)' : 'Remaining Works (#A52714) Segment ID Audit'}
+                                          </span>
+                                          <span className="text-[10px] text-white/60">
+                                            {lang === 'ar' ? 'شرط إلزامي: احتواء جميع عناصر #A52714 على معرّف Segment ID' : 'Mandatory Rule: All #A52714 elements must have Segment ID'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <span className={`text-[10px] font-black px-2.5 py-1 rounded-full ${segmentIdAnalysis.remainingStats.isCompliant ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse'}`}>
+                                        {segmentIdAnalysis.remainingStats.isCompliant 
+                                          ? (lang === 'ar' ? '✅ مطابق 100%' : '✅ 100% Compliant')
+                                          : (lang === 'ar' ? `⚠️ مخالف: ${segmentIdAnalysis.remainingStats.remainingMissingSegmentCount} بدون Segment ID` : `⚠️ Non-compliant: ${segmentIdAnalysis.remainingStats.remainingMissingSegmentCount} missing ID`)}
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+                                      <div className="bg-black/40 p-2.5 rounded-xl border border-white/5">
+                                        <span className="text-white/50 block text-[9px] mb-0.5">{lang === 'ar' ? 'إجمالي المتبقي (#A52714)' : 'Total Remaining'}</span>
+                                        <span className="font-black text-white text-base">{segmentIdAnalysis.remainingStats.totalRemainingCount}</span>
+                                        <span className="text-white/40 block text-[8px] mt-0.5">{(segmentIdAnalysis.remainingStats.totalRemainingLength / 1000).toFixed(2)} {lang === 'ar' ? 'كم' : 'km'}</span>
+                                      </div>
+                                      <div className="bg-black/40 p-2.5 rounded-xl border border-emerald-500/20">
+                                        <span className="text-white/50 block text-[9px] mb-0.5">{lang === 'ar' ? 'محتوى Segment ID سليم' : 'With Segment ID'}</span>
+                                        <span className="font-black text-emerald-400 text-base">{segmentIdAnalysis.remainingStats.remainingValidSegmentCount}</span>
+                                        <span className="text-emerald-400/60 block text-[8px] mt-0.5">{(segmentIdAnalysis.remainingStats.remainingValidLength / 1000).toFixed(2)} {lang === 'ar' ? 'كم' : 'km'}</span>
+                                      </div>
+                                      <div className="bg-black/40 p-2.5 rounded-xl border border-rose-500/20">
+                                        <span className="text-white/50 block text-[9px] mb-0.5">{lang === 'ar' ? 'مفقود Segment ID' : 'Missing Segment ID'}</span>
+                                        <span className={`font-black text-base ${segmentIdAnalysis.remainingStats.remainingMissingSegmentCount > 0 ? 'text-rose-400 font-black animate-pulse' : 'text-white/40'}`}>
+                                          {segmentIdAnalysis.remainingStats.remainingMissingSegmentCount}
+                                        </span>
+                                        <span className="text-rose-400/60 block text-[8px] mt-0.5">{(segmentIdAnalysis.remainingStats.remainingMissingLength / 1000).toFixed(2)} {lang === 'ar' ? 'كم' : 'km'}</span>
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      onClick={() => runWithLoading(lang === 'ar' ? 'جاري فحص وتظليل الأعمال المتبقية بدون Segment ID...' : 'Auditing remaining works missing Segment ID...', verifyRemainingLinesSegmentId)}
+                                      className="w-full py-2.5 px-3 rounded-xl bg-[#A52714] hover:bg-[#851c0d] text-white text-xs font-black flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95"
+                                    >
+                                      <Search className="w-3.5 h-3.5" />
+                                      <span>{lang === 'ar' ? 'تدقيق وتظليل الأعمال المتبقية (#A52714) على الخريطة' : 'Audit & Highlight Remaining Works on Map'}</span>
+                                    </button>
+                                  </div>
+                                )}
 
                                 {/* Search & Breakdown list of unique segment IDs */}
                                 {segmentIdAnalysis.uniqueSegmentIdsCount > 0 && (

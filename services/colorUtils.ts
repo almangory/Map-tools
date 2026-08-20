@@ -162,6 +162,19 @@ export const checkColorCompliance = (colorHex: string): ColorComplianceResult =>
   };
 };
 
+export const REMAINING_WORK_COLOR = '#A52714';
+
+export const isRemainingWorkColor = (colorHex: string, canonicalMap?: Record<string, string>): boolean => {
+  if (!colorHex) return false;
+  const cleanHex = normalizeHexToRgbHex(colorHex);
+  if (cleanHex === REMAINING_WORK_COLOR) return true;
+  if (canonicalMap && canonicalMap[colorHex]) {
+    const mapped = normalizeHexToRgbHex(canonicalMap[colorHex]);
+    if (mapped === REMAINING_WORK_COLOR) return true;
+  }
+  return colorDistance(cleanHex, REMAINING_WORK_COLOR) < 25;
+};
+
 export const matchStatusByColor = (colorHex: string): StatusCategory & { isCompliant?: boolean; complianceDistance?: number } => {
   const comp = checkColorCompliance(colorHex);
   return {
