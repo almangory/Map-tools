@@ -87,96 +87,69 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
             descriptionHTML = descriptionHTML.replace(/<img[^>]*>/gi, '');
         }
     } else {
-        descriptionHTML = '<div style="font-family:sans-serif; direction:ltr; text-align:left;">';
-        
-        // 1. الوصف الأساسي
-        const hasAttributes = (pt.attributes && Object.keys(pt.attributes).length > 0) || (pt.originalRow && headers && headers.length > 0);
-        if (pt.description) {
-            const cleanDesc = options?.removeImagesOnly 
-                ? pt.description.replace(/<img[^>]*>/gi, '') 
-                : pt.description;
-
-            if (!hasAttributes) {
-                if (cleanDesc.trim()) {
-                    descriptionHTML += `<div style="font-weight:bold; color:#0e3f53; margin-bottom:10px;">${cleanDesc}</div>`;
-                }
-            } else if (!options?.removeImagesOnly) {
-                const images = pt.description.match(/<img[^>]+>/gi);
-                if (images) {
-                    descriptionHTML += `<div style="margin-bottom:10px; text-align:center;">${images.join('<br>')}</div>`;
-                }
-            }
-        }
-
-        // 2. البيانات المعززة (الشارع والحي ورابط قوقل ماب)
         const lon = pt.x.toFixed(7);
         const lat = pt.y.toFixed(7);
         const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
+        
+        // Detect if RTL / Arabic is needed
+        const fullContentStr = String(pt.id || '') + ' ' + String(pt.description || '') + ' ' + JSON.stringify(pt.attributes || {}) + ' ' + (headers || []).join(' ');
+        const isArabic = /[\u0600-\u06FF]/.test(fullContentStr);
+        const useGoldenRtl = options?.cardTheme === 'goldenCardRtl' || (!options?.cardTheme && isArabic);
 
-        descriptionHTML += '<div style="background-color:#fff9eb; padding:8px; border-radius:5px; border:1px solid #dcb13c; margin-bottom:10px;">';
-        descriptionHTML += `<div style="font-size:11px;"><b>الإحداثيات:</b> ${lat}, ${lon}</div>`;
-        const isDistrictSelected = !selectedHeaders || selectedHeaders.some(h => ['district', 'الحي'].includes(String(h || '').toLowerCase()));
-        const isStreetSelected = !selectedHeaders || selectedHeaders.some(h => ['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(String(h || '').toLowerCase()));
+        if (useGoldenRtl) {
+            // 1. Determine Badge Text & Color
+            let badgeText = '';
+            let badgeColor = '#0284c7';
+            if (options?.badgeColumn && pt.attributes && pt.attributes[options.badgeColumn]) {
+                badgeText = pt.attributes[options.badgeColumn];
+            } else if (pt.layer) {
+                badgeText = pt.layer;
+            } else if (pt.attr1) {
+                badgeText = pt.attr1;
+            } else if (pt.attributes) {
+                const badgeKey = Object.keys(pt.attributes).find(k => /الجهة|القسم|الفرع|الحالة|status|dept|department/i.test(k));
+                if (badgeKey) badgeText = pt.attributes[badgeKey];
+            }
+            if (pt.color) {
+                badgeColor = pt.color;
+            }
 
-        if (pt.street && isStreetSelected) descriptionHTML += `<div style="font-size:11px;"><b>الشارع:</b> ${escapeXML(pt.street)}</div>`;
-        if (pt.district && isDistrictSelected) descriptionHTML += `<div style="font-size:11px;"><b>الحي:</b> ${escapeXML(pt.district)}</div>`;
-        descriptionHTML += `<div style="font-size:11px; margin-top:5px;"><a href="${googleMapsLink}" style="color:#3b82f6; text-decoration:none;">فتح في خرائط Google 📍</a></div>`;
-        descriptionHTML += '</div>';
+            const badgeHtml = badgeText ? `<div style="margin-top:4px;"><span style="display:inline-block; padding:2px 8px; font-size:11px; font-weight:bold; color:#ffffff; background-color:${badgeColor}; border-radius:10px;">${escapeXML(badgeText)}</span></div>` : '';
 
-        if (pt.attr1) {
-            // دعم لبيانات DXF الإضافية
-            descriptionHTML += `<div style="font-size:11px; margin-top:5px;"><b>خصائص إضافية:</b> ${escapeXML(pt.attr1)}</div>`;
-        }
+            // 2. Extract and format images
+            let imgTagsHtml = '';
+            if (pt.description && !options?.removeImagesOnly) {
+                const imgMatches = pt.description.match(/<img[^>]+>/gi);
+                if (imgMatches && imgMatches.length > 0) {
+                    imgTagsHtml = `
+                    <div style="margin-top:10px; text-align:center;">
+                        <div style="font-size:11px; color:#475569; margin-bottom:4px; font-weight:bold;">📷 صورة المعاينة / الفحص</div>
+                        ${imgMatches.map(img => img.replace(/<img/i, '<img style="max-width:100%; height:auto; border-radius:6px; border:1px solid #cbd5e1; box-shadow:0 2px 4px rgba(0,0,0,0.1); margin-bottom:6px;"')).join('')}
+                    </div>`;
+                }
+            }
 
-        // 3. جدول البيانات (يتم تخطيطه وتنسيقه بحدود سوداء واضحة واتجاه LTR ليتطابق مع الصورة المطلوبة ويمنع التكرار)
-        const hasAttributesToDisplay = (pt.attributes && Object.keys(pt.attributes).length > 0) || (pt.originalRow && headers && headers.length > 0);
-
-        if (hasAttributesToDisplay && !options?.optimizeForMyMaps) {
-            let tableHTML = '';
-            
-            // تصميم مخصص بحدود سوداء غامقة (2px solid black) ونمط جدول شبكي مع اتجاه من اليسار لليمين LTR لخرائط قوقل ماب
-            const tableStyle = 'width: 100%; border: 2px solid #000000; border-collapse: collapse; font-family: sans-serif; font-size: 13px; color: #000000; background-color: #ffffff; direction: ltr !important; text-align: left !important; margin-top: 10px;';
-            const trStyle = 'border: 2px solid #000000; direction: ltr !important; text-align: left !important;';
-            const tdKeyStyle = 'border: 2px solid #000000; padding: 6px 10px; font-weight: bold; color: #000000; background-color: #ffffff; font-family: sans-serif; font-size: 13px; width: 45%; direction: ltr !important; text-align: left !important; word-break: break-word;';
-            const tdValueStyle = 'border: 2px solid #000000; padding: 6px 10px; color: #000000; background-color: #ffffff; font-family: sans-serif; font-size: 13px; direction: ltr !important; text-align: left !important; word-break: break-word;';
-
-            // النمط العادي في حال عدم اختيار التحسين
-            const stdTableStyle = 'width: 100%; border: 0; background-color: #cbd5e1; font-size: 12px; font-family: sans-serif; direction: ltr !important; text-align: left !important; border-collapse: collapse; margin-top: 10px;';
-            const stdTrStyle = 'direction: ltr !important; text-align: left !important;';
-            const stdTdKeyStyle = 'background-color: #C0D9F9; font-weight: bold; color: #000000; padding: 6px 10px; direction: ltr !important; text-align: left !important; width: 45%; border: 1px solid #ffffff;';
-            const stdTdValueStyle = 'background-color: #E6F2FF; color: #000000; padding: 6px 10px; direction: ltr !important; text-align: left !important; border: 1px solid #ffffff;';
-
-            const activeTableStyle = options?.optimizeForMyMaps ? tableStyle : stdTableStyle;
-            const activeTrStyle = options?.optimizeForMyMaps ? trStyle : stdTrStyle;
-            const activeTdKeyStyle = options?.optimizeForMyMaps ? tdKeyStyle : stdTdKeyStyle;
-            const activeTdValueStyle = options?.optimizeForMyMaps ? tdValueStyle : stdTdValueStyle;
-
-            const activeTableAttrs = options?.optimizeForMyMaps 
-                ? 'border="2" bordercolor="#000000" cellpadding="6" cellspacing="0" width="100%" dir="ltr" align="left"'
-                : 'width="100%" border="0" cellpadding="4" cellspacing="1"';
-                
-            const activeTrAttrs = 'dir="ltr" align="left"';
-            const activeTdKeyAttrs = 'width="45%" align="left" valign="middle" dir="ltr"';
-            const activeTdValueAttrs = 'align="left" valign="middle" dir="ltr"';
-
-            tableHTML += `<br><div dir="ltr" style="direction: ltr !important; text-align: left !important;"><table style="${activeTableStyle}" ${activeTableAttrs}>`;
-
+            // 3. Build Attribute Rows
+            let rowsHtml = '';
             let keysToRender: string[] = [];
             if (selectedHeaders && selectedHeaders.length > 0) {
                 keysToRender = [...selectedHeaders];
             } else if (pt.attributes) {
                 keysToRender = Object.keys(pt.attributes);
             }
-            
+
             if (keysToRender.length > 0) {
                 keysToRender.sort((a, b) => kmlKeyComparator(a, b));
-                keysToRender.forEach((key) => {
+                keysToRender.forEach(key => {
                     const val = pt.attributes ? pt.attributes[key] : undefined;
-                    tableHTML += `
-                        <tr style="${activeTrStyle}" ${activeTrAttrs}>
-                            <td style="${activeTdKeyStyle}" ${activeTdKeyAttrs}>${escapeXML(key)}:</td>
-                            <td style="${activeTdValueStyle}" ${activeTdValueAttrs}>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</td>
-                        </tr>`;
+                    const valStr = val !== undefined && val !== null && val !== '' ? String(val) : '-';
+                    const isHighlight = /عيب|defects?|issue|ملاحظة|كسر|شروخ|تسريب|crack|break|leak/i.test(key) || (options?.highlightColumns && options.highlightColumns.includes(key));
+                    const valStyle = isHighlight ? 'color:#dc2626; font-weight:bold;' : 'color:#0f172a;';
+                    rowsHtml += `
+                    <tr>
+                        <th style="background-color:#f8fafc; color:#475569; width:38%; font-weight:600; white-space:nowrap; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">${escapeXML(key)}</th>
+                        <td style="${valStyle} padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right; word-break:break-word;">${escapeXML(valStr)}</td>
+                    </tr>`;
                 });
             } else if (pt.originalRow && headers && headers.length > 0) {
                 const headerIndices = headers.map((h, index) => ({ header: h, index }));
@@ -184,19 +157,152 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
                 headerIndices.forEach(({ header, index }) => {
                     if (selectedHeaders && !selectedHeaders.includes(header)) return;
                     const val = pt.originalRow![index];
-                    tableHTML += `
-                        <tr style="${activeTrStyle}" ${activeTrAttrs}>
-                            <td style="${activeTdKeyStyle}" ${activeTdKeyAttrs}>${escapeXML(header)}:</td>
-                            <td style="${activeTdValueStyle}" ${activeTdValueAttrs}>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</td>
-                        </tr>`;
+                    const valStr = val !== undefined && val !== null && val !== '' ? String(val) : '-';
+                    const isHighlight = /عيب|defects?|issue|ملاحظة|كسر|شروخ|تسريب|crack|break|leak/i.test(header) || (options?.highlightColumns && options.highlightColumns.includes(header));
+                    const valStyle = isHighlight ? 'color:#dc2626; font-weight:bold;' : 'color:#0f172a;';
+                    rowsHtml += `
+                    <tr>
+                        <th style="background-color:#f8fafc; color:#475569; width:38%; font-weight:600; white-space:nowrap; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">${escapeXML(header)}</th>
+                        <td style="${valStyle} padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right; word-break:break-word;">${escapeXML(valStr)}</td>
+                    </tr>`;
                 });
             }
 
-            tableHTML += '</table></div>';
-            descriptionHTML += tableHTML;
-        }
+            // Coords row
+            rowsHtml += `
+            <tr>
+                <th style="background-color:#f8fafc; color:#475569; width:38%; font-weight:600; white-space:nowrap; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">الإحداثيات الجغرافية</th>
+                <td style="color:#0f172a; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">${lat}, ${lon}</td>
+            </tr>`;
 
-        descriptionHTML += '</div>';
+            const mapsBtnHtml = `
+            <div style="text-align:center; margin-top:12px;">
+                <a href="${googleMapsLink}" target="_blank" style="display:inline-block; padding:7px 16px; background-color:#2563eb; color:#ffffff; text-decoration:none; font-weight:bold; font-size:12px; border-radius:6px; box-shadow:0 2px 4px rgba(37,99,235,0.25);">
+                    📍 فتح الموقع في Google Maps
+                </a>
+            </div>`;
+
+            descriptionHTML = `
+<div style="font-family:'Segoe UI',Tahoma,Arial,sans-serif; font-size:12px; color:#1e293b; margin:0; padding:6px; background-color:#ffffff; direction:rtl; text-align:right; line-height:1.4; max-width:440px; box-sizing:border-box;">
+  <div style="border:1px solid #e2e8f0; border-radius:8px; padding:10px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.08); background-color:#ffffff;">
+    <div style="border-bottom:2px solid #e2e8f0; padding-bottom:6px; margin-bottom:8px;">
+      <div style="font-size:14px; font-weight:bold; color:#0f172a; margin:0 0 4px 0;">${escapeXML(pt.id)}</div>
+      ${badgeHtml}
+    </div>
+    
+    <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:12px; direction:rtl; text-align:right;">
+      ${rowsHtml}
+    </table>
+    
+    ${imgTagsHtml}
+    ${mapsBtnHtml}
+  </div>
+</div>`;
+        } else {
+            descriptionHTML = '<div style="font-family:sans-serif; direction:ltr; text-align:left;">';
+            
+            // 1. الوصف الأساسي
+            const hasAttributes = (pt.attributes && Object.keys(pt.attributes).length > 0) || (pt.originalRow && headers && headers.length > 0);
+            if (pt.description) {
+                const cleanDesc = options?.removeImagesOnly 
+                    ? pt.description.replace(/<img[^>]*>/gi, '') 
+                    : pt.description;
+
+                if (!hasAttributes) {
+                    if (cleanDesc.trim()) {
+                        descriptionHTML += `<div style="font-weight:bold; color:#0e3f53; margin-bottom:10px;">${cleanDesc}</div>`;
+                    }
+                } else if (!options?.removeImagesOnly) {
+                    const images = pt.description.match(/<img[^>]+>/gi);
+                    if (images) {
+                        descriptionHTML += `<div style="margin-bottom:10px; text-align:center;">${images.join('<br>')}</div>`;
+                    }
+                }
+            }
+
+            // 2. البيانات المعززة (الشارع والحي ورابط قوقل ماب)
+            descriptionHTML += '<div style="background-color:#fff9eb; padding:8px; border-radius:5px; border:1px solid #dcb13c; margin-bottom:10px;">';
+            descriptionHTML += `<div style="font-size:11px;"><b>Coordinates:</b> ${lat}, ${lon}</div>`;
+            const isDistrictSelected = !selectedHeaders || selectedHeaders.some(h => ['district', 'الحي'].includes(String(h || '').toLowerCase()));
+            const isStreetSelected = !selectedHeaders || selectedHeaders.some(h => ['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(String(h || '').toLowerCase()));
+
+            if (pt.street && isStreetSelected) descriptionHTML += `<div style="font-size:11px;"><b>Street:</b> ${escapeXML(pt.street)}</div>`;
+            if (pt.district && isDistrictSelected) descriptionHTML += `<div style="font-size:11px;"><b>District:</b> ${escapeXML(pt.district)}</div>`;
+            descriptionHTML += `<div style="font-size:11px; margin-top:5px;"><a href="${googleMapsLink}" style="color:#3b82f6; text-decoration:none;">Open in Google Maps 📍</a></div>`;
+            descriptionHTML += '</div>';
+
+            if (pt.attr1) {
+                descriptionHTML += `<div style="font-size:11px; margin-top:5px;"><b>Additional Info:</b> ${escapeXML(pt.attr1)}</div>`;
+            }
+
+            // 3. جدول البيانات
+            const hasAttributesToDisplay = (pt.attributes && Object.keys(pt.attributes).length > 0) || (pt.originalRow && headers && headers.length > 0);
+
+            if (hasAttributesToDisplay && !options?.optimizeForMyMaps) {
+                let tableHTML = '';
+                
+                const tableStyle = 'width: 100%; border: 2px solid #000000; border-collapse: collapse; font-family: sans-serif; font-size: 13px; color: #000000; background-color: #ffffff; direction: ltr !important; text-align: left !important; margin-top: 10px;';
+                const trStyle = 'border: 2px solid #000000; direction: ltr !important; text-align: left !important;';
+                const tdKeyStyle = 'border: 2px solid #000000; padding: 6px 10px; font-weight: bold; color: #000000; background-color: #ffffff; font-family: sans-serif; font-size: 13px; width: 45%; direction: ltr !important; text-align: left !important; word-break: break-word;';
+                const tdValueStyle = 'border: 2px solid #000000; padding: 6px 10px; color: #000000; background-color: #ffffff; font-family: sans-serif; font-size: 13px; direction: ltr !important; text-align: left !important; word-break: break-word;';
+
+                const stdTableStyle = 'width: 100%; border: 0; background-color: #cbd5e1; font-size: 12px; font-family: sans-serif; direction: ltr !important; text-align: left !important; border-collapse: collapse; margin-top: 10px;';
+                const stdTrStyle = 'direction: ltr !important; text-align: left !important;';
+                const stdTdKeyStyle = 'background-color: #C0D9F9; font-weight: bold; color: #000000; padding: 6px 10px; direction: ltr !important; text-align: left !important; width: 45%; border: 1px solid #ffffff;';
+                const stdTdValueStyle = 'background-color: #E6F2FF; color: #000000; padding: 6px 10px; direction: ltr !important; text-align: left !important; border: 1px solid #ffffff;';
+
+                const activeTableStyle = options?.optimizeForMyMaps ? tableStyle : stdTableStyle;
+                const activeTrStyle = options?.optimizeForMyMaps ? trStyle : stdTrStyle;
+                const activeTdKeyStyle = options?.optimizeForMyMaps ? tdKeyStyle : stdTdKeyStyle;
+                const activeTdValueStyle = options?.optimizeForMyMaps ? tdValueStyle : stdTdValueStyle;
+
+                const activeTableAttrs = options?.optimizeForMyMaps 
+                    ? 'border="2" bordercolor="#000000" cellpadding="6" cellspacing="0" width="100%" dir="ltr" align="left"'
+                    : 'width="100%" border="0" cellpadding="4" cellspacing="1"';
+                    
+                const activeTrAttrs = 'dir="ltr" align="left"';
+                const activeTdKeyAttrs = 'width="45%" align="left" valign="middle" dir="ltr"';
+                const activeTdValueAttrs = 'align="left" valign="middle" dir="ltr"';
+
+                tableHTML += `<br><div dir="ltr" style="direction: ltr !important; text-align: left !important;"><table style="${activeTableStyle}" ${activeTableAttrs}>`;
+
+                let keysToRender: string[] = [];
+                if (selectedHeaders && selectedHeaders.length > 0) {
+                    keysToRender = [...selectedHeaders];
+                } else if (pt.attributes) {
+                    keysToRender = Object.keys(pt.attributes);
+                }
+                
+                if (keysToRender.length > 0) {
+                    keysToRender.sort((a, b) => kmlKeyComparator(a, b));
+                    keysToRender.forEach((key) => {
+                        const val = pt.attributes ? pt.attributes[key] : undefined;
+                        tableHTML += `
+                            <tr style="${activeTrStyle}" ${activeTrAttrs}>
+                                <td style="${activeTdKeyStyle}" ${activeTdKeyAttrs}>${escapeXML(key)}:</td>
+                                <td style="${activeTdValueStyle}" ${activeTdValueAttrs}>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</td>
+                            </tr>`;
+                    });
+                } else if (pt.originalRow && headers && headers.length > 0) {
+                    const headerIndices = headers.map((h, index) => ({ header: h, index }));
+                    headerIndices.sort((a, b) => kmlKeyComparator(a.header, b.header));
+                    headerIndices.forEach(({ header, index }) => {
+                        if (selectedHeaders && !selectedHeaders.includes(header)) return;
+                        const val = pt.originalRow![index];
+                        tableHTML += `
+                            <tr style="${activeTrStyle}" ${activeTrAttrs}>
+                                <td style="${activeTdKeyStyle}" ${activeTdKeyAttrs}>${escapeXML(header)}:</td>
+                                <td style="${activeTdValueStyle}" ${activeTdValueAttrs}>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</td>
+                            </tr>`;
+                    });
+                }
+
+                tableHTML += '</table></div>';
+                descriptionHTML += tableHTML;
+            }
+
+            descriptionHTML += '</div>';
+        }
     }
     
     const colorHex = getEffectiveColor(pt, options);
@@ -704,6 +810,12 @@ export const downloadKMZ = async (points: GeoPoint[], docName: string, options: 
 
         const zip = new JSZip();
         zip.file("doc.kml", kmlBlob);
+        
+        if (options?.imageFolder) {
+            for (const [imgPath, imgData] of Object.entries(options.imageFolder)) {
+                zip.file(imgPath, imgData);
+            }
+        }
         
         // For large datasets, compression can run out of memory or corrupt the zip headers in browser.
         // We will try DEFLATE, and if it exceeds a cautious threshold, we fallback to STORE.

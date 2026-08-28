@@ -94,7 +94,10 @@ export interface KmlExportOptions {
   maxLineLength?: number;
   optimizeForMyMaps?: boolean;
   keepOriginalDescription?: boolean;
-  removeImagesOnly?: boolean;
+  cardTheme?: 'goldenCardRtl' | 'modernLtr' | 'standard' | 'myMaps';
+  badgeColumn?: string;
+  highlightColumns?: string[];
+  imageFolder?: Record<string, Uint8Array | string>;
   lineStyle?: {
     width?: number;
   };
