@@ -130,6 +130,19 @@ async function startServer() {
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+  // Security Hardening: Disable information disclosure header
+  app.disable("x-powered-by");
+
+  // High-Performance Zero-Overhead HTTP Security Headers
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Permissions-Policy", "geolocation=(self), camera=(), microphone=(), payment=()");
+    next();
+  });
+
   // JSON Body Parser for API routes
   app.use(express.json({ limit: "10mb" }));
 

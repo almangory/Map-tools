@@ -466,7 +466,7 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
       <IconStyle>${kmlColorStr}
         <scale>0.8</scale>
         <Icon>
-          <href>${pt.iconUrl || 'http://maps.google.com/mapfiles/kml/pushpin/wht-pushpin.png'}</href>
+          <href>${pt.iconUrl || 'https://maps.google.com/mapfiles/kml/pushpin/wht-pushpin.png'}</href>
         </Icon>
       </IconStyle>
       <LabelStyle>
