@@ -13,6 +13,7 @@ interface EarthworkBoqModalProps {
   lang: 'ar' | 'en';
   points: GeoPoint[];
   hydraulicMap?: Map<string | number, PipeHydraulicData> | null;
+  isOpen?: boolean;
   onClose: () => void;
 }
 
@@ -20,8 +21,11 @@ export const EarthworkBoqModal: React.FC<EarthworkBoqModalProps> = ({
   lang,
   points,
   hydraulicMap,
+  isOpen = true,
   onClose
 }) => {
+  if (isOpen === false) return null;
+
   const [params, setParams] = useState<TrenchParameters>({ ...DEFAULT_TRENCH_PARAMS });
   const [activeTab, setActiveTab] = useState<'summary' | 'details' | 'depths' | 'settings'>('summary');
 

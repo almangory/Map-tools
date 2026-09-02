@@ -47,6 +47,15 @@ export interface SplitPolygon {
   name: string;
 }
 
+export interface CADLayerInfo {
+  name: string;
+  color: string;
+  count: number;
+  types?: string[];
+  totalLength?: number;
+  visible?: boolean;
+}
+
 export interface ParsedFile {
   filename: string;
   type: 'excel' | 'csv' | 'dxf' | 'kmz' | 'text';
@@ -54,6 +63,7 @@ export interface ParsedFile {
   data: any[]; 
   preview: any[][];
   suggestedMapping?: ColumnMapping;
+  layers?: CADLayerInfo[];
 }
 
 export interface EPSGDefinition {
@@ -98,6 +108,7 @@ export interface KmlExportOptions {
   badgeColumn?: string;
   highlightColumns?: string[];
   imageFolder?: Record<string, Uint8Array | string>;
+  labelScale?: number;
   lineStyle?: {
     width?: number;
   };

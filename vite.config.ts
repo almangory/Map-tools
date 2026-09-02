@@ -108,7 +108,20 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
-        }
+        },
+        dedupe: ['react', 'react-dom', 'react-dom/client']
+      },
+      optimizeDeps: {
+        include: [
+          'react',
+          'react/jsx-runtime',
+          'react/jsx-dev-runtime',
+          'react-dom',
+          'react-dom/client',
+          'lucide-react',
+          'clsx',
+          'tailwind-merge'
+        ]
       }
     };
 });

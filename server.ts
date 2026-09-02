@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import dns from "dns";
 import { createServer as createViteServer } from "vite";
+import { decodePlusCode } from "./services/plusCodeService";
 
 const MAX_PROXY_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit
 
@@ -221,6 +222,241 @@ async function startServer() {
     } catch (error: any) {
       console.error("Proxy error:", error.message);
       res.status(500).json({ error: error.message || "Failed to fetch from url" });
+    }
+  });
+
+  // In-memory cache for resolved map URLs
+  const resolvedMapsCache = new Map<string, { lat: number; lon: number; resolvedUrl?: string } | null>();
+
+  // Batch Resolve Maps URLs endpoint
+  app.post("/api/resolve-maps-urls", proxyLimiter, async (req: Request, res: Response) => {
+    try {
+      const { urls } = req.body || {};
+      if (!urls || !Array.isArray(urls)) {
+        res.status(400).json({ error: "Missing or invalid 'urls' array parameter" });
+        return;
+      }
+
+      // Limit to 500 unique URLs per batch to prevent denial of service
+      const cleanUrls = Array.from(
+        new Set(
+          urls
+            .map((u) => (typeof u === "string" ? u.trim() : ""))
+            .filter((u) => u.startsWith("http://") || u.startsWith("https://"))
+        )
+      ).slice(0, 500);
+
+      const results: Record<string, { lat: number; lon: number; resolvedUrl?: string } | null> = {};
+      const toFetch: string[] = [];
+
+      for (const u of cleanUrls) {
+        if (resolvedMapsCache.has(u)) {
+          results[u] = resolvedMapsCache.get(u)!;
+        } else {
+          toFetch.push(u);
+        }
+      }
+
+      // Helper function to extract coordinates from URL or HTML text
+      const extractCoordsFromUrlOrHtml = (urlStr: string, htmlStr?: string): { lat: number; lon: number } | null => {
+        let decoded = urlStr;
+        try {
+          decoded = decodeURIComponent(decodeURIComponent(urlStr));
+        } catch {}
+
+        // 1. Google Maps pin data !3d<lat>!4d<lon> (most accurate)
+        const pinMatch = decoded.match(/!3d([-+]?\d+\.\d+)!4d([-+]?\d+\.\d+)/i);
+        if (pinMatch) {
+          const lat = parseFloat(pinMatch[1]);
+          const lon = parseFloat(pinMatch[2]);
+          if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            return { lat, lon };
+          }
+        }
+
+        // 2. Open Location Code (Plus Code e.g. HQR7+2GH Riyadh or 7HP8HQR7+2GH)
+        const plusCodeMatch = decodePlusCode(urlStr) || decodePlusCode(decoded);
+        if (plusCodeMatch) {
+          return plusCodeMatch;
+        }
+
+        // 3. Google Maps /place/<lat>,<lon> in URL path
+        const placeMatch = decoded.match(/\/place\/([-+]?\d+\.\d+)[, ]+([-+]?\d+\.\d+)/i);
+        if (placeMatch) {
+          const lat = parseFloat(placeMatch[1]);
+          const lon = parseFloat(placeMatch[2]);
+          if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            return { lat, lon };
+          }
+        }
+
+        // 4. Query param q=... or query=... or ll=... or mlat=... or loc:...
+        const qMatch =
+          decoded.match(/[?&](?:q|query|ll|mlat|loc|center)=([-+]?\d+\.\d+)[, ]+([-+]?\d+\.\d+)/i) ||
+          decoded.match(/[?&]mlat=([-+]?\d+\.\d+)&mlon=([-+]?\d+\.\d+)/i) ||
+          decoded.match(/loc:([-+]?\d+\.\d+)[, +]+([-+]?\d+\.\d+)/i);
+        if (qMatch) {
+          const lat = parseFloat(qMatch[1]);
+          const lon = parseFloat(qMatch[2]);
+          if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            return { lat, lon };
+          }
+        }
+
+        // 5. Google Maps @lat,lon
+        const atMatch = decoded.match(/@([-+]?\d+\.\d+),([-+]?\d+\.\d+)/i);
+        if (atMatch) {
+          const lat = parseFloat(atMatch[1]);
+          const lon = parseFloat(atMatch[2]);
+          if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            return { lat, lon };
+          }
+        }
+
+        // 6. DMS notation inside URL or HTML: e.g. 24°33'49.9"N 46°31'09.3"E
+        const dmsRegex = /(\d+)[°\s]+(\d+)[\x27\x60\u2018\u2019\s]+(\d+(?:\.\d+)?)[\x22\u201c\u201d\s]*([NSEWشطقغ])/gi;
+        const checkStr = `${decoded} ${htmlStr ? htmlStr.slice(0, 50000) : ""}`;
+        const dmsMatches = [...checkStr.matchAll(dmsRegex)];
+        if (dmsMatches.length >= 2) {
+          let lat: number | null = null;
+          let lon: number | null = null;
+          for (const m of dmsMatches) {
+            const deg = parseFloat(m[1]);
+            const min = parseFloat(m[2]);
+            const sec = parseFloat(m[3]);
+            const dir = m[4].toUpperCase();
+            let val = deg + min / 60 + sec / 3600;
+            if (dir === "S" || dir === "ج") val = -val;
+            if (dir === "W" || dir === "غ") val = -val;
+            if (dir === "N" || dir === "S" || dir === "ش" || dir === "ج") lat = val;
+            if (dir === "E" || dir === "W" || dir === "ق" || dir === "غ") lon = val;
+          }
+          if (lat !== null && lon !== null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            return { lat, lon };
+          }
+        }
+
+        // 7. Plus Code inside HTML content (e.g. meta tags or page text)
+        if (htmlStr) {
+          const htmlPlusCode = decodePlusCode(htmlStr);
+          if (htmlPlusCode) {
+            return htmlPlusCode;
+          }
+
+          // 8. HTML static map or meta tags (reject European server default 51.4893323)
+          const metaMatch = htmlStr.match(/staticmap\?center=([0-9.-]+)%2C([0-9.-]+)/i) ||
+                            htmlStr.match(/staticmap\?center=([0-9.-]+),([0-9.-]+)/i) ||
+                            htmlStr.match(/maps\.google\.com\/maps\/api\/staticmap\?[^"]*?center=([0-9.-]+)%2C([0-9.-]+)/i);
+          if (metaMatch) {
+            const lat = parseFloat(metaMatch[1]);
+            const lon = parseFloat(metaMatch[2]);
+            // Exclude Google datacenter default in London
+            if (!isNaN(lat) && !isNaN(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(Math.abs(lat - 51.489) < 0.05 && Math.abs(lon - (-0.088)) < 0.05)) {
+              return { lat, lon };
+            }
+          }
+        }
+
+        return null;
+      };
+
+      // Process in concurrent batches of 10
+      const batchSize = 10;
+      for (let i = 0; i < toFetch.length; i += batchSize) {
+        const batch = toFetch.slice(i, i + batchSize);
+        await Promise.all(
+          batch.map(async (rawUrl) => {
+            try {
+              // Direct check if URL already contains coordinates or Plus Code
+              const directCheck = extractCoordsFromUrlOrHtml(rawUrl);
+              if (directCheck) {
+                const resObj = { ...directCheck, resolvedUrl: rawUrl };
+                resolvedMapsCache.set(rawUrl, resObj);
+                results[rawUrl] = resObj;
+                return;
+              }
+
+              // Verify URL safety
+              const validation = await isSafeUrl(rawUrl);
+              if (!validation.safe) {
+                resolvedMapsCache.set(rawUrl, null);
+                results[rawUrl] = null;
+                return;
+              }
+
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout
+
+              // First try a manual redirect fetch to inspect the Location header immediately
+              let redirectedLocation: string | null = null;
+              try {
+                const headOrManualResp = await fetch(rawUrl, {
+                  method: "GET",
+                  headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GeoGISPro/1.0",
+                    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+                  },
+                  signal: controller.signal,
+                  redirect: "manual",
+                });
+                redirectedLocation = headOrManualResp.headers.get("location");
+              } catch {}
+
+              if (redirectedLocation) {
+                const locExtracted = extractCoordsFromUrlOrHtml(redirectedLocation);
+                if (locExtracted) {
+                  clearTimeout(timeoutId);
+                  const resObj = { ...locExtracted, resolvedUrl: redirectedLocation };
+                  resolvedMapsCache.set(rawUrl, resObj);
+                  results[rawUrl] = resObj;
+                  return;
+                }
+              }
+
+              // Follow redirects if Location header did not directly contain coords
+              const resp = await fetch(rawUrl, {
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) GeoGISPro/1.0",
+                  "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+                },
+                signal: controller.signal,
+                redirect: "follow",
+              });
+              clearTimeout(timeoutId);
+
+              const finalUrl = resp.url || redirectedLocation || rawUrl;
+              let htmlSnippet = "";
+              try {
+                const text = await resp.text();
+                htmlSnippet = text.slice(0, 100000);
+              } catch {}
+
+              const extracted =
+                extractCoordsFromUrlOrHtml(finalUrl, htmlSnippet) ||
+                (redirectedLocation ? extractCoordsFromUrlOrHtml(redirectedLocation, htmlSnippet) : null) ||
+                extractCoordsFromUrlOrHtml(rawUrl, htmlSnippet);
+
+              if (extracted) {
+                const resObj = { ...extracted, resolvedUrl: finalUrl };
+                resolvedMapsCache.set(rawUrl, resObj);
+                results[rawUrl] = resObj;
+              } else {
+                resolvedMapsCache.set(rawUrl, null);
+                results[rawUrl] = null;
+              }
+            } catch (err: any) {
+              console.warn(`Failed to resolve map URL (${rawUrl}):`, err.message);
+              resolvedMapsCache.set(rawUrl, null);
+              results[rawUrl] = null;
+            }
+          })
+        );
+      }
+
+      res.json({ results });
+    } catch (error: any) {
+      console.error("Resolve maps error:", error.message);
+      res.status(500).json({ error: error.message || "Failed to resolve map URLs" });
     }
   });
 

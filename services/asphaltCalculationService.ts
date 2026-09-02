@@ -524,6 +524,9 @@ export function exportAsphaltPolygonKML(calc: AsphaltPolygonCalculation, lang: '
         <fill>1</fill>
         <outline>1</outline>
       </PolyStyle>
+      <LabelStyle>
+        <scale>0</scale>
+      </LabelStyle>
     </Style>
     <Placemark>
       <name>${calc.name}</name>

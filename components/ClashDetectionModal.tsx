@@ -12,6 +12,7 @@ import {
 interface ClashDetectionModalProps {
   lang: 'ar' | 'en';
   points: GeoPoint[];
+  isOpen?: boolean;
   onClose: () => void;
   onFocusClash?: (pt: { lat: number; lng: number }) => void;
 }
@@ -19,9 +20,12 @@ interface ClashDetectionModalProps {
 export const ClashDetectionModal: React.FC<ClashDetectionModalProps> = ({
   lang,
   points,
+  isOpen = true,
   onClose,
   onFocusClash
 }) => {
+  if (isOpen === false) return null;
+
   const [minClearanceM, setMinClearanceM] = useState<number>(0.50);
   const [selectedSeverity, setSelectedSeverity] = useState<'all' | 'collision' | 'critical' | 'warning' | 'safe'>('all');
   const [searchQuery, setSearchQuery] = useState('');

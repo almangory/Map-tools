@@ -55,33 +55,99 @@ export const calculatePathLength = (path?: {x: number, y: number}[]): number => 
     return total;
 };
 
+// --- HELPER: Format Header Label (Bilingual / Arabic + English) ---
+const formatHeaderLabel = (rawKey: string): string => {
+    const k = rawKey.trim();
+    const lower = k.toLowerCase().replace(/[._()\-]/g, ' ').replace(/\s+/g, ' ').trim();
+    
+    if (/^(sr|رقم تسلسلي|الرقم التسلسلي|م|serial)$/i.test(lower)) return 'الرقم التسلسلي (.Sr)';
+    if (/^(line no|line|رقم الخط|الخط)$/i.test(lower)) return 'رقم الخط (.Line No)';
+    if (/^(section no|section|المقطع|رقم المقطع)$/i.test(lower)) return 'المقطع (.Section No)';
+    if (/^(date of inspection|تاريخ الفحص|inspection date|تاريخ المعاينة)$/i.test(lower)) return 'تاريخ الفحص';
+    if (/^(defects?|نوع العيب|العيب|العيوب)$/i.test(lower)) return 'نوع العيب (Defects)';
+    if (/^(contributing factor|العامل المسبب|الملاحظة|العامل المسبب الملاحظة)$/i.test(lower)) return 'العامل المسبب / الملاحظة';
+    if (/^(system type|نوع الشبكة|الشبكة)$/i.test(lower)) return 'نوع الشبكة (System Type)';
+    if (/^(dia mm|dia|القطر|قطر|diameter)$/i.test(lower)) return 'القطر (DIA mm)';
+    if (/^(material type|نوع المادة|المادة|material)$/i.test(lower)) return 'نوع المادة (Material Type)';
+    if (/^(water meter.*|عداد المياه.*|التوصيلة.*)$/i.test(lower)) return 'عداد المياه / التوصيلة';
+    if (/^(الجهة المسؤولة|responsible entity|department|dept)$/i.test(lower)) return 'الجهة المسؤولة';
+    if (/^(ملاحظات الجهة المسؤولة|dept comments?|entity comments?)$/i.test(lower)) return 'ملاحظات الجهة المسؤولة';
+    if (/^(contractor.*handover.*|المقاول وتاريخ الاستلام|المقاول)$/i.test(lower)) return 'المقاول وتاريخ الاستلام';
+    if (/^(handover less than 10 years.*|أقل من 10 سنوات.*|اقل من 10 سنوات.*)$/i.test(lower)) return 'أقل من 10 سنوات؟';
+    if (/^(comments?|حالة الملاحظة|ملاحظات)$/i.test(lower)) return 'حالة الملاحظة (Comments)';
+    if (/^(cctv.*pic|cctv photo|photo|image|صورة|صورة الفحص)$/i.test(lower)) return 'صورة الفحص (CCTV)';
+    if (/^(location.*google.*map|google.*map|موقع قوقل ماب|الموقع)$/i.test(lower)) return 'رابط الموقع (Google Maps)';
+    
+    return k;
+};
+
+// --- HELPER: Format Excel Cell Value (Handles Dates, URLs, Numbers) ---
+const formatCellValue = (key: string, val: any): string => {
+    if (val === undefined || val === null || val === '') return '-';
+    
+    const keyLower = key.toLowerCase();
+    const isDateField = /date|تاريخ|handover|استلام|فحص/i.test(keyLower);
+    
+    // Check for Excel serial dates (e.g. 46011 -> 2025-12-20)
+    if (isDateField || typeof val === 'number' || /^\d{5}$/.test(String(val).trim())) {
+        const num = Number(val);
+        if (!isNaN(num) && num >= 30000 && num <= 65000) {
+            const utcDays = Math.floor(num - 25569);
+            const date = new Date(utcDays * 86400 * 1000);
+            if (!isNaN(date.getTime())) {
+                return date.toISOString().slice(0, 10);
+            }
+        }
+    }
+    
+    // Check if ISO date string
+    const str = String(val).trim();
+    if (/^\d{4}-\d{2}-\d{2}T/.test(str)) {
+        return str.slice(0, 10);
+    }
+    
+    return str;
+};
+
+// --- HELPER: Key Priority for Inspection / Municipal Data ---
+const getKeyPriority = (rawKey: string): number => {
+    const k = rawKey.toLowerCase();
+    if (/^(\.?sr|رقم تسلسلي|الرقم التسلسلي|م$)/i.test(k)) return 10;
+    if (/line/i.test(k) || /خط/i.test(k)) return 20;
+    if (/section/i.test(k) || /مقطع/i.test(k)) return 30;
+    if (/date/i.test(k) || /تاريخ/i.test(k)) return 40;
+    if (/defect/i.test(k) || /عيب/i.test(k)) return 50;
+    if (/contributing/i.test(k) || /عامل/i.test(k) || /مسبب/i.test(k)) return 60;
+    if (/system/i.test(k) || /شبكة/i.test(k)) return 70;
+    if (/dia/i.test(k) || /قطر/i.test(k)) return 80;
+    if (/material/i.test(k) || /مادة/i.test(k)) return 90;
+    if (/meter/i.test(k) || /عداد/i.test(k) || /توصيل/i.test(k)) return 100;
+    if (/الجهة المسؤولة/i.test(k) || /responsible/i.test(k)) return 110;
+    if (/ملاحظات الجهة/i.test(k) || /dept.*comment/i.test(k)) return 120;
+    if (/contractor/i.test(k) || /مقاول/i.test(k)) return 130;
+    if (/handover/i.test(k) || /سنوات/i.test(k) || /10/i.test(k)) return 140;
+    if (/comment/i.test(k) || /حالة/i.test(k) || /ملاحظ/i.test(k)) return 150;
+    if (/location/i.test(k) || /map/i.test(k) || /خريطة/i.test(k)) return 160;
+    if (/cctv/i.test(k) || /pic/i.test(k) || /صورة/i.test(k) || /photo/i.test(k)) return 170;
+    if (/coord/i.test(k) || /إحداثي/i.test(k)) return 200;
+    return 100;
+};
+
 // --- HELPER: Create Placemark String ---
 const kmlKeyComparator = (keyA: string, keyB: string): number => {
-    const aLower = String(keyA || '').toLowerCase();
-    const bLower = String(keyB || '').toLowerCase();
-    
-    const isStreetA = ['streetname', 'street', 'الشارع'].includes(aLower);
-    const isStreetB = ['streetname', 'street', 'الشارع'].includes(bLower);
-
-    if (isStreetA && !isStreetB) return 1;
-    if (isStreetB && !isStreetA) return -1;
-    
-    if (aLower === 'shape_length' && bLower !== 'shape_length') return 1;
-    if (bLower === 'shape_length' && aLower !== 'shape_length') return -1;
-    
-    if (aLower.includes('segment') && (bLower.includes('permit') || bLower.includes('رخصة'))) {
-        return -1;
-    }
-    if (bLower.includes('segment') && (aLower.includes('permit') || aLower.includes('رخصة'))) {
-        return 1;
-    }
-    return 0;
+    const prioA = getKeyPriority(keyA);
+    const prioB = getKeyPriority(keyB);
+    if (prioA !== prioB) return prioA - prioB;
+    return keyA.localeCompare(keyB);
 };
 
 const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: string[], options?: KmlExportOptions) => {
     let descriptionHTML = '';
     
-    if (options?.keepOriginalDescription && pt.description) {
+    // Check if description already contains complete HTML markup
+    const isDescriptionPureHtmlCard = pt.description && (pt.description.includes('<table') || pt.description.includes('<div style='));
+    
+    if (options?.keepOriginalDescription && pt.description && isDescriptionPureHtmlCard) {
         descriptionHTML = pt.description;
         if (options?.removeImagesOnly) {
             descriptionHTML = descriptionHTML.replace(/<img[^>]*>/gi, '');
@@ -89,219 +155,204 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
     } else {
         const lon = pt.x.toFixed(7);
         const lat = pt.y.toFixed(7);
-        const googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
+        
+        // Check if description contains a custom Google Maps link or generate standard one
+        let googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
+        if (pt.description && /https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i.test(pt.description)) {
+            const match = pt.description.match(/https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i);
+            if (match) {
+                googleMapsLink = match[0];
+            }
+        }
         
         // Detect if RTL / Arabic is needed
         const fullContentStr = String(pt.id || '') + ' ' + String(pt.description || '') + ' ' + JSON.stringify(pt.attributes || {}) + ' ' + (headers || []).join(' ');
         const isArabic = /[\u0600-\u06FF]/.test(fullContentStr);
         const useGoldenRtl = options?.cardTheme === 'goldenCardRtl' || (!options?.cardTheme && isArabic);
+        const dir = useGoldenRtl ? 'rtl' : 'ltr';
+        const textAlign = useGoldenRtl ? 'right' : 'left';
 
-        if (useGoldenRtl) {
-            // 1. Determine Badge Text & Color
-            let badgeText = '';
-            let badgeColor = '#0284c7';
-            if (options?.badgeColumn && pt.attributes && pt.attributes[options.badgeColumn]) {
-                badgeText = pt.attributes[options.badgeColumn];
-            } else if (pt.layer) {
-                badgeText = pt.layer;
-            } else if (pt.attr1) {
-                badgeText = pt.attr1;
-            } else if (pt.attributes) {
-                const badgeKey = Object.keys(pt.attributes).find(k => /الجهة|القسم|الفرع|الحالة|status|dept|department/i.test(k));
-                if (badgeKey) badgeText = pt.attributes[badgeKey];
-            }
-            if (pt.color) {
-                badgeColor = pt.color;
-            }
+        // Extract key domain fields
+        let srVal = '';
+        let lineNoVal = '';
+        let sectionVal = '';
+        let defectVal = '';
+        let deptVal = '';
+        let cctvPicUrl = '';
 
-            const badgeHtml = badgeText ? `<div style="margin-top:4px;"><span style="display:inline-block; padding:2px 8px; font-size:11px; font-weight:bold; color:#ffffff; background-color:${badgeColor}; border-radius:10px;">${escapeXML(badgeText)}</span></div>` : '';
-
-            // 2. Extract and format images
-            let imgTagsHtml = '';
-            if (pt.description && !options?.removeImagesOnly) {
-                const imgMatches = pt.description.match(/<img[^>]+>/gi);
-                if (imgMatches && imgMatches.length > 0) {
-                    imgTagsHtml = `
-                    <div style="margin-top:10px; text-align:center;">
-                        <div style="font-size:11px; color:#475569; margin-bottom:4px; font-weight:bold;">📷 صورة المعاينة / الفحص</div>
-                        ${imgMatches.map(img => img.replace(/<img/i, '<img style="max-width:100%; height:auto; border-radius:6px; border:1px solid #cbd5e1; box-shadow:0 2px 4px rgba(0,0,0,0.1); margin-bottom:6px;"')).join('')}
-                    </div>`;
+        const allAttrs = pt.attributes || {};
+        if (pt.originalRow && headers) {
+            headers.forEach((h, idx) => {
+                if (pt.originalRow && pt.originalRow[idx] !== undefined) {
+                    allAttrs[h] = pt.originalRow[idx];
                 }
+            });
+        }
+
+        Object.keys(allAttrs).forEach(k => {
+            const val = String(allAttrs[k] || '').trim();
+            if (!val) return;
+            if (/^(\.?sr|رقم تسلسلي|الرقم التسلسلي|م)$/i.test(k)) srVal = val;
+            if (/line/i.test(k) || /خط/i.test(k)) lineNoVal = val;
+            if (/section/i.test(k) || /مقطع/i.test(k)) sectionVal = val;
+            if (/defect/i.test(k) || /نوع العيب|عيب/i.test(k)) defectVal = val;
+            if (/الجهة|department|dept|المسؤولة/i.test(k) && !deptVal) deptVal = val;
+            if (/cctv|pic|photo|image|صورة/i.test(k) && /^(https?:\/\/|data:image\/)/i.test(val)) cctvPicUrl = val;
+        });
+
+        if (!srVal) {
+            const numMatch = String(pt.id || '').match(/\d+/);
+            if (numMatch) srVal = numMatch[0];
+        }
+
+        // 1. Determine Card Title & Subtitle Badge
+        let cardTitle = '';
+        if (lineNoVal) {
+            cardTitle = isArabic ? `موقع العيب رقم [${srVal || pt.id}] - ${lineNoVal}` : `Defect Location [${srVal || pt.id}] - ${lineNoVal}`;
+        } else {
+            cardTitle = `📍 ${escapeXML(pt.id)}`;
+        }
+
+        let badgeText = '';
+        let badgeColor = '#16a34a'; // Green badge as in image 2
+        if (deptVal) {
+            badgeText = deptVal.startsWith('الجهة') ? deptVal : `الجهة: ${deptVal}`;
+        } else if (options?.badgeColumn && allAttrs[options.badgeColumn]) {
+            badgeText = String(allAttrs[options.badgeColumn]);
+        } else if (pt.layer) {
+            badgeText = pt.layer;
+        } else if (pt.attr1) {
+            badgeText = pt.attr1;
+        }
+
+        if (pt.color && !deptVal) {
+            badgeColor = pt.color;
+        }
+
+        const badgeHtml = badgeText ? `<div style="display:inline-block; padding:4px 14px; font-size:12px; font-weight:bold; color:#ffffff; background-color:${badgeColor}; border-radius:14px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-top:4px;">${escapeXML(badgeText)}</div>` : '';
+
+        // 2. Extract and format images
+        let imgTagsHtml = '';
+        let foundImageUrl = cctvPicUrl;
+
+        if (pt.description && !options?.removeImagesOnly) {
+            const imgMatches = pt.description.match(/<img[^>]+src=["']([^"']+)["']/i);
+            if (imgMatches && imgMatches[1]) {
+                foundImageUrl = imgMatches[1];
             }
+        }
 
-            // 3. Build Attribute Rows
-            let rowsHtml = '';
-            let keysToRender: string[] = [];
-            if (selectedHeaders && selectedHeaders.length > 0) {
-                keysToRender = [...selectedHeaders];
-            } else if (pt.attributes) {
-                keysToRender = Object.keys(pt.attributes);
-            }
-
-            if (keysToRender.length > 0) {
-                keysToRender.sort((a, b) => kmlKeyComparator(a, b));
-                keysToRender.forEach(key => {
-                    const val = pt.attributes ? pt.attributes[key] : undefined;
-                    const valStr = val !== undefined && val !== null && val !== '' ? String(val) : '-';
-                    const isHighlight = /عيب|defects?|issue|ملاحظة|كسر|شروخ|تسريب|crack|break|leak/i.test(key) || (options?.highlightColumns && options.highlightColumns.includes(key));
-                    const valStyle = isHighlight ? 'color:#dc2626; font-weight:bold;' : 'color:#0f172a;';
-                    rowsHtml += `
-                    <tr>
-                        <th style="background-color:#f8fafc; color:#475569; width:38%; font-weight:600; white-space:nowrap; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">${escapeXML(key)}</th>
-                        <td style="${valStyle} padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right; word-break:break-word;">${escapeXML(valStr)}</td>
-                    </tr>`;
-                });
-            } else if (pt.originalRow && headers && headers.length > 0) {
-                const headerIndices = headers.map((h, index) => ({ header: h, index }));
-                headerIndices.sort((a, b) => kmlKeyComparator(a.header, b.header));
-                headerIndices.forEach(({ header, index }) => {
-                    if (selectedHeaders && !selectedHeaders.includes(header)) return;
-                    const val = pt.originalRow![index];
-                    const valStr = val !== undefined && val !== null && val !== '' ? String(val) : '-';
-                    const isHighlight = /عيب|defects?|issue|ملاحظة|كسر|شروخ|تسريب|crack|break|leak/i.test(header) || (options?.highlightColumns && options.highlightColumns.includes(header));
-                    const valStyle = isHighlight ? 'color:#dc2626; font-weight:bold;' : 'color:#0f172a;';
-                    rowsHtml += `
-                    <tr>
-                        <th style="background-color:#f8fafc; color:#475569; width:38%; font-weight:600; white-space:nowrap; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">${escapeXML(header)}</th>
-                        <td style="${valStyle} padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right; word-break:break-word;">${escapeXML(valStr)}</td>
-                    </tr>`;
-                });
-            }
-
-            // Coords row
-            rowsHtml += `
-            <tr>
-                <th style="background-color:#f8fafc; color:#475569; width:38%; font-weight:600; white-space:nowrap; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">الإحداثيات الجغرافية</th>
-                <td style="color:#0f172a; padding:5px 8px; border-bottom:1px solid #f1f5f9; text-align:right;">${lat}, ${lon}</td>
-            </tr>`;
-
-            const mapsBtnHtml = `
-            <div style="text-align:center; margin-top:12px;">
-                <a href="${googleMapsLink}" target="_blank" style="display:inline-block; padding:7px 16px; background-color:#2563eb; color:#ffffff; text-decoration:none; font-weight:bold; font-size:12px; border-radius:6px; box-shadow:0 2px 4px rgba(37,99,235,0.25);">
-                    📍 فتح الموقع في Google Maps
-                </a>
+        if (foundImageUrl && !options?.removeImagesOnly) {
+            imgTagsHtml = `
+            <div style="margin-top:14px; text-align:center;">
+                <div style="font-size:12px; color:#334155; margin-bottom:6px; font-weight:bold;">📷 ${isArabic ? 'صورة الفحص التلفزيوني (CCTV)' : 'Inspection Photo (CCTV)'}</div>
+                <img src="${escapeXML(foundImageUrl)}" style="max-width:100%; max-height:280px; height:auto; border-radius:6px; border:1px solid #cbd5e1; box-shadow:0 2px 6px rgba(0,0,0,0.12);" />
             </div>`;
+        }
 
-            descriptionHTML = `
-<div style="font-family:'Segoe UI',Tahoma,Arial,sans-serif; font-size:12px; color:#1e293b; margin:0; padding:6px; background-color:#ffffff; direction:rtl; text-align:right; line-height:1.4; max-width:440px; box-sizing:border-box;">
-  <div style="border:1px solid #e2e8f0; border-radius:8px; padding:10px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.08); background-color:#ffffff;">
-    <div style="border-bottom:2px solid #e2e8f0; padding-bottom:6px; margin-bottom:8px;">
-      <div style="font-size:14px; font-weight:bold; color:#0f172a; margin:0 0 4px 0;">${escapeXML(pt.id)}</div>
+        // 3. Build Attribute Rows
+        let rowsHtml = '';
+        let keysToRender: string[] = [];
+        if (selectedHeaders && selectedHeaders.length > 0) {
+            keysToRender = [...selectedHeaders];
+        } else if (pt.attributes) {
+            keysToRender = Object.keys(pt.attributes);
+        } else if (headers && headers.length > 0) {
+            keysToRender = [...headers];
+        }
+
+        const renderRow = (key: string, rawVal: any) => {
+            // If this is a CCTV PIC column and we already display it as an image, format cleanly
+            const isImageCol = /cctv.*pic|photo|image|صورة/i.test(key);
+            const valFormatted = formatCellValue(key, rawVal);
+            
+            const isUrl = typeof valFormatted === 'string' && /^(https?:\/\/|www\.)[^\s<]+/i.test(valFormatted.trim());
+            const isHighlight = /عيب|defects?|issue|ملاحظة|كسر|شروخ|تسريب|crack|break|leak|خطر|warning|طفح|غرق/i.test(key) || (options?.highlightColumns && options.highlightColumns.includes(key));
+            const valStyle = isHighlight ? 'color:#dc2626; font-weight:bold;' : 'color:#0f172a; font-weight:500;';
+            const displayLabel = formatHeaderLabel(key);
+
+            let cellContent = escapeXML(valFormatted);
+            if (isImageCol && (valFormatted.startsWith('http') || valFormatted === '-')) {
+                cellContent = isArabic ? '-' : '-';
+            } else if (isUrl) {
+                cellContent = `<a href="${escapeXML(valFormatted)}" target="_blank" style="color:#2563eb; text-decoration:underline; font-weight:500; word-break:break-all;">${escapeXML(valFormatted)}</a>`;
+            }
+
+            return `
+            <tr style="border-bottom:1px solid #f1f5f9;">
+                <td style="width:48%; color:#334155; font-weight:700; padding:6px 10px; text-align:${textAlign}; vertical-align:middle; font-size:12.5px;">${escapeXML(displayLabel)}</td>
+                <td style="${valStyle} width:52%; padding:6px 10px; text-align:${textAlign}; word-break:break-word; vertical-align:middle; font-size:12.5px;">${cellContent}</td>
+            </tr>`;
+        };
+
+        if (keysToRender.length > 0) {
+            keysToRender.sort((a, b) => kmlKeyComparator(a, b));
+            keysToRender.forEach(key => {
+                let val: any = undefined;
+                if (pt.attributes && pt.attributes[key] !== undefined) {
+                    val = pt.attributes[key];
+                } else if (pt.originalRow && headers) {
+                    const idx = headers.indexOf(key);
+                    if (idx !== -1) val = pt.originalRow[idx];
+                }
+                rowsHtml += renderRow(key, val);
+            });
+        }
+
+        // Geographic Coords row
+        rowsHtml += `
+        <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="width:48%; color:#334155; font-weight:700; padding:6px 10px; text-align:${textAlign}; vertical-align:middle; font-size:12.5px;">${isArabic ? 'الإحداثيات الجغرافية' : 'Coordinates'}</td>
+            <td style="color:#0f172a; width:52%; padding:6px 10px; text-align:${textAlign}; font-family:monospace; font-size:12px; vertical-align:middle;">${lat}, ${lon}</td>
+        </tr>`;
+
+        const mapsBtnHtml = `
+        <div style="text-align:center; margin-top:14px; margin-bottom:4px;">
+            <a href="${googleMapsLink}" target="_blank" style="display:inline-block; padding:9px 24px; background-color:#0284c7; color:#ffffff; text-decoration:none; font-weight:bold; font-size:13px; border-radius:6px; box-shadow:0 2px 5px rgba(2,132,199,0.3); border:1px solid #0369a1;">
+                📍 ${isArabic ? 'فتح الموقع في Google Maps' : 'Open in Google Maps'}
+            </a>
+        </div>
+        <div style="font-size:11px; margin-top:8px; color:#64748b; text-align:right;">
+            ${isArabic ? `الاتجاهات: <a href="https://maps.google.com/maps?daddr=${lat},${lon}" target="_blank" style="color:#0284c7; text-decoration:underline;">إلى هنا</a> - <a href="https://maps.google.com/maps?saddr=${lat},${lon}" target="_blank" style="color:#0284c7; text-decoration:underline;">من هنا</a>` : `Directions: <a href="https://maps.google.com/maps?daddr=${lat},${lon}" target="_blank" style="color:#0284c7; text-decoration:underline;">To here</a> - <a href="https://maps.google.com/maps?saddr=${lat},${lon}" target="_blank" style="color:#0284c7; text-decoration:underline;">From here</a>`}
+        </div>`;
+
+        descriptionHTML = `
+<div style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:12.5px; color:#1e293b; margin:0; padding:4px; background-color:#ffffff; direction:${dir}; text-align:${textAlign}; line-height:1.5; min-width:380px; max-width:540px; box-sizing:border-box;">
+  <div style="border:1px solid #e2e8f0; border-radius:10px; padding:14px; box-shadow:0 4px 10px rgba(0,0,0,0.06); background-color:#ffffff;">
+    <div style="border-bottom:1px solid #f1f5f9; padding-bottom:10px; margin-bottom:10px; text-align:center;">
+      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">${escapeXML(cardTitle)}</div>
       ${badgeHtml}
     </div>
     
-    <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:12px; direction:rtl; text-align:right;">
-      ${rowsHtml}
+    <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:12.5px; direction:${dir}; text-align:${textAlign};">
+      <tbody>
+        ${rowsHtml}
+      </tbody>
     </table>
     
     ${imgTagsHtml}
     ${mapsBtnHtml}
   </div>
 </div>`;
-        } else {
-            descriptionHTML = '<div style="font-family:sans-serif; direction:ltr; text-align:left;">';
-            
-            // 1. الوصف الأساسي
-            const hasAttributes = (pt.attributes && Object.keys(pt.attributes).length > 0) || (pt.originalRow && headers && headers.length > 0);
-            if (pt.description) {
-                const cleanDesc = options?.removeImagesOnly 
-                    ? pt.description.replace(/<img[^>]*>/gi, '') 
-                    : pt.description;
-
-                if (!hasAttributes) {
-                    if (cleanDesc.trim()) {
-                        descriptionHTML += `<div style="font-weight:bold; color:#0e3f53; margin-bottom:10px;">${cleanDesc}</div>`;
-                    }
-                } else if (!options?.removeImagesOnly) {
-                    const images = pt.description.match(/<img[^>]+>/gi);
-                    if (images) {
-                        descriptionHTML += `<div style="margin-bottom:10px; text-align:center;">${images.join('<br>')}</div>`;
-                    }
-                }
-            }
-
-            // 2. البيانات المعززة (الشارع والحي ورابط قوقل ماب)
-            descriptionHTML += '<div style="background-color:#fff9eb; padding:8px; border-radius:5px; border:1px solid #dcb13c; margin-bottom:10px;">';
-            descriptionHTML += `<div style="font-size:11px;"><b>Coordinates:</b> ${lat}, ${lon}</div>`;
-            const isDistrictSelected = !selectedHeaders || selectedHeaders.some(h => ['district', 'الحي'].includes(String(h || '').toLowerCase()));
-            const isStreetSelected = !selectedHeaders || selectedHeaders.some(h => ['street', 'streetname', 'اسم الشارع', 'الشارع'].includes(String(h || '').toLowerCase()));
-
-            if (pt.street && isStreetSelected) descriptionHTML += `<div style="font-size:11px;"><b>Street:</b> ${escapeXML(pt.street)}</div>`;
-            if (pt.district && isDistrictSelected) descriptionHTML += `<div style="font-size:11px;"><b>District:</b> ${escapeXML(pt.district)}</div>`;
-            descriptionHTML += `<div style="font-size:11px; margin-top:5px;"><a href="${googleMapsLink}" style="color:#3b82f6; text-decoration:none;">Open in Google Maps 📍</a></div>`;
-            descriptionHTML += '</div>';
-
-            if (pt.attr1) {
-                descriptionHTML += `<div style="font-size:11px; margin-top:5px;"><b>Additional Info:</b> ${escapeXML(pt.attr1)}</div>`;
-            }
-
-            // 3. جدول البيانات
-            const hasAttributesToDisplay = (pt.attributes && Object.keys(pt.attributes).length > 0) || (pt.originalRow && headers && headers.length > 0);
-
-            if (hasAttributesToDisplay && !options?.optimizeForMyMaps) {
-                let tableHTML = '';
-                
-                const tableStyle = 'width: 100%; border: 2px solid #000000; border-collapse: collapse; font-family: sans-serif; font-size: 13px; color: #000000; background-color: #ffffff; direction: ltr !important; text-align: left !important; margin-top: 10px;';
-                const trStyle = 'border: 2px solid #000000; direction: ltr !important; text-align: left !important;';
-                const tdKeyStyle = 'border: 2px solid #000000; padding: 6px 10px; font-weight: bold; color: #000000; background-color: #ffffff; font-family: sans-serif; font-size: 13px; width: 45%; direction: ltr !important; text-align: left !important; word-break: break-word;';
-                const tdValueStyle = 'border: 2px solid #000000; padding: 6px 10px; color: #000000; background-color: #ffffff; font-family: sans-serif; font-size: 13px; direction: ltr !important; text-align: left !important; word-break: break-word;';
-
-                const stdTableStyle = 'width: 100%; border: 0; background-color: #cbd5e1; font-size: 12px; font-family: sans-serif; direction: ltr !important; text-align: left !important; border-collapse: collapse; margin-top: 10px;';
-                const stdTrStyle = 'direction: ltr !important; text-align: left !important;';
-                const stdTdKeyStyle = 'background-color: #C0D9F9; font-weight: bold; color: #000000; padding: 6px 10px; direction: ltr !important; text-align: left !important; width: 45%; border: 1px solid #ffffff;';
-                const stdTdValueStyle = 'background-color: #E6F2FF; color: #000000; padding: 6px 10px; direction: ltr !important; text-align: left !important; border: 1px solid #ffffff;';
-
-                const activeTableStyle = options?.optimizeForMyMaps ? tableStyle : stdTableStyle;
-                const activeTrStyle = options?.optimizeForMyMaps ? trStyle : stdTrStyle;
-                const activeTdKeyStyle = options?.optimizeForMyMaps ? tdKeyStyle : stdTdKeyStyle;
-                const activeTdValueStyle = options?.optimizeForMyMaps ? tdValueStyle : stdTdValueStyle;
-
-                const activeTableAttrs = options?.optimizeForMyMaps 
-                    ? 'border="2" bordercolor="#000000" cellpadding="6" cellspacing="0" width="100%" dir="ltr" align="left"'
-                    : 'width="100%" border="0" cellpadding="4" cellspacing="1"';
-                    
-                const activeTrAttrs = 'dir="ltr" align="left"';
-                const activeTdKeyAttrs = 'width="45%" align="left" valign="middle" dir="ltr"';
-                const activeTdValueAttrs = 'align="left" valign="middle" dir="ltr"';
-
-                tableHTML += `<br><div dir="ltr" style="direction: ltr !important; text-align: left !important;"><table style="${activeTableStyle}" ${activeTableAttrs}>`;
-
-                let keysToRender: string[] = [];
-                if (selectedHeaders && selectedHeaders.length > 0) {
-                    keysToRender = [...selectedHeaders];
-                } else if (pt.attributes) {
-                    keysToRender = Object.keys(pt.attributes);
-                }
-                
-                if (keysToRender.length > 0) {
-                    keysToRender.sort((a, b) => kmlKeyComparator(a, b));
-                    keysToRender.forEach((key) => {
-                        const val = pt.attributes ? pt.attributes[key] : undefined;
-                        tableHTML += `
-                            <tr style="${activeTrStyle}" ${activeTrAttrs}>
-                                <td style="${activeTdKeyStyle}" ${activeTdKeyAttrs}>${escapeXML(key)}:</td>
-                                <td style="${activeTdValueStyle}" ${activeTdValueAttrs}>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</td>
-                            </tr>`;
-                    });
-                } else if (pt.originalRow && headers && headers.length > 0) {
-                    const headerIndices = headers.map((h, index) => ({ header: h, index }));
-                    headerIndices.sort((a, b) => kmlKeyComparator(a.header, b.header));
-                    headerIndices.forEach(({ header, index }) => {
-                        if (selectedHeaders && !selectedHeaders.includes(header)) return;
-                        const val = pt.originalRow![index];
-                        tableHTML += `
-                            <tr style="${activeTrStyle}" ${activeTrAttrs}>
-                                <td style="${activeTdKeyStyle}" ${activeTdKeyAttrs}>${escapeXML(header)}:</td>
-                                <td style="${activeTdValueStyle}" ${activeTdValueAttrs}>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</td>
-                            </tr>`;
-                    });
-                }
-
-                tableHTML += '</table></div>';
-                descriptionHTML += tableHTML;
-            }
-
-            descriptionHTML += '</div>';
+    }
+    
+    // Construct rich placemark name if attributes exist
+    let placemarkDisplayName = pt.id;
+    if (pt.attributes) {
+        const line = pt.attributes['Line No'] || pt.attributes['.Line No'] || pt.attributes['رقم الخط'] || pt.attributes['line'];
+        const sect = pt.attributes['Section No'] || pt.attributes['.Section No'] || pt.attributes['المقطع'] || pt.attributes['section'];
+        const defect = pt.attributes['Defects'] || pt.attributes['Defect'] || pt.attributes['نوع العيب'] || pt.attributes['عيب'];
+        const sr = pt.attributes['Sr'] || pt.attributes['.Sr'] || pt.attributes['الرقم التسلسلي'] || pt.attributes['sr'];
+        
+        if (line || sect || defect) {
+            const parts: string[] = [];
+            if (line) parts.push(String(line));
+            if (sect) parts.push(`(${sect})`);
+            let mainTitle = parts.join(' ');
+            if (defect) mainTitle += ` - ${defect}`;
+            if (sr) mainTitle += ` [${sr}]`;
+            else if (pt.id) mainTitle += ` [${pt.id}]`;
+            placemarkDisplayName = mainTitle;
         }
     }
     
@@ -342,8 +393,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
     }
 
     let extendedDataXML = '';
-    // في خرائط قوقل ماب (My Maps)، الطريقة الوحيدة لعرض جدول البيانات المصمم بحدود مرتبة ومنظمة هي عبر ExtendedData
-    // لذلك نقوم بتفعيله دائماً، ومع تفعيل خيار التحسين نقوم بتنظيف حقل الوصف لتجنب تكرار البيانات كنصوص مسطحة
+    // في خرائط قوقل ماب (My Maps)، الطريقة لعرض جدول البيانات عبر ExtendedData
     if (true) {
         let keysToRender: string[] = [];
         if (selectedHeaders && selectedHeaders.length > 0) {
@@ -357,7 +407,9 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
             extendedDataXML = `\n      <ExtendedData>\n` + 
                 keysToRender.map(key => {
                     const val = pt.attributes ? pt.attributes[key] : undefined;
-                    return `        <Data name="${escapeXML(key)}"><value>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</value></Data>`;
+                    const valFormatted = formatCellValue(key, val);
+                    const label = formatHeaderLabel(key);
+                    return `        <Data name="${escapeXML(label)}"><value>${escapeXML(valFormatted)}</value></Data>`;
                 }).join('\n') +
                 `\n      </ExtendedData>`;
         } else if (pt.originalRow && headers && headers.length > 0) {
@@ -369,7 +421,9 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
                     return;
                 }
                 const val = pt.originalRow![index];
-                extendedDataXML += `        <Data name="${escapeXML(header)}"><value>${escapeXML(val !== undefined && val !== null && val !== '' ? String(val) : "-")}</value></Data>\n`;
+                const valFormatted = formatCellValue(header, val);
+                const label = formatHeaderLabel(header);
+                extendedDataXML += `        <Data name="${escapeXML(label)}"><value>${escapeXML(valFormatted)}</value></Data>\n`;
             });
             extendedDataXML += `      </ExtendedData>`;
         }
@@ -377,7 +431,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
 
     return `
     <Placemark>
-      <name>${escapeXML(pt.id)}</name>
+      <name>${escapeXML(placemarkDisplayName || pt.id)}</name>
       <description><![CDATA[${descriptionHTML}]]></description>
       <styleUrl>#${styleId}</styleUrl>${extendedDataXML}
       ${geometryXML}
@@ -408,7 +462,9 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
     // Default fallback style
     stylesXML += `    <Style id="myMapsBalloonStyle">
       <BalloonStyle>
-        <text>$[description]</text>
+        <bgColor>ffffffff</bgColor>
+        <textColor>ff000000</textColor>
+        <text><![CDATA[$[description]]]></text>
       </BalloonStyle>
     </Style>\n`;
 
@@ -431,6 +487,7 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
             const polyOutline = options?.polygonStyle?.outline !== undefined ? options.polygonStyle.outline : 1;
             const polyWidth = options?.polygonStyle?.width !== undefined ? options.polygonStyle.width : 2;
             const lineLineWidth = options?.lineStyle?.width !== undefined ? options.lineStyle.width : 3;
+            const labelScale = options?.labelScale !== undefined ? options.labelScale : 0;
 
             if (isPolygon) {
                 stylesXML += `    <Style id="${styleId}">
@@ -443,10 +500,12 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
         <outline>${polyOutline}</outline>
       </PolyStyle>
       <LabelStyle>
-        <scale>0.85</scale>
+        <scale>${labelScale}</scale>
       </LabelStyle>
       <BalloonStyle>
-        <text>$[description]</text>
+        <bgColor>ffffffff</bgColor>
+        <textColor>ff000000</textColor>
+        <text><![CDATA[$[description]]]></text>
       </BalloonStyle>
     </Style>\n`;
             } else if (isLine) {
@@ -455,10 +514,12 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
         <width>${lineLineWidth}</width>
       </LineStyle>
       <LabelStyle>
-        <scale>0.85</scale>
+        <scale>${labelScale}</scale>
       </LabelStyle>
       <BalloonStyle>
-        <text>$[description]</text>
+        <bgColor>ffffffff</bgColor>
+        <textColor>ff000000</textColor>
+        <text><![CDATA[$[description]]]></text>
       </BalloonStyle>
     </Style>\n`;
             } else {
@@ -470,10 +531,12 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
         </Icon>
       </IconStyle>
       <LabelStyle>
-        <scale>0.85</scale>
+        <scale>${labelScale}</scale>
       </LabelStyle>
       <BalloonStyle>
-        <text>$[description]</text>
+        <bgColor>ffffffff</bgColor>
+        <textColor>ff000000</textColor>
+        <text><![CDATA[$[description]]]></text>
       </BalloonStyle>
     </Style>\n`;
             }

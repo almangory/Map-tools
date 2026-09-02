@@ -14,6 +14,7 @@ interface OverflowSimulationModalProps {
   lang: 'ar' | 'en';
   points: GeoPoint[];
   hydraulicMap?: Map<string | number, PipeHydraulicData> | null;
+  isOpen?: boolean;
   onClose: () => void;
   onFocusManhole?: (pt: { lat: number; lng: number }) => void;
 }
@@ -22,9 +23,12 @@ export const OverflowSimulationModal: React.FC<OverflowSimulationModalProps> = (
   lang,
   points,
   hydraulicMap,
+  isOpen = true,
   onClose,
   onFocusManhole
 }) => {
+  if (isOpen === false) return null;
+
   const [wetWellCapacity, setWetWellCapacity] = useState<number>(25); // m³
   const [averageInflow, setAverageInflow] = useState<number>(35); // L/s
   const [tankerCapacity, setTankerCapacity] = useState<number>(32); // m³

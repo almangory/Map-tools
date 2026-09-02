@@ -4,7 +4,7 @@ import fgdb from 'fgdb';
 import * as XLSX from 'xlsx';
 import DxfParser from 'dxf-parser';
 import JSZipModule from 'jszip';
-import { ParsedFile, GeoPoint, ColumnMapping } from '../types';
+import { ParsedFile, GeoPoint, ColumnMapping, CADLayerInfo } from '../types';
 import { calculatePathLength } from './geometryService';
 
 const JSZip = (typeof JSZipModule === 'function') ? JSZipModule : (JSZipModule && (JSZipModule as any).default) ? (JSZipModule as any).default : JSZipModule;
@@ -31,20 +31,26 @@ const kmlColorToHex = (kmlColor: string): string | undefined => {
   return `#${r}${g}${b}`;
 };
 
-const detectColumns = (headers: string[]): ColumnMapping => {
-  const lowerHeaders = headers.map(h => String(h || '').trim().toLowerCase());
+export const detectColumns = (headers: string[], sampleRows?: any[][]): ColumnMapping => {
   const map: ColumnMapping = { xColumn: '', yColumn: '' };
-  
-  const linkTerms = ['location', 'map', 'link', 'url', 'site', 'google', 'موقع', 'رابط', 'الاحداثيات', 'coords', 'gps', 'geo'];
-  const xTerms = ['east', 'easting', 'lon', 'longitude', 'long', 'x', 'شرق', 'شرقيات', 'خط الطول', 'الشرق'];
-  const yTerms = ['north', 'northing', 'lat', 'latitude', 'y', 'شمال', 'شماليات', 'خط العرض', 'الشمال'];
-  const zTerms = ['z', 'elev', 'elevation', 'height', 'alt', 'altitude', 'المنسوب', 'ارتفاع', 'مستوى'];
-  const idTerms = ['id', 'name', 'point', 'label', 'number', 'pt', 'اسم', 'معرف', 'رقم', 'النقطة', 'كود'];
+  if (!headers || headers.length === 0) return map;
+
+  const linkTerms = [
+    'location', 'map', 'maps', 'link', 'url', 'site', 'google', 'googlemap', 'googlemaps',
+    'موقع', 'رابط', 'الرابط', 'رابط الموقع', 'رابط موقع', 'رابط الخريطة', 'رابط قوقل', 'رابط ماب',
+    'قوقل ماب', 'جوجل ماب', 'موقع ماب', 'الاحداثيات', 'احداثيات', 'احداثي', 'خريطة', 'خرائط',
+    'قوقل', 'جوجل', 'coords', 'coord', 'coordinate', 'coordinates', 'gps', 'geo', 'مكان', 'المكان',
+    'اللوكيشن', 'لوكيشن'
+  ];
+  const xTerms = ['east', 'easting', 'lon', 'longitude', 'long', 'lng', 'x', 'شرق', 'شرقيات', 'خط الطول', 'الشرق', 'س', 'احداثي س', 'إحداثي س'];
+  const yTerms = ['north', 'northing', 'lat', 'latitude', 'y', 'شمال', 'شماليات', 'خط العرض', 'الشمال', 'ص', 'احداثي ص', 'إحداثي ص'];
+  const zTerms = ['z', 'elev', 'elevation', 'height', 'alt', 'altitude', 'المنسوب', 'ارتفاع', 'مستوى', 'ع'];
+  const idTerms = ['id', 'name', 'point', 'label', 'number', 'pt', 'code', 'اسم', 'معرف', 'رقم', 'النقطة', 'كود', 'المعرف', 'اسم النقطة', 'رقم النقطة', 'اسم الموقع', 'البيان', 'الوصف'];
 
   const findMatch = (terms: string[]) => {
     return headers.find(h => {
       const lh = String(h || '').trim().toLowerCase();
-      return terms.some(t => lh === t || lh.startsWith(t + ' ') || lh.includes(' ' + t) || (lh.length > 1 && lh === t));
+      return terms.some(t => lh === t || lh.startsWith(t + ' ') || lh.includes(' ' + t) || lh.includes('_' + t) || lh.includes(t + '_') || (lh.length > 1 && lh === t));
     }) || '';
   };
 
@@ -53,7 +59,90 @@ const detectColumns = (headers: string[]): ColumnMapping => {
   map.zColumn = findMatch(zTerms);
   map.idColumn = findMatch(idTerms);
   map.linkColumn = findMatch(linkTerms);
-  
+
+  // Data-driven check: if sample rows are available, inspect actual cell contents
+  if (sampleRows && sampleRows.length > 0) {
+    const numCols = headers.length;
+    const colStats: { hasMapUrl: number; hasCoords: number; isNumeric: number; numericRange: { min: number; max: number } }[] = [];
+
+    for (let c = 0; c < numCols; c++) {
+      colStats[c] = { hasMapUrl: 0, hasCoords: 0, isNumeric: 0, numericRange: { min: Infinity, max: -Infinity } };
+    }
+
+    const checkLimit = Math.min(sampleRows.length, 25);
+    for (let r = 0; r < checkLimit; r++) {
+      const row = sampleRows[r];
+      if (!row || !Array.isArray(row)) continue;
+
+      for (let c = 0; c < numCols; c++) {
+        const val = row[c];
+        if (val === undefined || val === null) continue;
+        const sVal = String(val).trim();
+        if (!sVal) continue;
+
+        const lower = sVal.toLowerCase();
+        if (
+          lower.includes('maps.app.goo.gl') ||
+          lower.includes('goo.gl/maps') ||
+          lower.includes('google.com/maps') ||
+          lower.includes('maps.google.') ||
+          lower.includes('waze.com') ||
+          lower.includes('http://') ||
+          lower.includes('https://')
+        ) {
+          colStats[c].hasMapUrl++;
+        }
+
+        if (
+          /[0-9]+\.[0-9]{4,}[,\s;/]+[0-9]+\.[0-9]{4,}/.test(sVal) ||
+          /[°\x27\x22]/.test(sVal) ||
+          /!3d[0-9.-]+!4d[0-9.-]+/.test(sVal) ||
+          /@[0-9.-]+,[0-9.-]+/.test(sVal)
+        ) {
+          colStats[c].hasCoords++;
+        }
+
+        const num = parseFloat(sVal);
+        if (!isNaN(num) && Number.isFinite(num) && /^-?\d+(\.\d+)?$/.test(sVal)) {
+          colStats[c].isNumeric++;
+          colStats[c].numericRange.min = Math.min(colStats[c].numericRange.min, num);
+          colStats[c].numericRange.max = Math.max(colStats[c].numericRange.max, num);
+        }
+      }
+    }
+
+    // 1. If a column predominantly has map URLs or coords string, assign linkColumn
+    if (!map.linkColumn) {
+      let bestLinkColIdx = -1;
+      let maxLinkCount = 0;
+      for (let c = 0; c < numCols; c++) {
+        const score = colStats[c].hasMapUrl * 2 + colStats[c].hasCoords;
+        if (score > maxLinkCount && score >= 1) {
+          maxLinkCount = score;
+          bestLinkColIdx = c;
+        }
+      }
+      if (bestLinkColIdx !== -1) {
+        map.linkColumn = headers[bestLinkColIdx];
+      }
+    }
+
+    // 2. If x/y columns are not mapped, try finding numeric coordinate columns
+    if (!map.xColumn || !map.yColumn) {
+      const candidateNumericCols = colStats
+        .map((st, idx) => ({ idx, header: headers[idx], ...st }))
+        .filter(c => c.isNumeric >= Math.min(3, checkLimit / 2));
+
+      // Check for WGS84 Lat/Lon ranges: Lon is ~34..56 (or -180..180), Lat is ~16..33 (or -90..90)
+      const lonCand = candidateNumericCols.find(c => c.numericRange.min >= 30 && c.numericRange.max <= 60);
+      const latCand = candidateNumericCols.find(c => c.numericRange.min >= 15 && c.numericRange.max <= 35);
+      if (lonCand && latCand && lonCand.idx !== latCand.idx) {
+        if (!map.xColumn) map.xColumn = lonCand.header;
+        if (!map.yColumn) map.yColumn = latCand.header;
+      }
+    }
+  }
+
   return map;
 };
 
@@ -135,7 +224,7 @@ export const parseExcel = async (file: File, onProgress?: (percent: number) => v
             if (jsonData.length === 0) throw new Error("الملف المرفوع فارغ أو غير صالح.");
             const headers = (jsonData[0] as any[]).map(String);
             const rows = jsonData.slice(1);
-            const suggestedMapping = detectColumns(headers);
+            const suggestedMapping = detectColumns(headers, rows as any[][]);
             
             if (onProgress) onProgress(100);
             resolve({ filename: file.name, type: file.name.endsWith('.csv') ? 'csv' : 'excel', headers, data: rows, preview: rows.slice(0, 5) as any[][], suggestedMapping });
@@ -147,6 +236,59 @@ export const parseExcel = async (file: File, onProgress?: (percent: number) => v
   });
 };
 
+export const ACI_PALETTE = [
+  "#000000", "#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF", "#FFFFFF", "#808080", "#C0C0C0",
+  "#FF0000", "#FFAAAA", "#BD0000", "#BD7E7E", "#810000", "#815656", "#680000", "#684545", "#4F0000", "#4F3535",
+  "#FF3F00", "#FFBFAA", "#BD2E00", "#BD8D7E", "#812000", "#816056", "#681900", "#684E45", "#4F1300", "#4F3B35",
+  "#FF7F00", "#FFD4AA", "#BD5E00", "#BD9D7E", "#814000", "#816B56", "#683400", "#685645", "#4F2700", "#4F4235",
+  "#FFBF00", "#FFEAAA", "#BD8D00", "#BDAD7E", "#816000", "#817656", "#684E00", "#685F45", "#4F3B00", "#4F4935",
+  "#FFFF00", "#FFFF4D", "#BDBD00", "#BDBD7E", "#818100", "#818156", "#686800", "#686845", "#4F4F00", "#4F4F35",
+  "#BFFF00", "#E5FF4D", "#8DBD00", "#ADBD7E", "#608100", "#768156", "#4E6800", "#5F6845", "#3B4F00", "#494F35",
+  "#7FFF00", "#BFFF4D", "#5EBD00", "#9DBD7E", "#408100", "#6B8156", "#346800", "#566845", "#274F00", "#424F35",
+  "#3FFF00", "#99FF4D", "#2EBD00", "#8DBD7E", "#208100", "#608156", "#196800", "#4E6845", "#134F00", "#3B4F35",
+  "#00FF00", "#73FF4D", "#00BD00", "#7EBD7E", "#008100", "#568156", "#006800", "#456845", "#004F00", "#354F35",
+  "#00FF3F", "#4DFF73", "#00BD2E", "#7EBD8D", "#008120", "#568160", "#006819", "#45684E", "#004F13", "#354F3B",
+  "#00FF7F", "#4DFFB2", "#00BD5E", "#7EBD9D", "#008140", "#56816B", "#006834", "#456856", "#004F27", "#354F42",
+  "#00FFBF", "#4DFFE5", "#00BD8D", "#7EBDAE", "#008160", "#568176", "#00684E", "#45685F", "#004F3B", "#354F49",
+  "#00FFFF", "#4DFFFF", "#00BDBD", "#7EBDBD", "#008181", "#568181", "#006868", "#456868", "#004F4F", "#354F4F",
+  "#00BFFF", "#4DE5FF", "#008DBD", "#7EADBD", "#006081", "#567681", "#004E68", "#455F68", "#003B4F", "#35494F",
+  "#007FFF", "#4DBFFF", "#005EBD", "#7E9DBD", "#004081", "#566B81", "#003468", "#455668", "#00274F", "#35424F",
+  "#003FFF", "#4D99FF", "#002EBD", "#7E8DBD", "#002081", "#566081", "#001968", "#454E68", "#00134F", "#353B4F",
+  "#0000FF", "#4D73FF", "#0000BD", "#7E7EBD", "#000081", "#565681", "#000068", "#454568", "#00004F", "#35354F",
+  "#3F00FF", "#734DFF", "#2E00BD", "#8D7EBD", "#200081", "#605681", "#190068", "#4E4568", "#13004F", "#3B354F",
+  "#7F00FF", "#B24DFF", "#5E00BD", "#9D7EBD", "#400081", "#6B5681", "#340068", "#564568", "#27004F", "#42354F",
+  "#BF00FF", "#E54DFF", "#8D00BD", "#AE7EBD", "#600081", "#765681", "#4E0068", "#5F4568", "#3B004F", "#49354F",
+  "#FF00FF", "#FF4DFF", "#BD00BD", "#BD7EBD", "#810081", "#815681", "#680068", "#684568", "#4F004F", "#4F354F",
+  "#FF00BF", "#FF4DE5", "#BD008D", "#BD7EAE", "#810060", "#815676", "#68004E", "#68455F", "#4F003B", "#4F3549",
+  "#FF007F", "#FF4DBF", "#BD005E", "#BD7E9D", "#810040", "#81566B", "#680034", "#684556", "#4F0027", "#4F3542",
+  "#FF003F", "#FF4D99", "#BD002E", "#BD7E8D", "#810020", "#815660", "#680019", "#68454E", "#4F0013", "#4F353B",
+  "#333333", "#505050", "#696969", "#828282", "#bebebe", "#ffffff"
+];
+
+export const getDXFColorToHex = (entityColor?: number, colorIndex?: number, layerObj?: any): string => {
+  if (typeof entityColor === 'number' && entityColor > 255) {
+    return '#' + entityColor.toString(16).padStart(6, '0').toUpperCase();
+  }
+  if (typeof colorIndex === 'number' && colorIndex >= 1 && colorIndex <= 255) {
+    return ACI_PALETTE[colorIndex] || '#00c8b3';
+  }
+  if (typeof entityColor === 'number' && entityColor >= 1 && entityColor <= 255) {
+    return ACI_PALETTE[entityColor] || '#00c8b3';
+  }
+  if (layerObj) {
+    if (typeof layerObj.color === 'number' && layerObj.color > 255) {
+      return '#' + layerObj.color.toString(16).padStart(6, '0').toUpperCase();
+    }
+    if (typeof layerObj.colorIndex === 'number' && layerObj.colorIndex >= 1 && layerObj.colorIndex <= 255) {
+      return ACI_PALETTE[layerObj.colorIndex] || '#00c8b3';
+    }
+    if (typeof layerObj.color === 'number' && layerObj.color >= 1 && layerObj.color <= 255) {
+      return ACI_PALETTE[layerObj.color] || '#00c8b3';
+    }
+  }
+  return '#00c8b3';
+};
+
 export const parseDXF = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
   if (onProgress) onProgress(10);
   await yieldToMain();
@@ -156,16 +298,84 @@ export const parseDXF = async (file: File, onProgress?: (percent: number) => voi
     if (onProgress) reader.onprogress = (e) => e.lengthComputable && onProgress(Math.round((e.loaded / e.total) * 40) + 10);
     reader.onload = async (e) => {
       try {
-        if (onProgress) onProgress(60);
+        if (onProgress) onProgress(50);
         await yieldToMain();
         
         try {
-            const text = e.target?.result as string;
-            const parser = new DxfParser();
-            const dxf = parser.parseSync(text);
-            
-            if (onProgress) onProgress(100);
-            resolve({ filename: file.name, type: 'dxf', data: dxf.entities, preview: [] });
+          const text = e.target?.result as string;
+          const parser = new DxfParser();
+          const dxf = parser.parseSync(text);
+          
+          if (onProgress) onProgress(80);
+          await yieldToMain();
+
+          const points = extractPointsFromDXF(dxf);
+          
+          // Compute Layer statistics and unique layer metadata from CAD file
+          const layerMap = new Map<string, CADLayerInfo>();
+          const rawLayers = dxf.tables?.layer?.layers || {};
+
+          // 1. Seed from layer table definitions
+          Object.keys(rawLayers).forEach(lName => {
+            const lObj = rawLayers[lName];
+            layerMap.set(lName, {
+              name: lName,
+              color: getDXFColorToHex(undefined, undefined, lObj),
+              count: 0,
+              types: [],
+              totalLength: 0,
+              visible: lObj.visible !== false
+            });
+          });
+
+          // 2. Accumulate entity metrics per layer
+          points.forEach(pt => {
+            const lName = pt.layer || 'Default';
+            if (!layerMap.has(lName)) {
+              layerMap.set(lName, {
+                name: lName,
+                color: pt.color || '#00c8b3',
+                count: 0,
+                types: [],
+                totalLength: 0,
+                visible: true
+              });
+            }
+            const info = layerMap.get(lName)!;
+            info.count += 1;
+            const geomType = pt.type || 'Point';
+            if (!info.types?.includes(geomType)) {
+              info.types?.push(geomType);
+            }
+            if (pt.originalLength) {
+              info.totalLength = (info.totalLength || 0) + pt.originalLength;
+            }
+          });
+
+          const layersList = Array.from(layerMap.values()).filter(l => l.count > 0 || rawLayers[l.name]);
+          const headers = ['ID', 'Layer', 'Type', 'Color', 'LineType', 'Length', 'Text', 'Elevation', 'X', 'Y'];
+          const preview = points.slice(0, 50).map(p => p.originalRow || [
+            p.id,
+            p.layer || '',
+            p.type || 'Point',
+            p.color || '#00c8b3',
+            p.attributes?.['LineType'] || 'Continuous',
+            p.originalLength ? p.originalLength.toFixed(2) : '',
+            p.attributes?.['Text'] || '',
+            p.z !== undefined ? p.z.toString() : '',
+            p.x ? p.x.toFixed(3) : '',
+            p.y ? p.y.toFixed(3) : ''
+          ]);
+
+          if (onProgress) onProgress(100);
+          resolve({
+            filename: file.name,
+            type: 'dxf',
+            headers,
+            data: points,
+            preview,
+            layers: layersList
+          });
         } catch (err) { reject(err); }
       } catch (err) { reject(err); }
     };
@@ -1477,62 +1687,392 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
   }
 };
 
-export const extractPointsFromDXF = (entities: any[]): GeoPoint[] => {
+export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
+  if (!dxfInput) return [];
+
+  // If already an array of GeoPoints (e.g. from transformPoints or state)
+  if (Array.isArray(dxfInput) && dxfInput.length > 0 && ('x' in dxfInput[0] || 'y' in dxfInput[0]) && ('layer' in dxfInput[0] || 'color' in dxfInput[0])) {
+    return dxfInput as GeoPoint[];
+  }
+
+  const entities: any[] = Array.isArray(dxfInput) ? dxfInput : (dxfInput.entities || []);
+  const rawLayers: Record<string, any> = (!Array.isArray(dxfInput) && dxfInput.tables?.layer?.layers) ? dxfInput.tables.layer.layers : {};
+
   const points: GeoPoint[] = [];
   let counter = 1;
+
   const getExtras = (entity: any) => {
-      const parts: string[] = [];
-      const ignored = new Set(['type', 'layer', 'handle', 'vertices', 'position', 'center', 'startPoint', 'endPoint', 'insertionPoint', 'box', 'max', 'min']);
-      Object.keys(entity).forEach(k => {
-          if(!ignored.has(k)) {
-              const val = entity[k];
-              if(val !== null && val !== undefined && typeof val !== 'object' && typeof val !== 'function') parts.push(`${k}: ${val}`);
-          }
-      });
-      return parts.join(' | ');
+    const parts: string[] = [];
+    const ignored = new Set(['type', 'layer', 'handle', 'vertices', 'position', 'center', 'startPoint', 'endPoint', 'insertionPoint', 'box', 'max', 'min', 'color', 'colorIndex', 'lineType']);
+    Object.keys(entity).forEach(k => {
+      if (!ignored.has(k)) {
+        const val = entity[k];
+        if (val !== null && val !== undefined && typeof val !== 'object' && typeof val !== 'function') {
+          parts.push(`${k}: ${val}`);
+        }
+      }
+    });
+    return parts.join(' | ');
   };
+
   entities.forEach(entity => {
-    const extras = getExtras(entity);
-    const layer = entity.layer || 'Default';
+    const layer = String(entity.layer || 'Default').trim();
+    const layerObj = rawLayers[layer];
+    const colorHex = getDXFColorToHex(entity.color, entity.colorIndex, layerObj);
+    const lineType = entity.lineType || layerObj?.lineType || 'Continuous';
     const folderPath = [layer];
-    if ((entity.type === 'POINT' || entity.type === 'INSERT') && entity.position) {
-      points.push({ id: entity.name || entity.handle || counter++, x: entity.position.x, y: entity.position.y, z: entity.position.z || 0, layer, folderPath, description: `DXF ${entity.type}`, attr1: extras, type: 'Point' });
-    } 
+    const extras = getExtras(entity);
+
+    // 1. POINT & INSERT (Blocks)
+    if ((entity.type === 'POINT' || entity.type === 'INSERT') && (entity.position || entity.insertionPoint)) {
+      const pos = entity.position || entity.insertionPoint;
+      const id = String(entity.name || entity.handle || `CAD_${counter++}`);
+      const textVal = entity.name || '';
+      const startX = pos.x || 0;
+      const startY = pos.y || 0;
+      const zVal = pos.z !== undefined ? pos.z : 0;
+      
+      const attrs: Record<string, string> = {
+        'Layer': layer,
+        'Type': entity.type,
+        'Handle': String(entity.handle || id),
+        'Color': colorHex,
+        'LineType': lineType,
+        'Length': '',
+        'Text': textVal,
+        'Elevation': zVal.toString(),
+        'X': startX.toFixed(3),
+        'Y': startY.toFixed(3)
+      };
+
+      points.push({
+        id,
+        x: startX,
+        y: startY,
+        z: zVal,
+        layer,
+        folderPath,
+        color: colorHex,
+        description: entity.type === 'INSERT' ? `Block: ${entity.name || id}` : `CAD Point (${id})`,
+        attr1: extras,
+        type: 'Point',
+        attributes: attrs,
+        originalRow: [id, layer, entity.type, colorHex, lineType, '', textVal, zVal.toString(), startX.toFixed(3), startY.toFixed(3)]
+      });
+    }
+    // 2. CIRCLE
     else if (entity.type === 'CIRCLE' && entity.center) {
-       points.push({ id: entity.handle || counter++, x: entity.center.x, y: entity.center.y, z: entity.center.z || 0, layer, folderPath, description: `DXF Circle`, attr1: extras, type: 'Point' });
+      const { center, radius = 0 } = entity;
+      const id = String(entity.handle || `CAD_${counter++}`);
+      const circumference = 2 * Math.PI * radius;
+      const zVal = center.z || 0;
+      
+      // Approximate circle path with 32 segments for accurate geographic representation
+      const numSegments = 32;
+      const path: { x: number; y: number; z?: number }[] = [];
+      for (let i = 0; i <= numSegments; i++) {
+        const theta = (i / numSegments) * 2 * Math.PI;
+        path.push({
+          x: center.x + radius * Math.cos(theta),
+          y: center.y + radius * Math.sin(theta),
+          z: zVal
+        });
+      }
+
+      const attrs: Record<string, string> = {
+        'Layer': layer,
+        'Type': 'Circle',
+        'Handle': String(entity.handle || id),
+        'Color': colorHex,
+        'LineType': lineType,
+        'Length': circumference.toFixed(2),
+        'Radius': radius.toFixed(2),
+        'Text': '',
+        'Elevation': zVal.toString(),
+        'X': center.x.toFixed(3),
+        'Y': center.y.toFixed(3)
+      };
+
+      points.push({
+        id,
+        x: center.x,
+        y: center.y,
+        z: zVal,
+        layer,
+        folderPath,
+        color: colorHex,
+        originalLength: circumference,
+        length: circumference,
+        description: `Circle (R=${radius.toFixed(2)}m, L=${circumference.toFixed(2)}m)`,
+        attr1: extras,
+        type: 'LineString',
+        path,
+        attributes: attrs,
+        originalRow: [id, layer, 'Circle', colorHex, lineType, circumference.toFixed(2), '', zVal.toString(), center.x.toFixed(3), center.y.toFixed(3)]
+      });
     }
+    // 3. ARC
     else if (entity.type === 'ARC' && entity.center) {
-        const { center, radius, startAngle, endAngle } = entity;
-        let sAngle = startAngle;
-        let eAngle = endAngle;
-        if (eAngle <= sAngle) eAngle += 360;
-        const sweep = eAngle - sAngle;
-        const numSegments = Math.max(12, Math.ceil(sweep / 5));
-        const step = sweep / numSegments;
-        const path = [];
-        for(let i=0; i<=numSegments; i++) {
-            const theta = (sAngle + (step * i)) * (Math.PI / 180);
-            path.push({ x: center.x + radius * Math.cos(theta), y: center.y + radius * Math.sin(theta), z: center.z || 0 });
-        }
-        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, folderPath, description: `Arc (R=${radius.toFixed(2)})`, attr1: extras, type: 'LineString', path: path });
+      const { center, radius = 0, startAngle = 0, endAngle = 0 } = entity;
+      const id = String(entity.handle || `CAD_${counter++}`);
+      let sAngle = startAngle;
+      let eAngle = endAngle;
+      if (eAngle <= sAngle) eAngle += 360;
+      const sweep = eAngle - sAngle;
+      const arcLength = radius * (sweep * (Math.PI / 180));
+      const numSegments = Math.max(12, Math.ceil(sweep / 5));
+      const step = sweep / numSegments;
+      const path: { x: number; y: number; z?: number }[] = [];
+      const zVal = center.z || 0;
+
+      for (let i = 0; i <= numSegments; i++) {
+        const theta = (sAngle + (step * i)) * (Math.PI / 180);
+        path.push({
+          x: center.x + radius * Math.cos(theta),
+          y: center.y + radius * Math.sin(theta),
+          z: zVal
+        });
+      }
+
+      const attrs: Record<string, string> = {
+        'Layer': layer,
+        'Type': 'Arc',
+        'Handle': String(entity.handle || id),
+        'Color': colorHex,
+        'LineType': lineType,
+        'Length': arcLength.toFixed(2),
+        'Radius': radius.toFixed(2),
+        'Text': '',
+        'Elevation': zVal.toString(),
+        'X': path[0].x.toFixed(3),
+        'Y': path[0].y.toFixed(3)
+      };
+
+      points.push({
+        id,
+        x: path[0].x,
+        y: path[0].y,
+        z: zVal,
+        layer,
+        folderPath,
+        color: colorHex,
+        originalLength: arcLength,
+        length: arcLength,
+        description: `Arc (R=${radius.toFixed(2)}m, L=${arcLength.toFixed(2)}m)`,
+        attr1: extras,
+        type: 'LineString',
+        path,
+        attributes: attrs,
+        originalRow: [id, layer, 'Arc', colorHex, lineType, arcLength.toFixed(2), '', zVal.toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+      });
     }
+    // 4. LWPOLYLINE & POLYLINE
     else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && entity.vertices && entity.vertices.length > 0) {
-        const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
-        if (entity.shape || entity.closed) path.push({ ...path[0] });
-        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, folderPath, description: `Polyline`, attr1: extras, type: 'LineString', path: path });
+      const id = String(entity.handle || `CAD_${counter++}`);
+      const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
+      const isClosed = Boolean(entity.shape || entity.closed);
+      if (isClosed && path.length > 2) {
+        path.push({ ...path[0] });
+      }
+
+      let totalLen = 0;
+      for (let i = 0; i < path.length - 1; i++) {
+        totalLen += Math.hypot(path[i + 1].x - path[i].x, path[i + 1].y - path[i].y, (path[i + 1].z || 0) - (path[i].z || 0));
+      }
+
+      const geomType = isClosed ? 'Polygon' : 'LineString';
+      const attrs: Record<string, string> = {
+        'Layer': layer,
+        'Type': entity.type,
+        'Handle': String(entity.handle || id),
+        'Color': colorHex,
+        'LineType': lineType,
+        'Length': totalLen.toFixed(2),
+        'Text': '',
+        'Elevation': path[0]?.z !== undefined ? path[0].z.toString() : '',
+        'X': path[0].x.toFixed(3),
+        'Y': path[0].y.toFixed(3)
+      };
+
+      points.push({
+        id,
+        x: path[0].x,
+        y: path[0].y,
+        z: path[0].z || 0,
+        layer,
+        folderPath,
+        color: colorHex,
+        originalLength: totalLen,
+        length: totalLen,
+        description: `Polyline (L=${totalLen.toFixed(2)}m)`,
+        attr1: extras,
+        type: geomType,
+        path,
+        attributes: attrs,
+        originalRow: [id, layer, entity.type, colorHex, lineType, totalLen.toFixed(2), '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+      });
     }
+    // 5. LINE
     else if (entity.type === 'LINE' && entity.vertices && entity.vertices.length >= 2) {
-        const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
-        points.push({ id: entity.handle || counter++, x: path[0].x, y: path[0].y, z: path[0].z, layer, folderPath, description: `Line`, attr1: extras, type: 'LineString', path: path });
+      const id = String(entity.handle || `CAD_${counter++}`);
+      const p1 = entity.vertices[0];
+      const p2 = entity.vertices[1];
+      const path = [
+        { x: p1.x, y: p1.y, z: p1.z || 0 },
+        { x: p2.x, y: p2.y, z: p2.z || 0 }
+      ];
+      const lineLen = Math.hypot(p2.x - p1.x, p2.y - p1.y, (p2.z || 0) - (p1.z || 0));
+
+      const attrs: Record<string, string> = {
+        'Layer': layer,
+        'Type': 'Line',
+        'Handle': String(entity.handle || id),
+        'Color': colorHex,
+        'LineType': lineType,
+        'Length': lineLen.toFixed(2),
+        'Text': '',
+        'Elevation': (p1.z || 0).toString(),
+        'X': p1.x.toFixed(3),
+        'Y': p1.y.toFixed(3)
+      };
+
+      points.push({
+        id,
+        x: p1.x,
+        y: p1.y,
+        z: p1.z || 0,
+        layer,
+        folderPath,
+        color: colorHex,
+        originalLength: lineLen,
+        length: lineLen,
+        description: `Line (L=${lineLen.toFixed(2)}m)`,
+        attr1: extras,
+        type: 'LineString',
+        path,
+        attributes: attrs,
+        originalRow: [id, layer, 'Line', colorHex, lineType, lineLen.toFixed(2), '', (p1.z || 0).toString(), p1.x.toFixed(3), p1.y.toFixed(3)]
+      });
     }
-    else if ((entity.type === 'TEXT' || entity.type === 'MTEXT')) {
-        const pos = entity.position || entity.insertionPoint;
-        if (pos) {
-            const textContent = entity.text || '';
-            points.push({ id: textContent || entity.handle || counter++, x: pos.x, y: pos.y, z: pos.z || 0, layer, folderPath, description: `Text: ${textContent}`, attr1: extras, type: 'Point' });
-        }
+    // 6. SPLINE
+    else if (entity.type === 'SPLINE' && (entity.controlPoints || entity.fitPoints || entity.vertices)) {
+      const id = String(entity.handle || `CAD_${counter++}`);
+      const rawPts = entity.controlPoints || entity.fitPoints || entity.vertices || [];
+      const path = rawPts.map((p: any) => ({ x: p.x, y: p.y, z: p.z || 0 }));
+      let totalLen = 0;
+      for (let i = 0; i < path.length - 1; i++) {
+        totalLen += Math.hypot(path[i + 1].x - path[i].x, path[i + 1].y - path[i].y, (path[i + 1].z || 0) - (path[i].z || 0));
+      }
+
+      if (path.length > 0) {
+        const attrs: Record<string, string> = {
+          'Layer': layer,
+          'Type': 'Spline',
+          'Handle': String(entity.handle || id),
+          'Color': colorHex,
+          'LineType': lineType,
+          'Length': totalLen.toFixed(2),
+          'Text': '',
+          'Elevation': (path[0]?.z || 0).toString(),
+          'X': path[0].x.toFixed(3),
+          'Y': path[0].y.toFixed(3)
+        };
+
+        points.push({
+          id,
+          x: path[0].x,
+          y: path[0].y,
+          z: path[0].z || 0,
+          layer,
+          folderPath,
+          color: colorHex,
+          originalLength: totalLen,
+          length: totalLen,
+          description: `Spline (L=${totalLen.toFixed(2)}m)`,
+          attr1: extras,
+          type: 'LineString',
+          path,
+          attributes: attrs,
+          originalRow: [id, layer, 'Spline', colorHex, lineType, totalLen.toFixed(2), '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+        });
+      }
+    }
+    // 7. 3DFACE / SOLID / HATCH
+    else if ((entity.type === '3DFACE' || entity.type === 'SOLID' || entity.type === 'HATCH') && entity.vertices && entity.vertices.length >= 3) {
+      const id = String(entity.handle || `CAD_${counter++}`);
+      const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
+      path.push({ ...path[0] });
+
+      const attrs: Record<string, string> = {
+        'Layer': layer,
+        'Type': entity.type,
+        'Handle': String(entity.handle || id),
+        'Color': colorHex,
+        'LineType': lineType,
+        'Length': '',
+        'Text': '',
+        'Elevation': (path[0]?.z || 0).toString(),
+        'X': path[0].x.toFixed(3),
+        'Y': path[0].y.toFixed(3)
+      };
+
+      points.push({
+        id,
+        x: path[0].x,
+        y: path[0].y,
+        z: path[0].z || 0,
+        layer,
+        folderPath,
+        color: colorHex,
+        description: `CAD ${entity.type}`,
+        attr1: extras,
+        type: 'Polygon',
+        path,
+        attributes: attrs,
+        originalRow: [id, layer, entity.type, colorHex, lineType, '', '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+      });
+    }
+    // 8. TEXT & MTEXT
+    else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
+      const pos = entity.position || entity.insertionPoint;
+      if (pos) {
+        const id = String(entity.handle || `CAD_${counter++}`);
+        const textContent = String(entity.text || entity.string || '').trim();
+        const startX = pos.x || 0;
+        const startY = pos.y || 0;
+        const zVal = pos.z !== undefined ? pos.z : 0;
+
+        const attrs: Record<string, string> = {
+          'Layer': layer,
+          'Type': entity.type,
+          'Handle': String(entity.handle || id),
+          'Color': colorHex,
+          'LineType': lineType,
+          'Length': '',
+          'Text': textContent,
+          'Elevation': zVal.toString(),
+          'X': startX.toFixed(3),
+          'Y': startY.toFixed(3)
+        };
+
+        points.push({
+          id: textContent || id,
+          x: startX,
+          y: startY,
+          z: zVal,
+          layer,
+          folderPath,
+          color: colorHex,
+          description: `CAD Text: ${textContent}`,
+          attr1: extras,
+          type: 'Point',
+          attributes: attrs,
+          originalRow: [id, layer, entity.type, colorHex, lineType, '', textContent, zVal.toString(), startX.toFixed(3), startY.toFixed(3)]
+        });
+      }
     }
   });
+
   return points;
 };
 

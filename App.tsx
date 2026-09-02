@@ -26,7 +26,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon, OutfallTarget } from './types';
 import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
-import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText } from './services/crs';
+import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText, resolveGoogleMapsUrls, isShortGoogleMapsUrl, isPotentialMapLinkOrCoord } from './services/crs';
 import { downloadBlob, downloadKMZ, downloadKMZGroupedZip, generateKML, generateKMLChunks, generateKMLFolderContent, generateKMLStyles } from './services/kmlService';
 import { getReverseGeocode, matchNearestStreetName, calculatePathLength, splitLineString, splitLineIntoParts, fetchStreetsInPolygon, isPointInPolygon, clipLineToPolygon, calculateConvexHull, calculateBoundingBox, bufferPolygon, splitLinesAtIntersections, detectSpatialOverlap, resolveSpatialOverlaps, detectExactDuplicates, detectLineIntersections, resolveExactDuplicates, trimLinesAtIntersections, detectNetworkGaps, NetworkGap, OverlapResult, isBlackLine } from './services/geometryService';
 import { generateAnalysisPPTX, generateAnalysisPDF, generateWMainlinePPTX, generateWWMainlinePPTX } from './services/reportService';
@@ -3475,6 +3475,7 @@ const App: React.FC = () => {
     xColumn: '', yColumn: '', idColumn: '', linkColumn: '', attr1Column: '', attr2Column: ''
   });
   const [selectedHeaders, setSelectedHeaders] = useState<string[]>([]);
+  const [selectedLayers, setSelectedLayers] = useState<string[]>([]);
   const [streetMappingCol, setStreetMappingCol] = useState<string>('');
   const [districtMappingCol, setDistrictMappingCol] = useState<string>('');
   const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'color' | 'column' | 'geometry'>(() => loadSavedPreference('groupingMode', 'layer'));
@@ -3541,24 +3542,9 @@ const App: React.FC = () => {
   const boundaryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (activeFile && activeFile.headers) {
-      const normalize = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
-      const initialSelection = activeFile.headers.filter(h => {
-        const normH = normalize(h);
-        return defaultFields.some(df => {
-          const normDf = normalize(df);
-          return normH.includes(normDf) || normDf.includes(normH);
-        });
-      });
-
-      // Also add the default fields themselves so they are always in selectedHeaders
-      // even if they don't exist in the file's headers
-      const allSelected = Array.from(new Set([...initialSelection, ...defaultFields]));
-      setSelectedHeaders(initialSelection.length > 0 ? allSelected : Array.from(new Set([...(activeFile.headers || []), ...defaultFields])));
-
-      if ((activeFile.headers || []).length > 0) {
-        setGroupByColumnSelect(activeFile.headers![0]);
-      }
+    if (activeFile && activeFile.headers && activeFile.headers.length > 0) {
+      setSelectedHeaders([...activeFile.headers]);
+      setGroupByColumnSelect(activeFile.headers[0]);
     } else {
       setSelectedHeaders([]);
       setGroupByColumnSelect('');
@@ -4681,7 +4667,7 @@ const App: React.FC = () => {
 
     const workbook = XLSX.utils.book_new();
 
-    if (activeTab === 'converter' && activeFile && (activeFile.type === 'excel' || activeFile.type === 'csv')) {
+    if (activeTab === 'converter' && activeFile && (activeFile.type === 'excel' || activeFile.type === 'csv' || activeFile.type === 'dxf')) {
         const originalHeaders = activeFile.headers || [];
         const pts = ptsToExportParam || globalPoints;
 
@@ -5035,11 +5021,31 @@ const App: React.FC = () => {
         const linkIdx = mapping.linkColumn ? (activeFile.headers?.indexOf(mapping.linkColumn) ?? -1) : -1;
         const attr1Idx = mapping.attr1Column ? (activeFile.headers?.indexOf(mapping.attr1Column) ?? -1) : -1;
 
-        points = activeFile.data.map((row, idx) => {
-          let rawX = parseFloat(row[xIdx]);
-          let rawY = parseFloat(row[yIdx]);
+        // Check if there are short maps urls that need batch resolution
+        const urlsToResolve: string[] = [];
+        activeFile.data.forEach((row) => {
+          if (!Array.isArray(row)) return;
+          if (linkIdx !== -1 && row[linkIdx]) {
+            const val = String(row[linkIdx]).trim();
+            if (isShortGoogleMapsUrl(val) || (val.startsWith('http') && !parseCoordinatesFromText(val))) {
+              urlsToResolve.push(val);
+            }
+          }
+          row.forEach((cell) => {
+            const s = String(cell || '').trim();
+            if (isShortGoogleMapsUrl(s)) urlsToResolve.push(s);
+          });
+        });
 
-          if ((isNaN(rawX) || isNaN(rawY) || (rawX === 0 && rawY === 0)) && linkIdx !== -1) {
+        if (urlsToResolve.length > 0) {
+          await resolveGoogleMapsUrls(urlsToResolve);
+        }
+
+        points = activeFile.data.map((row, idx) => {
+          let rawX = xIdx !== -1 ? parseFloat(row[xIdx]) : NaN;
+          let rawY = yIdx !== -1 ? parseFloat(row[yIdx]) : NaN;
+
+          if ((isNaN(rawX) || isNaN(rawY) || (rawX === 0 && rawY === 0)) && linkIdx !== -1 && row[linkIdx]) {
              const extracted = parseCoordinatesFromText(String(row[linkIdx]));
              if (extracted) {
                 rawX = extracted.lon;
@@ -5047,14 +5053,37 @@ const App: React.FC = () => {
              }
           }
 
+          if (isNaN(rawX) || isNaN(rawY) || (rawX === 0 && rawY === 0)) {
+            for (let c = 0; c < row.length; c++) {
+              if (c === xIdx || c === yIdx) continue;
+              const cellVal = String(row[c] || '').trim();
+              if (cellVal && isPotentialMapLinkOrCoord(cellVal)) {
+                const ext = parseCoordinatesFromText(cellVal);
+                if (ext) {
+                  rawX = ext.lon;
+                  rawY = ext.lat;
+                  break;
+                }
+              }
+            }
+          }
+
+          const attributes: Record<string, any> = {};
+          if (activeFile.headers) {
+            activeFile.headers.forEach((h, hIdx) => {
+              attributes[h] = row[hIdx] !== undefined && row[hIdx] !== null ? row[hIdx] : '';
+            });
+          }
+
           return {
-            id: idIdx !== -1 ? String(row[idIdx]) : `PT_${idx + 1}`,
+            id: idIdx !== -1 && row[idIdx] !== undefined ? String(row[idIdx]) : `PT_${idx + 1}`,
             x: isNaN(rawX) ? 0 : rawX,
             y: isNaN(rawY) ? 0 : rawY,
             type: 'Point',
-            layer: attr1Idx !== -1 ? String(row[attr1Idx]) : 'Imported',
-            description: linkIdx !== -1 ? String(row[linkIdx]) : '',
+            layer: attr1Idx !== -1 && row[attr1Idx] ? String(row[attr1Idx]) : 'Imported',
+            description: linkIdx !== -1 && row[linkIdx] ? String(row[linkIdx]) : '',
             color: '#dcb13c',
+            attributes: Object.keys(attributes).length > 0 ? attributes : undefined,
             originalRow: row
           };
         });
@@ -5123,13 +5152,37 @@ const App: React.FC = () => {
     try {
       const fName = String(selectedFile.name || '').toLowerCase();
       let result: ParsedFile;
-      const onProg = (pct: number) => setProgressPercent(Math.max(15, Math.min(80, pct)));
+      const onProg = (pct: number) => setProgressPercent(Math.max(15, Math.min(65, pct)));
       if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) result = await parseExcel(selectedFile, onProg);
       else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
       else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) result = await parseKMZ(selectedFile, onProg);
       else throw new Error(t.errors.unsupported);
 
-      setProgressPercent(85);
+      // If Excel or CSV, check for Google Maps URLs / short links and batch resolve
+      if ((fName.endsWith('.xlsx') || fName.endsWith('.csv')) && result.data && result.data.length > 0) {
+        const potentialUrls: string[] = [];
+        const linkColIdx = result.suggestedMapping?.linkColumn ? result.headers.indexOf(result.suggestedMapping.linkColumn) : -1;
+        
+        result.data.forEach((row: any[]) => {
+          if (!Array.isArray(row)) return;
+          if (linkColIdx !== -1 && row[linkColIdx]) {
+            const v = String(row[linkColIdx]).trim();
+            if (v.startsWith('http') || isShortGoogleMapsUrl(v)) potentialUrls.push(v);
+          }
+          row.forEach((cell: any) => {
+            const s = String(cell || '').trim();
+            if (isShortGoogleMapsUrl(s)) potentialUrls.push(s);
+          });
+        });
+
+        if (potentialUrls.length > 0) {
+          setProgressPercent(70);
+          setStatusMessage(lang === 'ar' ? 'Ø¬Ø§Ø±ÙŠ Ù‚Ø±Ø§Ø¡Ø© ÙˆØ§Ø³ØªØ®Ø±Ø§Ø¬ Ø§Ù„Ø¥Ø­Ø¯Ø§Ø«ÙŠØ§Øª Ù…Ù† Ø±ÙˆØ§Ø¨Ø· Ù‚ÙˆÙ‚Ù„ Ù…Ø§Ø¨ (Google Maps)...' : 'Resolving coordinates from Google Maps links...');
+          await resolveGoogleMapsUrls(potentialUrls, (p) => setProgressPercent(70 + Math.round(p * 0.15)));
+        }
+      }
+
+      setProgressPercent(88);
       setStatusMessage(lang === 'ar' ? 'Ø¬Ø§Ø±ÙŠ ØªØ¬Ù‡ÙŠØ² Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª ÙˆØ¹Ø±Ø¶Ù‡Ø§ Ø¹Ù„Ù‰ Ø§Ù„Ø®Ø±ÙŠØ·Ø©...' : 'Preparing data and rendering on map...');
       await new Promise<void>(r => setTimeout(r, 80));
 
@@ -5138,55 +5191,105 @@ const App: React.FC = () => {
       setDataId(newFileId);
 
       let detected: string | null = null;
-      if (fName.endsWith('.dxf') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) {
-        detected = identifyPotentialCRS(fName.endsWith('.dxf') ? extractPointsFromDXF(result.data) : result.data);
-      } else if (result.suggestedMapping?.xColumn && result.data.length > 0) {
-          const xIdx = result.headers?.indexOf(result.suggestedMapping.xColumn) ?? -1;
-          const yIdx = result.headers?.indexOf(result.suggestedMapping.yColumn) ?? -1;
-          if (xIdx !== -1 && yIdx !== -1) {
-            const samplePoint: GeoPoint = { id: 'test', x: parseFloat(result.data[0][xIdx]), y: parseFloat(result.data[0][yIdx]) };
-            detected = identifyPotentialCRS([samplePoint]);
+      let displayPts: GeoPoint[] = [];
+
+      if (fName.endsWith('.dxf')) {
+        displayPts = extractPointsFromDXF(result.data);
+        detected = identifyPotentialCRS(displayPts);
+      } else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) {
+        displayPts = result.data;
+        detected = identifyPotentialCRS(displayPts);
+      } else if (fName.endsWith('.xlsx') || fName.endsWith('.csv')) {
+        const xIdx = result.suggestedMapping?.xColumn ? (result.headers?.indexOf(result.suggestedMapping.xColumn) ?? -1) : -1;
+        const yIdx = result.suggestedMapping?.yColumn ? (result.headers?.indexOf(result.suggestedMapping.yColumn) ?? -1) : -1;
+        const idIdx = result.suggestedMapping?.idColumn ? (result.headers?.indexOf(result.suggestedMapping.idColumn) ?? -1) : -1;
+        const linkIdx = result.suggestedMapping?.linkColumn ? (result.headers?.indexOf(result.suggestedMapping.linkColumn) ?? -1) : -1;
+        const attr1Idx = result.suggestedMapping?.attr1Column ? (result.headers?.indexOf(result.suggestedMapping.attr1Column) ?? -1) : -1;
+
+        displayPts = result.data.map((row: any, idx: number) => {
+          let rawX = xIdx !== -1 ? parseFloat(row[xIdx]) : NaN;
+          let rawY = yIdx !== -1 ? parseFloat(row[yIdx]) : NaN;
+
+          if ((isNaN(rawX) || isNaN(rawY) || (rawX === 0 && rawY === 0)) && linkIdx !== -1 && row[linkIdx]) {
+            const extracted = parseCoordinatesFromText(String(row[linkIdx]));
+            if (extracted) {
+              rawX = extracted.lon;
+              rawY = extracted.lat;
+            }
           }
+
+          if (isNaN(rawX) || isNaN(rawY) || (rawX === 0 && rawY === 0)) {
+            for (let c = 0; c < row.length; c++) {
+              if (c === xIdx || c === yIdx) continue;
+              const cellVal = String(row[c] || '').trim();
+              if (cellVal && isPotentialMapLinkOrCoord(cellVal)) {
+                const ext = parseCoordinatesFromText(cellVal);
+                if (ext) {
+                  rawX = ext.lon;
+                  rawY = ext.lat;
+                  break;
+                }
+              }
+            }
+          }
+
+          const attributes: Record<string, any> = {};
+          if (result.headers) {
+            result.headers.forEach((h: string, hIdx: number) => {
+              attributes[h] = row[hIdx] !== undefined && row[hIdx] !== null ? row[hIdx] : '';
+            });
+          }
+
+          return {
+            id: idIdx !== -1 && row[idIdx] !== undefined ? String(row[idIdx]) : `PT_${idx + 1}`,
+            x: isNaN(rawX) ? 0 : rawX,
+            y: isNaN(rawY) ? 0 : rawY,
+            type: 'Point',
+            layer: attr1Idx !== -1 && row[attr1Idx] ? String(row[attr1Idx]) : 'Imported',
+            description: linkIdx !== -1 && row[linkIdx] ? String(row[linkIdx]) : '',
+            color: '#dcb13c',
+            attributes: Object.keys(attributes).length > 0 ? attributes : undefined,
+            originalRow: row
+          };
+        });
+
+        const validGeoPoints = displayPts.filter(p => p.x !== 0 && p.y !== 0);
+        if (validGeoPoints.length > 0) {
+          detected = identifyPotentialCRS(validGeoPoints);
+          if (!detected && Math.abs(validGeoPoints[0].x) <= 180 && Math.abs(validGeoPoints[0].y) <= 90) {
+            detected = 'EPSG:4326';
+          }
+        }
       }
-      if (detected) { setSourceEPSG(detected); setAutoDetected(COMMON_EPSG.find(c => c.code === detected)?.name || detected); }
-      if (result.suggestedMapping) setMapping(prev => ({ ...prev, ...result.suggestedMapping }));
+
+      if (detected) {
+        setSourceEPSG(detected);
+        setAutoDetected(COMMON_EPSG.find(c => c.code === detected)?.name || detected);
+      }
+      if (result.suggestedMapping) {
+        setMapping(prev => ({ ...prev, ...result.suggestedMapping }));
+      }
 
       try {
-        let displayPts: GeoPoint[] = [];
-        if (fName.endsWith('.dxf')) {
-            displayPts = extractPointsFromDXF(result.data);
-        } else if (fName.endsWith('.kmz') || fName.endsWith('.kml') || fName.endsWith('.zip') || fName.endsWith('.gdb') || fName.endsWith('.shp')) {
-            displayPts = result.data;
-        } else if ((fName.endsWith('.xlsx') || fName.endsWith('.csv')) && result.suggestedMapping?.xColumn && result.suggestedMapping?.yColumn) {
-            const xIdx = result.headers?.indexOf(result.suggestedMapping.xColumn) ?? -1;
-            const yIdx = result.headers?.indexOf(result.suggestedMapping.yColumn) ?? -1;
-            const idIdx = result.suggestedMapping.idColumn ? (result.headers?.indexOf(result.suggestedMapping.idColumn) ?? -1) : -1;
-            if (xIdx !== -1 && yIdx !== -1) {
-                displayPts = result.data.map((row: any, idx: number) => ({
-                    id: idIdx !== -1 ? String(row[idIdx]) : `PT_${idx + 1}`,
-                    x: parseFloat(row[xIdx]) || 0,
-                    y: parseFloat(row[yIdx]) || 0,
-                    type: 'Point',
-                    layer: 'Imported',
-                    color: '#dcb13c',
-                    originalRow: row
-                }));
-            }
-        }
-        
         if (displayPts.length > 0) {
-            let transformedPts = displayPts;
-            if (detected) {
-                const def = COMMON_EPSG.find(e => e.code === detected)?.def || detected;
-                transformedPts = transformPoints(displayPts, def);
-            }
-            setGlobalPoints(transformedPts);
+          let transformedPts = displayPts;
+          if (detected) {
+            const def = COMMON_EPSG.find(e => e.code === detected)?.def || detected;
+            transformedPts = transformPoints(displayPts, def);
+          }
+          setGlobalPoints(transformedPts);
         }
       } catch (e) {
-         console.warn("Failed to auto-display points on map", e);
+        console.warn("Failed to auto-display points on map", e);
       }
+
+      const validCount = displayPts.filter(p => p.x !== 0 && p.y !== 0).length;
       setProgressPercent(100);
-      setStatusMessage(lang === 'ar' ? `ØªÙ…Øª Ù…Ø¹Ø§Ù„Ø¬Ø© ÙˆØªØ­Ù…ÙŠÙ„ Ø§Ù„Ù…Ù„Ù (${result.filename}) Ø¨Ù†Ø¬Ø§Ø­! ğŸ—ºï¸` : `File processed and loaded (${result.filename}) successfully! ğŸ—ºï¸`);
+      setStatusMessage(
+        lang === 'ar'
+          ? `ØªÙ…Øª Ù…Ø¹Ø§Ù„Ø¬Ø© ÙˆØªØ­Ù…ÙŠÙ„ Ø§Ù„Ù…Ù„Ù (${result.filename}) Ø¨Ù†Ø¬Ø§Ø­! ØªÙ… ØªØ­Ø¯ÙŠØ¯ (${validCount}) Ù…ÙˆÙ‚Ø¹ Ø¹Ù„Ù‰ Ø§Ù„Ø®Ø±ÙŠØ·Ø© ğŸ—ºï¸`
+          : `File (${result.filename}) processed! (${validCount}) locations rendered on map ğŸ—ºï¸`
+      );
       await new Promise<void>(r => setTimeout(r, 600));
     } catch (err: any) {
       setError(err.message || String(err));
@@ -5494,11 +5597,7 @@ const App: React.FC = () => {
 
                 if (streetMappingCol) {
                     pt.attributes[streetMappingCol] = finalStreet;
-                } else {
-                    pt.attributes['STREETNAME'] = finalStreet;
-                    pt.attributes['Ø§Ù„Ø´Ø§Ø±Ø¹'] = finalStreet;
-                    pt.attributes['Ø§Ø³Ù… Ø§Ù„Ø´Ø§Ø±Ø¹'] = finalStreet;
-                    pt.attributes['Ø§Ø³Ù…_Ø§Ù„Ø´Ø§Ø±Ø¹'] = finalStreet;
+                } else if (safeHeaders.length > 0) {
                     safeHeaders.forEach(h => {
                       const lowerH = String(h || '').toLowerCase();
                       if (['street', 'streetname', 'Ø§Ø³Ù… Ø§Ù„Ø´Ø§Ø±Ø¹', 'Ø§Ù„Ø´Ø§Ø±Ø¹', 'Ø§Ø³Ù…_Ø§Ù„Ø´Ø§Ø±Ø¹'].includes(lowerH) || h === 'Ø§Ø³Ù… Ø§Ù„Ø´Ø§Ø±Ø¹' || h === 'Ø§Ù„Ø´Ø§Ø±Ø¹') {
@@ -5509,11 +5608,7 @@ const App: React.FC = () => {
 
                 if (districtMappingCol) {
                     pt.attributes[districtMappingCol] = finalDistrict;
-                } else {
-                    pt.attributes['DISTRICT'] = finalDistrict;
-                    pt.attributes['Ø§Ù„Ø­ÙŠ'] = finalDistrict;
-                    pt.attributes['Ø§Ø³Ù… Ø§Ù„Ø­ÙŠ'] = finalDistrict;
-                    pt.attributes['Ø§Ø³Ù…_Ø§Ù„Ø­ÙŠ'] = finalDistrict;
+                } else if (safeHeaders.length > 0) {
                     safeHeaders.forEach(h => {
                       const lowerH = String(h || '').toLowerCase();
                       if (['district', 'Ø§Ù„Ø­ÙŠ', 'Ø§Ø³Ù… Ø§Ù„Ø­ÙŠ', 'Ø§Ø³Ù…_Ø§Ù„Ø­ÙŠ'].includes(lowerH) || h === 'Ø§Ù„Ø­ÙŠ' || h === 'Ø§Ø³Ù… Ø§Ù„Ø­ÙŠ') {
@@ -6235,6 +6330,106 @@ const App: React.FC = () => {
                                     </div>
                                 )}
 
+                                {/* AutoCAD Source Layers Card */}
+                                {((activeFile.type === 'dxf') || (activeFile.layers && activeFile.layers.length > 0)) && (
+                                    <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-cyan-500/20 shadow-xl space-y-4 animate-in slide-in-from-bottom">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Layers className="w-4 h-4 text-cyan-400" />
+                                                <h3 className="text-white font-black text-sm">
+                                                    {lang === 'ar' ? 'Ø·Ø¨Ù‚Ø§Øª Ø§Ù„Ø£ÙˆØªÙˆÙƒØ§Ø¯ Ù…Ù† Ø§Ù„Ù…Ù„Ù Ø§Ù„Ù…ØµØ¯Ø±' : 'Source AutoCAD Layers'}
+                                                </h3>
+                                            </div>
+                                            <span className="text-[10px] font-black text-cyan-300 bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-0.5 rounded-full">
+                                                {selectedLayers.length} / {(activeFile.layers?.length || (activeFile.data ? new Set(activeFile.data.map(p => p.layer || 'Default')).size : 0))} {lang === 'ar' ? 'Ø·Ø¨Ù‚Ø© Ù…ÙØ¹Ù„Ø©' : 'Active'}
+                                            </span>
+                                        </div>
+
+                                        <p className="text-[9px] text-white/50 leading-relaxed font-bold">
+                                            {lang === 'ar' 
+                                                ? 'ØªÙ… Ø§Ù„ØªØ¹Ø±Ù ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ Ø¹Ù„Ù‰ Ø§Ù„Ø·Ø¨Ù‚Ø§Øª Ø§Ù„Ø£ØµÙ„ÙŠØ© Ù…Ù† Ù…Ù„Ù Ø§Ù„Ø£ÙˆØªÙˆÙƒØ§Ø¯ Ù…Ø¹ Ø£Ù„ÙˆØ§Ù†Ù‡Ø§. Ø­Ø¯Ø¯ Ø§Ù„Ø·Ø¨Ù‚Ø§Øª Ø§Ù„Ù…Ø±Ø§Ø¯ ØªØµØ¯ÙŠØ±Ù‡Ø§ ÙˆØªØ­ÙˆÙŠÙ„Ù‡Ø§:' 
+                                                : 'Source AutoCAD layers detected with original CAD colors. Select which layers to include in conversion:'}
+                                        </p>
+
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const allL = activeFile.layers ? activeFile.layers.map(l => l.name) : Array.from(new Set(activeFile.data.map(p => p.layer || 'Default')));
+                                                    setSelectedLayers(allL);
+                                                }}
+                                                className="px-3 py-1.5 bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 rounded-lg text-[9px] font-black transition-all"
+                                            >
+                                                {lang === 'ar' ? 'ØªØ­Ø¯ÙŠØ¯ ÙƒÙ„ Ø§Ù„Ø·Ø¨Ù‚Ø§Øª' : 'Select All Layers'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedLayers([])}
+                                                className="px-3 py-1.5 bg-white/5 text-white/60 hover:bg-white/10 rounded-lg text-[9px] font-black transition-all"
+                                            >
+                                                {lang === 'ar' ? 'Ø¥Ù„ØºØ§Ø¡ ØªØ­Ø¯ÙŠØ¯ Ø§Ù„Ø·Ø¨Ù‚Ø§Øª' : 'Deselect All'}
+                                            </button>
+                                        </div>
+
+                                        <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-2 pr-1 border border-white/5 rounded-2xl p-3 bg-black/20">
+                                            {(activeFile.layers || Array.from(new Set(activeFile.data.map(p => p.layer || 'Default'))).map(lName => ({ name: lName, color: activeFile.data.find(p => p.layer === lName)?.color || '#00c8b3', count: activeFile.data.filter(p => p.layer === lName).length }))).map((layerInfo, lIdx) => {
+                                                const isChecked = selectedLayers.includes(layerInfo.name);
+                                                return (
+                                                    <div
+                                                        key={`dxf-layer-${layerInfo.name}-${lIdx}`}
+                                                        onClick={() => {
+                                                            if (isChecked) {
+                                                                setSelectedLayers(selectedLayers.filter(l => l !== layerInfo.name));
+                                                            } else {
+                                                                setSelectedLayers([...selectedLayers, layerInfo.name]);
+                                                            }
+                                                        }}
+                                                        className={cn(
+                                                            "flex items-center justify-between p-2.5 rounded-xl cursor-pointer border transition-all select-none",
+                                                            isChecked
+                                                                ? "bg-cyan-950/40 border-cyan-500/30 hover:border-cyan-500/50"
+                                                                : "bg-white/[0.02] border-white/5 opacity-50 hover:opacity-80"
+                                                        )}
+                                                    >
+                                                        <div className="flex items-center gap-3 min-w-0">
+                                                            <div
+                                                                className={cn(
+                                                                    "w-4 h-4 rounded flex items-center justify-center transition-all shrink-0",
+                                                                    isChecked ? "bg-cyan-400 text-slate-950" : "border border-white/20 text-transparent"
+                                                                )}
+                                                            >
+                                                                <Check className="w-3 h-3 stroke-[3px]" />
+                                                            </div>
+                                                            <div
+                                                                className="w-3.5 h-3.5 rounded-full shrink-0 border border-white/20 shadow-sm"
+                                                                style={{ backgroundColor: layerInfo.color || '#00c8b3' }}
+                                                                title={layerInfo.color}
+                                                            />
+                                                            <span className={cn(
+                                                                "text-[11px] font-black truncate",
+                                                                isChecked ? "text-white" : "text-white/40"
+                                                            )}>
+                                                                {layerInfo.name}
+                                                            </span>
+                                                        </div>
+
+                                                        <div className="flex items-center gap-2 shrink-0 text-[10px] font-bold">
+                                                            {layerInfo.totalLength && layerInfo.totalLength > 0 ? (
+                                                                <span className="text-white/40 bg-white/5 px-2 py-0.5 rounded-md">
+                                                                    {layerInfo.totalLength.toFixed(1)}m
+                                                                </span>
+                                                            ) : null}
+                                                            <span className="text-cyan-300 bg-cyan-500/10 px-2 py-0.5 rounded-md">
+                                                                {layerInfo.count} {lang === 'ar' ? 'Ø¹Ù†ØµØ±' : 'items'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Column Selector checklist */}
                                 {activeFile.headers && activeFile.headers.length > 0 && (
                                     <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4 animate-in slide-in-from-bottom">
@@ -6255,7 +6450,7 @@ const App: React.FC = () => {
                                         <div className="flex gap-2">
                                             <button
                                                 type="button"
-                                                onClick={() => setSelectedHeaders(Array.from(new Set([...(activeFile.headers || []), ...defaultFields])))}
+                                                onClick={() => setSelectedHeaders([...(activeFile.headers || [])])}
                                                 className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg hover:bg-accent/30 text-[9px] font-black transition-all"
                                             >
                                                 {lang === 'ar' ? 'ØªØ­Ø¯ÙŠØ¯ Ø§Ù„ÙƒÙ„' : 'Select All'}
@@ -6270,7 +6465,7 @@ const App: React.FC = () => {
                                         </div>
 
                                         <div className="max-h-40 overflow-y-auto custom-scrollbar space-y-1.5 pr-1 border border-white/5 rounded-xl p-3 bg-black/10">
-                                            {Array.from(new Set([...activeFile.headers, ...defaultFields])).map((header, headIdx) => {
+                                            {(activeFile.headers || []).map((header, headIdx) => {
                                                 const isChecked = selectedHeaders.includes(header);
                                                 return (
                                                     <button
@@ -6653,7 +6848,10 @@ const App: React.FC = () => {
                                 </div>
 
                                 {(() => {
-                                  const filteredPoints = converterGeometryFilter === 'all' ? globalPoints : globalPoints.filter(p => p.type === converterGeometryFilter || (!p.type && converterGeometryFilter === 'Point'));
+                                  let filteredPoints = converterGeometryFilter === 'all' ? globalPoints : globalPoints.filter(p => p.type === converterGeometryFilter || (!p.type && converterGeometryFilter === 'Point'));
+                                   if (activeFile.type === 'dxf' && selectedLayers.length > 0) {
+                                     filteredPoints = filteredPoints.filter(p => selectedLayers.includes(p.layer || 'Default') || selectedLayers.includes(p.layer || ''));
+                                   }
                                   return (
                                     <UniversalExportBar 
                                       data={filteredPoints} 
@@ -6663,7 +6861,7 @@ const App: React.FC = () => {
                                       runWithLoading={runWithLoading}
                                       onExcelExport={() => executeWithStreetFetching(filteredPoints, selectedHeaders, downloadExcelAnalysis)}
                                       onKmzExport={() => {
-                                          executeWithStreetFetching(filteredPoints, selectedHeaders, () => {
+                                          executeWithStreetFetching(filteredPoints, selectedHeaders, (updatedPoints) => {
                                               const exportOpts: KmlExportOptions = {
                                                   mode: 'none',
                                                   groupByAttribute: groupingMode === 'layer' ? 'layer' : groupingMode === 'color' ? 'color' : groupingMode === 'geometry' ? 'geometry' : undefined,
@@ -6674,10 +6872,11 @@ const App: React.FC = () => {
                                                   canonicalColorMap: canonicalColorMap,
                                                   lineStyle: { width: converterLineWidth }
                                               };
+                                              const ptsToExport = updatedPoints || filteredPoints;
                                               if (converterExportAsZip && groupingMode !== 'none') {
-                                                  downloadKMZGroupedZip(filteredPoints, activeFile.filename, exportOpts, activeFile.headers, selectedHeaders);
+                                                  downloadKMZGroupedZip(ptsToExport, activeFile.filename, exportOpts, activeFile.headers, selectedHeaders);
                                               } else {
-                                                  downloadKMZ(filteredPoints, activeFile.filename, exportOpts, activeFile.headers, selectedHeaders);
+                                                  downloadKMZ(ptsToExport, activeFile.filename, exportOpts, activeFile.headers, selectedHeaders);
                                               }
                                           });
                                       }}
@@ -8453,1211 +8652,19 @@ const App: React.FC = () => {
                   const exists = selectedProfilePoints.some((s) => s.id === pt.id);
                   let updated: GeoPoint[];
                   if (exists) {
-                    updated = selectedProfilePoints.filter((s) => s.id !== pt.id);
-                  } else {
-                    updated = [...selectedProfilePoints, pt];
-                  }
-                  setSelectedProfilePoints(updated);
-                  if (updated.length === 0) {
-                    setFocusedPoint(null);
-                  } else {
-                    setFocusedPoint(updated[0]);
-                  }
-                } else {
-                  setFocusedPoint(pt);
-                  setSelectedProfilePoints([pt]);
-                }
-              } else {
-                setFocusedPoint(pt);
-              }
-            }}
-            focusedPoint={focusedPoint}
-            selectedProfilePoints={selectedProfilePoints}
-            hoveredElevationPoint={hoveredElevationPoint}
-            issueItems={activeIssueItems}
-            showIssuesOnly={showIssuesOnly}
-            onToggleShowIssuesOnly={setShowIssuesOnly}
-            onClearAudit={clearAuditResults}
-            showFlowDirection={showFlowDirection}
-            onToggleFlowDirection={setShowFlowDirection}
-            flowAnalysis={flowAnalysis}
-            isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
-            isLineDrawingMode={activeTab === 'line-drawer' && isLineDrawingOnMainMap}
-            activeLineVertices={lineDrawerVertices}
-            activeLineColor={lineDrawerConfig.color}
-            activeLineWidth={lineDrawerConfig.width}
-            activeLineName={lineDrawerConfig.name}
-            activeLineLayer={lineDrawerConfig.layer}
-            onAddLineVertex={(pt) => {
-              if (lineDrawerConfig.lineType === 'service-connection' && lineDrawerConfig.snapPerpendicularToStreet !== false) {
-                // Find nearest street or pipeline in candidate polylines (globalPoints, plannedStreets, lineDrawerDrawnLines)
-                const candidateLines = [...(globalPoints || []), ...(plannedStreets || []), ...(lineDrawerDrawnLines || [])]
-                  .filter(p => p.type === 'LineString' && Array.isArray(p.path) && p.path.length >= 2);
-                
-                const projection = findNearestPerpendicularPoint(pt, candidateLines, 600);
-                if (projection) {
-                  // Property point -> Perpendicular point on street centerline
-                  setLineDrawerVertices([pt, projection.projectedPoint]);
-                  setStatusMessage(
-                    lang === 'ar'
-                      ? `ØªÙ… Ø§Ù„Ø¥Ø³Ù‚Ø§Ø· Ø§Ù„Ø¹Ù…ÙˆØ¯ÙŠ (90Â°) Ø¹Ù„Ù‰ Ø®Ø· Ø§Ù„Ø´Ø§Ø±Ø¹/Ø§Ù„Ø£Ù†Ø¨ÙˆØ¨ (${projection.streetName || projection.streetId}) Ø¨Ø·ÙˆÙ„ ${projection.distanceMeters.toFixed(1)} Ù…!`
-                      : `Perpendicular snap to pipeline (${projection.streetName || projection.streetId}) - Length: ${projection.distanceMeters.toFixed(1)}m!`
-                  );
-                } else {
-                  setLineDrawerVertices(prev => [...prev, pt]);
-                }
-              } else {
-                setLineDrawerVertices(prev => [...prev, pt]);
-              }
-            }}
-            onUndoLineVertex={() => {
-              setLineDrawerVertices(prev => prev.slice(0, -1));
-            }}
-            onFinishLine={handleFinishLineDrawerLine}
-            onCancelLineDraw={() => {
-              setIsLineDrawingOnMainMap(false);
-              setLineDrawerVertices([]);
-            }}
-            isPickingCoordinate={activeTab === 'line-drawer' ? lineDrawerPickingTarget : null}
-            onPickMapCoordinate={(coord) => {
-              if (lineDrawerPickingTarget) {
-                window.dispatchEvent(new CustomEvent('map-coord-picked', {
-                  detail: { target: lineDrawerPickingTarget, coord }
-                }));
-                setLineDrawerPickingTarget(null);
-              }
-            }}
-            onOrientNetworkTowardsOutfall={handleOrientNetworkTowardsOutfall}
-            outfallTargets={outfallTargets}
-            onAddOutfallTarget={handleAddOutfallTarget}
-            onRemoveOutfallTarget={handleRemoveOutfallTarget}
-            onClearOutfallTargets={handleClearOutfallTargets}
-            onOrientNetworkTowardsMultiOutfalls={handleOrientNetworkTowardsMultiOutfalls}
-            onPolygonComplete={(poly) => {
-              if (activeTab === 'splitter' && splitMode === 'spatial') {
-                const newPoly: SplitPolygon = {
-                  id: `poly-${Date.now()}`,
-                  name: `${lang === 'ar' ? 'Ù…Ø¶Ù„Ø¹' : 'Polygon'} ${splitPolygons.length + 1}`,
-                  path: poly,
-                  color: PALETTE[splitPolygons.length % PALETTE.length]
-                };
-                setSplitPolygons([...splitPolygons, newPoly]);
-              } else {
-                setSelectedArea(poly);
-                setBoundaryPolygon({ id: 'Selected_Area', x: poly[0].x, y: poly[0].y, type: 'Polygon', path: poly, color: '#ffffff' });
-              }
-              setIsDrawingMode(false);
-            }}
-         />
-         <ElevationProfileModal
-           lang={lang}
-           focusedPoint={focusedPoint}
-           selectedProfilePoints={selectedProfilePoints}
-           allDatasetPoints={displayPoints}
-           onClose={() => {
-             setFocusedPoint(null);
-             setSelectedProfilePoints([]);
-           }}
-           onHoverPoint={setHoveredElevationPoint}
-           onSelectPointsChange={(pts) => {
-             setSelectedProfilePoints(pts);
-             if (pts.length === 0) setFocusedPoint(null);
-           }}
-         />
-
-         {/* Mobile Floating Button to Return to Tools Panel */}
-         <div className="lg:hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] pointer-events-auto">
-           <button
-             onClick={() => setMobileView('panel')}
-             className="px-5 py-3 bg-[#0b2d3d] text-accent border-2 border-accent rounded-full font-black text-xs shadow-2xl flex items-center gap-2 active:scale-95 transition-all"
-           >
-             <SlidersHorizontal className="w-4 h-4" />
-             <span>{lang === 'ar' ? 'Ø§Ù„Ø¹ÙˆØ¯Ø© Ø¨Ù„ÙˆØ­Ø© Ø§Ù„Ø£Ø¯ÙˆØ§Øª ÙˆØ§Ù„Ø®ÙŠØ§Ø±Ø§Øª' : 'Back to Tools Panel'}</span>
-           </button>
-         </div>
-
-
-         {showSettingsModal && (
-             <div 
-               className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" 
-               onClick={() => setShowSettingsModal(false)}
-               dir={lang === 'ar' ? 'rtl' : 'ltr'}
-             >
-                 <div 
-                   className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden"
-                   onClick={(e) => e.stopPropagation()}
-                 >
-                     <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
-                         <div className="flex items-center gap-3">
-                             <Settings2 className="w-6 h-6 text-accent" />
-                             <div>
-                                <h2 className="text-xl font-black text-white">{lang === 'ar' ? 'Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ ÙˆØ§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª' : 'App Settings & Preferences'}</h2>
-                                <p className="text-[10px] text-accent/80 font-bold flex items-center gap-1.5 mt-0.5">
-                                  <Check className="w-3.5 h-3.5 text-accent" />
-                                  <span>{lang === 'ar' ? 'ØªÙØ­ÙØ¸ Ø§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ÙÙŠ Ø§Ù„Ù…ØªØµÙØ­ (localStorage)' : 'Preferences automatically saved in browser (localStorage)'}</span>
-                                </p>
-                              </div>
-                         </div>
-                         <button onClick={() => setShowSettingsModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-red-500/20 hover:text-red-400 transition-all"><X className="w-5 h-5" /></button>
-                     </div>
-                     <div className="p-8 overflow-y-auto space-y-8 flex-1">
-                         <div className="space-y-4">
-                          {/* 0. PWA Mobile App Section */}
-                          <div className="space-y-3 bg-gradient-to-r from-accent/15 via-amber-500/10 to-accent/15 p-5 rounded-2xl border border-accent/30 shadow-lg">
-                             <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3 text-accent">
-                                   <div className="w-10 h-10 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
-                                      <Smartphone className="w-5 h-5 text-accent animate-bounce" />
-                                   </div>
-                                   <div>
-                                      <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'ØªØ«Ø¨ÙŠØª ØªØ·Ø¨ÙŠÙ‚ Ø§Ù„Ø¬ÙˆØ§Ù„ (Mobile App)' : 'Install Mobile Application'}</h3>
-                                      <p className="text-[10px] text-white/70 font-bold mt-0.5">{lang === 'ar' ? 'ØªØ´ØºÙŠÙ„ GeoGIS Pro ÙƒØªØ·Ø¨ÙŠÙ‚ Ø¬ÙˆØ§Ù„ ÙƒØ§Ù…Ù„ Ø§Ù„Ø´Ø§Ø´Ø© Ø¨Ø¯ÙˆÙ† Ù…ØªØµÙØ­' : 'Run GeoGIS Pro as a native full-screen app'}</p>
-                                   </div>
-                                </div>
-                                <button
-                                   type="button"
-                                   onClick={() => {
-                                      setShowSettingsModal(false);
-                                      setShowInstallModal(true);
-                                   }}
-                                   className="px-4 py-2 bg-accent hover:brightness-110 text-primary font-black text-xs rounded-xl transition-all shadow-md flex items-center gap-1.5 active:scale-95 shrink-0"
-                                >
-                                   <Smartphone className="w-4 h-4" />
-                                   <span>{isStandalone ? (lang === 'ar' ? 'Ø­Ø§Ù„Ø© Ø§Ù„ØªØ«Ø¨ÙŠØª' : 'App Status') : (lang === 'ar' ? 'ØªØ«Ø¨ÙŠØª Ø§Ù„Ø¢Ù†' : 'Install App')}</span>
-                                </button>
-                             </div>
-                          </div>
-
-                          {/* 1. Language & Theme */}
-                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
-                             <div className="flex items-center gap-2 text-accent">
-                                <Languages className="w-4 h-4" />
-                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'Ø§Ù„Ù„ØºØ© ÙˆØ§Ù„Ù…Ø¸Ù‡Ø± (Language & Theme)' : 'Language & Interface Theme'}</h3>
-                             </div>
-                             <div className="grid grid-cols-2 gap-3 pt-1">
-                                <div className="space-y-1.5">
-                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'Ù„ØºØ© Ø§Ù„ÙˆØ§Ø¬Ù‡Ø©:' : 'Interface Language:'}</label>
-                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button
-                                        type="button"
-                                        onClick={() => setLang('ar')}
-                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", lang === 'ar' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        Ø§Ù„Ø¹Ø±Ø¨ÙŠØ©
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setLang('en')}
-                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", lang === 'en' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        English
-                                      </button>
-                                   </div>
-                                </div>
-
-                                <div className="space-y-1.5">
-                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'Ø§Ù„Ù…Ø¸Ù‡Ø±:' : 'Theme:'}</label>
-                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button
-                                        type="button"
-                                        onClick={() => setTheme('default')}
-                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", theme === 'default' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ' : 'Default'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setTheme('nwc')}
-                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", theme === 'nwc' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ø´Ø±ÙƒØ© Ø§Ù„Ù…ÙŠØ§Ù‡ NWC' : 'NWC Theme'}
-                                      </button>
-                                   </div>
-                                </div>
-                             </div>
-                          </div>
-
-                          {/* Dark Mode / Display Theme Mode */}
-                           <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
-                              <div className="flex items-center gap-2 text-accent">
-                                 <Palette className="w-4 h-4" />
-                                 <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'Ù†Ù…Ø· Ø§Ù„Ø±Ø¤ÙŠØ© (Dark / Light Mode)' : 'Display Theme Mode'}</h3>
-                              </div>
-                              <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                 <button
-                                   type="button"
-                                   onClick={() => setIsDarkMode(true)}
-                                   className={cn("flex-1 py-2.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2", isDarkMode ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                 >
-                                   <Moon className="w-4 h-4" />
-                                   <span>{t.darkMode} ğŸŒ™</span>
-                                 </button>
-                                 <button
-                                   type="button"
-                                   onClick={() => setIsDarkMode(false)}
-                                   className={cn("flex-1 py-2.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2", !isDarkMode ? "bg-amber-400 text-slate-900 shadow font-extrabold" : "text-white/60 hover:text-white")}
-                                 >
-                                   <Sun className="w-4 h-4" />
-                                   <span>{t.lightMode} â˜€ï¸</span>
-                                 </button>
-                              </div>
-                           </div>
-
-                           {/* 2. Geocoding & Coordinate System */}
-                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
-                             <div className="flex items-center gap-2 text-accent">
-                                <Target className="w-4 h-4" />
-                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'Ù†Ø¸Ø§Ù… Ø§Ù„Ø¥Ø­Ø¯Ø§Ø«ÙŠØ§Øª ÙˆØ¯Ù‚Ø© Ø§Ù„Ø¬ÙŠÙˆØ¯ÙƒÙˆØ¯ÙŠÙ†Øº' : 'CRS & Geocoding Precision'}</h3>
-                             </div>
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-                                <div className="space-y-1.5">
-                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'Ù†Ø¸Ø§Ù… Ø§Ù„Ø¥Ø­Ø¯Ø§Ø«ÙŠØ§Øª Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ (Default CRS):' : 'Default Coordinate System (CRS):'}</label>
-                                   <select
-                                      value={sourceEPSG}
-                                      onChange={(e) => setSourceEPSG(e.target.value)}
-                                      className="w-full bg-black/40 border border-white/10 text-white rounded-xl px-3 py-2 text-xs font-bold focus:outline-none focus:border-accent"
-                                   >
-                                      {COMMON_EPSG.map(epsg => (
-                                         <option key={epsg.code} value={epsg.code} className="bg-[#0b2d3d] text-white">
-                                            {epsg.code} - {epsg.name}
-                                         </option>
-                                      ))}
-                                   </select>
-                                </div>
-
-                                <div className="space-y-1.5">
-                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'Ù†Ù…Ø· Ø§Ù„Ø¬ÙŠÙˆØ¯ÙƒÙˆØ¯ÙŠÙ†Øº ÙˆØ§Ø³ØªØ¯Ù„Ø§Ù„ Ø§Ù„Ø´ÙˆØ§Ø±Ø¹:' : 'Geocoding Accuracy Mode:'}</label>
-                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button
-                                        type="button"
-                                        onClick={() => setGeocodingMode('accurate')}
-                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", geocodingMode === 'accurate' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'ğŸ¯ Ø¯Ù‚ÙŠÙ‚ Ø¬Ø¯Ø§Ù‹' : 'ğŸ¯ Accurate'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setGeocodingMode('fast')}
-                                        className={cn("flex-1 py-2 rounded-lg text-xs font-black transition-all", geocodingMode === 'fast' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'âš¡ Ø³Ø±ÙŠØ¹ Ø¬Ø¯Ø§Ù‹' : 'âš¡ Fast'}
-                                      </button>
-                                   </div>
-                                </div>
-                             </div>
-                          </div>
-
-                          {/* 3. Default Export Options */}
-                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
-                             <div className="flex items-center gap-2 text-accent">
-                                <Archive className="w-4 h-4" />
-                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'ØªÙØ¶ÙŠÙ„Ø§Øª ÙˆØµÙŠØº Ø§Ù„ØªØµØ¯ÙŠØ±' : 'Export & Packaging Preferences'}</h3>
-                             </div>
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-                                <div className="space-y-1.5">
-                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'Ø·Ø±ÙŠÙ‚Ø© Ø§Ù„ØªØ¬Ù…ÙŠØ¹ Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠØ©:' : 'Default Grouping Mode:'}</label>
-                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button
-                                        type="button"
-                                        onClick={() => setGroupingMode('layer')}
-                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'layer' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ø­Ø³Ø¨ Ø§Ù„Ø·Ø¨Ù‚Ø©' : 'By Layer'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setGroupingMode('column')}
-                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'column' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ø­Ø³Ø¨ Ø§Ù„Ø¹Ù…ÙˆØ¯' : 'By Column'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setGroupingMode('none')}
-                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", groupingMode === 'none' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ø¨Ø¯ÙˆÙ† ØªØ¬Ù…ÙŠØ¹' : 'None'}
-                                      </button>
-                                   </div>
-                                </div>
-
-                                <div className="space-y-1.5">
-                                   <label className="text-[10px] font-bold text-white/60">{lang === 'ar' ? 'ØµÙŠØºØ© Ø§Ù„ØªØµØ¯ÙŠØ± Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠØ© (Ø§Ù„Ù…Ù‚Ø³Ù…):' : 'Splitter Default Export Style:'}</label>
-                                   <div className="flex bg-black/30 p-1 rounded-xl border border-white/10">
-                                      <button
-                                        type="button"
-                                        onClick={() => setExportStyle('single')}
-                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", exportStyle === 'single' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ù…Ù„Ù KML Ù…ÙˆØ­Ø¯' : 'Single KML'}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setExportStyle('zip')}
-                                        className={cn("flex-1 py-1.5 rounded-lg text-[10px] font-black transition-all", exportStyle === 'zip' ? "bg-accent text-primary shadow" : "text-white/60 hover:text-white")}
-                                      >
-                                        {lang === 'ar' ? 'Ø£Ø±Ø´ÙŠÙ ZIP Ù…Ø¶ØºÙˆØ·' : 'ZIP Archive'}
-                                      </button>
-                                   </div>
-                                </div>
-                             </div>
-
-                             <div className="space-y-2 pt-2 border-t border-white/5">
-                                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white/80 hover:text-white transition-colors">
-                                   <input
-                                     type="checkbox"
-                                     checked={optimizeForMyMaps}
-                                     onChange={(e) => setOptimizeForMyMaps(e.target.checked)}
-                                     className="rounded bg-black/40 border-white/20 text-accent focus:ring-accent"
-                                   />
-                                   <span>{lang === 'ar' ? 'ØªÙØ¹ÙŠÙ„ Ø§Ù„ØªÙˆØ§ÙÙ‚ Ø§Ù„ÙƒØ§Ù…Ù„ Ù…Ø¹ Ø®Ø±Ø§Ø¦Ø· Ø¬ÙˆØ¬Ù„ (Google My Maps)' : 'Optimize for Google My Maps compatibility'}</span>
-                                </label>
-                                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-white/80 hover:text-white transition-colors">
-                                   <input
-                                     type="checkbox"
-                                     checked={keepOriginalDescription}
-                                     onChange={(e) => setKeepOriginalDescription(e.target.checked)}
-                                     className="rounded bg-black/40 border-white/20 text-accent focus:ring-accent"
-                                   />
-                                   <span>{lang === 'ar' ? 'Ø§Ù„Ø§Ø­ØªÙØ§Ø¸ Ø¨Ù†Øµ Ø§Ù„ÙˆØµÙ (Description) Ø§Ù„Ø£ØµÙ„ÙŠ ÙÙŠ Ù…Ù„ÙØ§Øª KML' : 'Keep original description content in output KML'}</span>
-                                </label>
-                             </div>
-                          </div>
-
-                          {/* 4. Default Line Split Lengths */}
-                          <div className="space-y-3 bg-white/5 p-5 rounded-2xl border border-white/5">
-                             <div className="flex items-center gap-2 text-accent">
-                                <Ruler className="w-4 h-4" />
-                                <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'Ø£Ø·ÙˆØ§Ù„ ØªÙ‚Ø³ÙŠÙ… Ø§Ù„Ø®Ø·ÙˆØ· Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠØ©' : 'Default Line Split Distances'}</h3>
-                             </div>
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-                                <div className="space-y-1.5">
-                                   <div className="flex justify-between items-center text-[10px] font-bold text-white/60">
-                                      <span>{lang === 'ar' ? 'Ù…Ù‚Ø³Ù… KML (Ø§Ù„Ø­Ø¯ Ø§Ù„Ø£Ù‚ØµÙ‰ Ù„Ù„Ø·ÙˆÙ„):' : 'KML Splitter Max Length:'}</span>
-                                      <span className="text-accent font-black">{maxLen}m</span>
-                                   </div>
-                                   <input
-                                     type="range"
-                                     min="10"
-                                     max="1000"
-                                     step="10"
-                                     value={Math.min(maxLen, 1000)}
-                                     onChange={(e) => setMaxLen(parseInt(e.target.value))}
-                                     className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
-                                   />
-                                </div>
-
-                                <div className="space-y-1.5">
-                                   <div className="flex justify-between items-center text-[10px] font-bold text-white/60">
-                                      <span>{lang === 'ar' ? 'Ù…Ø®Ø·Ø· Ø§Ù„Ø´ÙˆØ§Ø±Ø¹ (Ø§Ù„Ø­Ø¯ Ø§Ù„Ø£Ù‚ØµÙ‰ Ù„Ù„Ø·ÙˆÙ„):' : 'Street Planner Max Length:'}</span>
-                                      <span className="text-accent font-black">{plannerMaxLen}m</span>
-                                   </div>
-                                   <input
-                                     type="range"
-                                     min="10"
-                                     max="1000"
-                                     step="10"
-                                     value={Math.min(plannerMaxLen, 1000)}
-                                     onChange={(e) => setPlannerMaxLen(parseInt(e.target.value))}
-                                     className="w-full accent-accent h-1.5 bg-white/10 rounded-full cursor-pointer"
-                                   />
-                                </div>
-                             </div>
-                          </div>
-
-                            <h3 className="text-sm font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'Ù†ÙˆØ¹ Ø®Ø±ÙŠØ·Ø© Ø§Ù„Ø£Ø³Ø§Ø³' : 'Base Map Type'}</h3>
-                            <div className="grid grid-cols-2 gap-3">
-                                {[
-                                  { id: 'satellite', name: lang === 'ar' ? 'Ø§Ù„Ù‚Ù…Ø± Ø§Ù„ØµÙ†Ø§Ø¹ÙŠ' : 'Satellite', icon: <Globe className="w-5 h-5" /> },
-                                  { id: 'streets', name: lang === 'ar' ? 'Ø´ÙˆØ§Ø±Ø¹' : 'Streets', icon: <MapIcon className="w-5 h-5" /> },
-                                  { id: 'terrain', name: lang === 'ar' ? 'ØªØ¶Ø§Ø±ÙŠØ³' : 'Terrain', icon: <Square className="w-5 h-5" /> },
-                                  { id: 'osm', name: lang === 'ar' ? 'Ø§Ù„Ù…ÙØªÙˆØ­Ø© (OSM)' : 'OpenStreetMap', icon: <Globe className="w-5 h-5 opacity-50" /> }
-                                ].map((type) => (
-                                    <button
-                                        key={type.id}
-                                        onClick={() => setGlobalBaseMap(type.id as import('./types').BaseMapType)}
-                                        className={"flex flex-col items-center gap-3 p-4 rounded-2xl transition-all border group " + (globalBaseMap === type.id ? "bg-accent/10 border-accent text-accent" : "bg-white/5 border-white/5 text-white/50 hover:bg-white/10 hover:border-white/10 hover:text-white")}
-                                    >
-                                        <div className={"p-2 rounded-xl transition-all " + (globalBaseMap === type.id ? "bg-accent text-[#0b2d3d]" : "bg-white/10 text-white/40 group-hover:text-white")}>
-                                            {type.icon}
-                                        </div>
-                                        <span className="text-[11px] font-black uppercase text-center leading-tight">{type.name}</span>
-                                    </button>
-                                ))}
-                            </div>
-                         </div>
-                      </div>
-
-                      <div className="p-6 border-t border-white/5 bg-black/20 flex items-center justify-between shrink-0">
-                          <button
-                             type="button"
-                             onClick={handleResetPreferences}
-                             className="px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5"
-                          >
-                             <RotateCcw className="w-3.5 h-3.5" />
-                             <span>{lang === 'ar' ? 'Ø¥Ø¹Ø§Ø¯Ø© Ø¶Ø¨Ø· Ø§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª' : 'Reset Preferences'}</span>
-                          </button>
-
-                          <button
-                             type="button"
-                             onClick={() => setShowSettingsModal(false)}
-                             className="px-6 py-2.5 bg-accent hover:brightness-110 text-primary font-black text-xs rounded-xl transition-all shadow-lg"
-                          >
-                             {lang === 'ar' ? 'Ø­ÙØ¸ ÙˆØ¥ØºÙ„Ø§Ù‚' : 'Save & Close'}
-                          </button>
-                      </div>
-                  </div>
-              </div>
-          )}
-
-          {/* Auto-Alert Modal for Unresolved Spatial Overlaps upon File Import */}
-          {showAutoAlertModal && autoAlertInfo && (
-              <div 
-                className="fixed inset-0 z-[2500] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300" 
-                onClick={() => setShowAutoAlertModal(false)}
-                dir={lang === 'ar' ? 'rtl' : 'ltr'}
-              >
-                  <div 
-                    className="bg-gradient-to-br from-[#0e3547] via-[#08222e] to-[#041620] border-2 border-amber-400/80 rounded-[2.5rem] w-full max-w-xl p-6 sm:p-8 shadow-[0_0_50px_rgba(245,158,11,0.25)] space-y-6 relative overflow-hidden"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                      {/* Glow Effect */}
-                      <div className="absolute -top-24 -right-24 w-48 h-48 bg-amber-500/20 rounded-full blur-3xl pointer-events-none" />
-
-                      {/* Header */}
-                      <div className="flex items-start justify-between gap-4">
-                          <div className="flex items-center gap-3">
-                              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-red-500 flex items-center justify-center shadow-lg shadow-amber-500/30 text-primary shrink-0 animate-pulse">
-                                  <AlertTriangle className="w-7 h-7 stroke-[2.5px]" />
-                              </div>
-                              <div>
-                                  <span className="inline-block px-2.5 py-0.5 bg-amber-400/20 text-amber-300 border border-amber-400/30 rounded-full text-[9px] font-black uppercase tracking-wider mb-1">
-                                      {lang === 'ar' ? 'ØªÙ†Ø¨ÙŠÙ‡ Ø§Ù„Ù†Ø¸Ø§Ù… Ø§Ù„ØªÙ„Ù‚Ø§Ø¦ÙŠ (Auto-Alert)' : 'System Auto-Alert'}
-                                  </span>
-                                  <h2 className="text-base sm:text-lg font-black text-white leading-tight">
-                                      {lang === 'ar' ? 'ÙƒØ´Ù ØªØ¯Ø§Ø®Ù„Ø§Øª Ù…ÙƒØ§Ù†ÙŠØ© ØºÙŠØ± Ù…Ø­Ù„ÙˆÙ„Ø© Ù‚Ø¨Ù„ Ø¨Ø¯Ø¡ Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬Ø©!' : 'Unresolved Spatial Overlaps Detected!'}
-                                  </h2>
-                              </div>
-                          </div>
-                          <button
-                              onClick={() => setShowAutoAlertModal(false)}
-                              className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
-                          >
-                              <X className="w-5 h-5" />
-                          </button>
-                      </div>
-
-                      {/* File Info & Stats */}
-                      <div className="bg-black/30 border border-white/10 rounded-2xl p-4 space-y-3">
-                          <div className="flex items-center justify-between text-xs font-bold text-white/80 pb-2 border-b border-white/10">
-                              <span>{lang === 'ar' ? 'Ø§Ù„Ù…Ù„Ù Ø§Ù„Ù…Ø³ØªÙˆØ±Ø¯:' : 'Imported File:'}</span>
-                              <span className="text-accent font-black truncate max-w-[200px]">{autoAlertInfo.filename}</span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-3 pt-1">
-                              <div className="bg-red-500/10 border border-red-500/30 p-3 rounded-xl flex items-center justify-between">
-                                  <div>
-                                      <span className="text-[10px] text-red-300 font-bold block">{lang === 'ar' ? 'Ø¹Ù†Ø§ØµØ± Ù…ØªØ·Ø§Ø¨Ù‚Ø©' : 'Duplicates'}</span>
-                                      <span className="text-lg font-black text-red-400">{autoAlertInfo.duplicatesCount}</span>
-                                  </div>
-                                  <Trash2 className="w-5 h-5 text-red-400/60" />
-                              </div>
-                              <div className="bg-cyan-500/10 border border-cyan-500/30 p-3 rounded-xl flex items-center justify-between">
-                                  <div>
-                                      <span className="text-[10px] text-cyan-300 font-bold block">{lang === 'ar' ? 'ØªÙ‚Ø§Ø·Ø¹Ø§Øª Ø§Ù„Ø®Ø·ÙˆØ·' : 'Intersections'}</span>
-                                      <span className="text-lg font-black text-cyan-400">{autoAlertInfo.intersectionsCount}</span>
-                                  </div>
-                                  <GitBranch className="w-5 h-5 text-cyan-400/60" />
-                              </div>
-                          </div>
-                      </div>
-
-                      {/* Description message */}
-                      <p className="text-xs text-white/80 leading-relaxed bg-white/5 p-4 rounded-xl border border-white/5">
-                          {lang === 'ar'
-                              ? 'ØªÙ†Ø¨ÙŠÙ‡: ÙŠØ­ØªÙˆÙŠ Ø§Ù„Ù…Ù„Ù Ø§Ù„Ù…Ø³ØªÙˆØ±Ø¯ Ø¹Ù„Ù‰ Ø¹Ù†Ø§ØµØ± Ù…ÙƒØ§Ù†ÙŠØ© Ù…ÙƒØ±Ø±Ø© Ø£Ùˆ Ù…ØªÙ‚Ø§Ø·Ø¹Ø© ÙÙˆÙ‚ Ø¨Ø¹Ø¶Ù‡Ø§. ÙŠØ±Ø¬Ù‰ Ø§Ø®ØªÙŠØ§Ø± Ø§Ù„Ø¥Ø¬Ø±Ø§Ø¡ Ø§Ù„Ù…Ù†Ø§Ø³Ø¨ Ù„Ø­Ù„Ù‡Ø§ ÙÙˆØ±Ø§Ù‹ Ø£Ùˆ Ù…Ø¹Ø§ÙŠÙ†ØªÙ‡Ø§ Ù„Ø¶Ù…Ø§Ù† Ø¯Ù‚Ø© Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬Ø© ÙˆØ§Ù„ØªØµØ¯ÙŠØ±.'
-                              : 'Notice: The imported dataset contains duplicate or intersecting spatial elements. Please select a quick action to resolve them now or inspect details to ensure processing accuracy.'}
-                      </p>
-
-                      {/* Action Buttons */}
-                      <div className="space-y-2.5">
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                              {autoAlertInfo.duplicatesCount > 0 && (
-                                  <button
-                                      onClick={() => {
-                                          setShowAutoAlertModal(false);
-                                          handleResolveDuplicates();
-                                      }}
-                                      className="w-full py-3 px-4 bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-500/40 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
-                                  >
-                                      <Trash2 className="w-4 h-4 text-red-400" />
-                                      <span>{lang === 'ar' ? 'Ø­Ø°Ù Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ğŸ—‘ï¸' : 'Auto-Delete Duplicates'}</span>
-                                  </button>
-                              )}
-                              {autoAlertInfo.intersectionsCount > 0 && (
-                                  <button
-                                      onClick={() => {
-                                          setShowAutoAlertModal(false);
-                                          handleTrimIntersections();
-                                      }}
-                                      className="w-full py-3 px-4 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-200 border border-cyan-500/40 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
-                                  >
-                                      <Scissors className="w-4 h-4 text-cyan-400" />
-                                      <span>{lang === 'ar' ? 'ØªÙ‚Ù„ÙŠÙ… Ø¹Ù†Ø¯ Ø§Ù„ØªÙ‚Ø§Ø·Ø¹Ø§Øª âœ‚ï¸' : 'Trim Intersections'}</span>
-                                  </button>
-                              )}
-                          </div>
-
-                          <button
-                              onClick={() => {
-                                  setShowAutoAlertModal(false);
-                                  setOverlapResults(autoAlertInfo?.duplicatesCount > 0 ? (autoAlertInfo?.dups || []) : (autoAlertInfo?.intersections || []));
-                                  setOverlapModalType(autoAlertInfo?.duplicatesCount > 0 ? 'duplicates' : 'intersections');
-                                  setShowOverlapModal(true);
-                              }}
-                              className="w-full py-3 px-4 bg-accent text-primary hover:brightness-110 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95"
-                          >
-                              <GitBranch className="w-4 h-4" />
-                              <span>{lang === 'ar' ? 'Ù…Ø¹Ø§ÙŠÙ†Ø© ÙˆØ¥Ø¯Ø§Ø±Ø© Ø§Ù„ØªØ¯Ø§Ø®Ù„Ø§Øª Ø§Ù„ØªÙØµÙŠÙ„ÙŠØ© ğŸ”' : 'Detailed Overlap Inspector ğŸ”'}</span>
-                          </button>
-
-                          <button
-                              onClick={() => setShowAutoAlertModal(false)}
-                              className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white rounded-xl font-bold text-xs transition-all"
-                          >
-                              {lang === 'ar' ? 'Ù…ØªØ§Ø¨Ø¹Ø© Ø¨Ø¯ÙˆÙ† Ù…Ø¹Ø§Ù„Ø¬Ø© (ØªØ¬Ø§Ù‡Ù„ Ø§Ù„ØªÙ†Ø¨ÙŠÙ‡)' : 'Dismiss & Continue'}
-                          </button>
-
-                          <button
-                              onClick={clearAuditResults}
-                              className="w-full py-2.5 px-4 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/30 rounded-xl font-black text-xs transition-all flex items-center justify-center gap-2 active:scale-95"
-                          >
-                              <RotateCcw className="w-4 h-4 text-rose-400" />
-                              <span>{lang === 'ar' ? 'Ø¥Ø²Ø§Ù„Ø© Ù†ØªØ§Ø¦Ø¬ Ø§Ù„ÙØ­Øµ ÙˆØ¥Ù„ØºØ§Ø¡ Ø§Ù„ØªØ¸Ù„ÙŠÙ„ ÙˆØ§Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª ğŸ§¹' : 'Clear Audit & Auto-Alert Results ğŸ§¹'}</span>
-                          </button>
-                      </div>
-                  </div>
-              </div>
-          )}
-
-         {showOverlapModal && overlapResults && (
-             <div 
-               className="absolute inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" 
-               onClick={() => setShowOverlapModal(false)}
-               dir={lang === 'ar' ? 'rtl' : 'ltr'}
-             >
-                 <div 
-                   className="bg-[#0b2d3d] border border-accent/40 rounded-[3rem] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden"
-                   onClick={(e) => e.stopPropagation()}
-                 >
-                     <div className="p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
-                         <div className="flex items-center gap-3">
-                             {overlapModalType === 'duplicates' ? (
-                                 <AlertTriangle className="w-6 h-6 text-amber-400" />
-                             ) : (
-                                 <GitBranch className="w-6 h-6 text-cyan-400" />
-                             )}
-                             <div>
-                               <h2 className="text-lg font-black text-white">
-                                   {overlapModalType === 'duplicates'
-                                       ? (lang === 'ar' ? 'Ù†ØªØ§Ø¦Ø¬ ÙˆÙ…Ø¹Ø§Ù„Ø¬Ø© Ø§Ù„ØªØ·Ø§Ø¨Ù‚ (Ø¹Ù†ØµØ± ÙÙˆÙ‚ Ø¹Ù†ØµØ±)' : 'Duplicate Matching Results')
-                                       : (lang === 'ar' ? 'Ù†ØªØ§Ø¦Ø¬ ÙˆÙ…Ø¹Ø§Ù„Ø¬Ø© ØªÙ‚Ø§Ø·Ø¹Ø§Øª Ø§Ù„Ø®Ø·ÙˆØ· (Ù†Ù‚Ø§Ø· Ø§Ù„ØªÙ„Ø§Ù‚ÙŠ)' : 'Line Intersection Results')}
-                               </h2>
-                               <p className="text-[10px] text-accent font-bold mt-0.5">
-                                   {overlapModalType === 'duplicates'
-                                       ? (lang === 'ar' ? 'ÙØ­Øµ ÙˆØ­Ø°Ù Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© ÙˆØ§Ù„Ù…ÙˆØ¬ÙˆØ¯Ø© ÙÙˆÙ‚ Ø¨Ø¹Ø¶Ù‡Ø§ ØªÙ…Ø§Ù…Ø§Ù‹' : 'Check & resolve exact duplicate elements')
-                                       : (lang === 'ar' ? 'Ø¹Ø±Ø¶ ÙˆØªÙ‚Ù„ÙŠÙ… Ø§Ù„Ø®Ø·ÙˆØ· Ø§Ù„Ù…ØªÙ‚Ø§Ø·Ø¹Ø© ÙˆØ§Ù„Ù…ØªÙ„Ø§Ù‚ÙŠØ© Ø¹Ù†Ø¯ Ù†Ù‚Ø§Ø· Ø§Ù„Ø¹Ø¨ÙˆØ±' : 'Check & trim intersecting lines at crossing points')}
-                               </p>
-                             </div>
-                         </div>
-                         <div className="flex items-center gap-2">
-                             {overlapResults && overlapResults.length > 0 && (
-                                 <div className="flex items-center gap-2 flex-wrap">
-                                     {overlapModalType === 'duplicates' ? (
-                                         <>
-                                             <button
-                                                 onClick={handleColorDuplicatesBlack}
-                                                 className="px-3.5 py-2 bg-slate-900 hover:bg-black text-white border border-white/20 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
-                                                 title={lang === 'ar' ? 'ØªÙ„ÙˆÙŠÙ† Ø§Ù„Ø®Ø·ÙˆØ· Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© (Ø®Ø· ÙÙˆÙ‚ Ø®Ø·) Ø¨Ø§Ù„Ù„ÙˆÙ† Ø§Ù„Ø£Ø³ÙˆØ¯' : 'Color duplicate lines black'}
-                                             >
-                                                 <Palette className="w-4 h-4 text-white" />
-                                                 <span>{lang === 'ar' ? 'ØªÙ„ÙˆÙŠÙ† Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© â¬›' : 'Color Duplicates â¬›'}</span>
-                                             </button>
-                                             <button
-                                                 onClick={clearAuditResults}
-                                                 className="px-3.5 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
-                                                 title={lang === 'ar' ? 'Ø¥Ø²Ø§Ù„Ø© ÙƒØ§ÙØ© Ù†ØªØ§Ø¦Ø¬ Ø§Ù„ÙØ­Øµ ÙˆØ§Ù„ØªØ¸Ù„ÙŠÙ„ ÙˆØ§Ù„ØªÙ†Ø¨ÙŠÙ‡Ø§Øª' : 'Clear all audit results'}
-                                             >
-                                                 <RotateCcw className="w-4 h-4 text-rose-400" />
-                                                 <span>{lang === 'ar' ? 'Ø¥Ø²Ø§Ù„Ø© Ù†ØªØ§Ø¦Ø¬ Ø§Ù„ÙØ­Øµ ğŸ§¹' : 'Clear Audit ğŸ§¹'}</span>
-                                             </button>
-                                             <button
-                                                 onClick={handleResolveDuplicates}
-                                                 className="px-3.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
-                                                 title={lang === 'ar' ? 'Ø­Ø°Ù Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© Ø§Ù„Ù…ÙƒØ±Ø±Ø© ØªÙ…Ø§Ù…Ø§Ù‹' : 'Delete duplicate elements'}
-                                             >
-                                                 <Trash2 className="w-4 h-4 text-red-400" />
-                                                 <span>{lang === 'ar' ? 'Ø­Ø°Ù Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© ğŸ—‘ï¸' : 'Delete Duplicates'}</span>
-                                             </button>
-                                         </>
-                                     ) : (
-                                         <button
-                                             onClick={handleTrimIntersections}
-                                             className="px-3.5 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 font-black rounded-xl transition-all text-xs shadow-md flex items-center gap-1.5 active:scale-95"
-                                             title={lang === 'ar' ? 'ØªÙ‚Ù„ÙŠÙ… Ø£Ø·ÙˆØ§Ù„ Ø§Ù„Ø®Ø·ÙˆØ· Ø¹Ù†Ø¯ Ù†Ù‚Ø§Ø· Ø§Ù„ØªÙ‚Ø§Ø·Ø¹' : 'Trim line lengths at intersection points'}
-                                         >
-                                             <Scissors className="w-4 h-4 text-blue-400" />
-                                             <span>{lang === 'ar' ? 'ØªÙ‚Ù„ÙŠÙ… Ø¹Ù†Ø¯ Ø§Ù„ØªÙ‚Ø§Ø·Ø¹Ø§Øª âœ‚ï¸' : 'Trim Intersections âœ‚ï¸'}</span>
-                                         </button>
-                                     )}
-
-                                 </div>
-                             )}
-                             <button
-                                 onClick={() => setShowOverlapModal(false)}
-                                 className="p-2 bg-white/5 hover:bg-white/15 text-white/50 hover:text-white rounded-full transition-all"
-                             >
-                                 <X className="w-5 h-5" />
-                             </button>
-                         </div>
-                     </div>
-                     <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
-                         {overlapResults && overlapResults.length > 0 ? (
-                             <>
-                                 {overlapModalType === 'duplicates' ? (
-                                     <div className="p-5 bg-gradient-to-r from-red-500/20 via-red-500/10 to-transparent border border-red-500/40 rounded-2xl flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
-                                         <div className="flex items-start gap-3">
-                                             <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5 shrink-0" />
-                                             <div>
-                                                 <h3 className="text-red-400 font-bold text-sm mb-1">
-                                                     {lang === 'ar' ? `ØªÙ… ÙƒØ´Ù ${overlapResults.length} Ø¹Ù†ØµØ± Ù…ØªØ·Ø§Ø¨Ù‚ (Ø®Ø· ÙÙˆÙ‚ Ø®Ø·)!` : `Detected ${overlapResults.length} duplicate elements!`}
-                                                 </h3>
-                                                 <p className="text-red-300/80 text-xs leading-relaxed">
-                                                     {lang === 'ar'
-                                                         ? `â€¢ Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© Ø¹Ø¨Ø§Ø±Ø© Ø¹Ù† Ø®Ø·ÙˆØ· Ø£Ùˆ Ù†Ù‚Ø§Ø· Ù…Ø±Ø³ÙˆÙ…Ø© ÙÙˆÙ‚ Ø¨Ø¹Ø¶Ù‡Ø§ Ø¨Ø§Ù„ÙƒØ§Ù…Ù„ Ø¶Ù…Ù† Ù…Ø³Ø§ÙØ© ${duplicateTolerance}m.\nâ€¢ ÙŠÙ…ÙƒÙ†Ùƒ ØªÙ„ÙˆÙŠÙ†Ù‡Ø§ Ø¨Ø§Ù„Ù„ÙˆÙ† Ø§Ù„Ø£Ø³ÙˆØ¯ â¬› Ù„ØªÙ…ÙŠÙŠØ²Ù‡Ø§ Ø£Ùˆ Ø­Ø°Ù Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ÙƒØ±Ø±Ø© ğŸ—‘ï¸.`
-                                                         : 'â€¢ Duplicate elements are geometries drawn directly on top of each other.\nâ€¢ You can color them black â¬› or delete duplicate items ğŸ—‘ï¸.'}
-                                                 </p>
-                                             </div>
-                                         </div>
-                                         <div className="flex items-center gap-2 flex-wrap shrink-0">
-                                             <button
-                                                 onClick={handleResolveDuplicates}
-                                                 className="px-3.5 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 font-black text-xs rounded-xl border border-red-500/30 transition-all shadow-md flex items-center gap-1.5 active:scale-95"
-                                             >
-                                                 <Trash2 className="w-3.5 h-3.5 text-red-400" />
-                                                 <span>{lang === 'ar' ? 'Ø­Ø°Ù Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø©' : 'Delete Duplicates'}</span>
-                                             </button>
-                                         </div>
-                                     </div>
-                                 ) : (
-                                     <div className="p-5 bg-gradient-to-r from-cyan-500/20 via-cyan-500/10 to-transparent border border-cyan-500/40 rounded-2xl flex items-center justify-between gap-4 flex-wrap sm:flex-nowrap">
-                                         <div className="flex items-start gap-3">
-                                             <GitBranch className="w-5 h-5 text-cyan-400 mt-0.5 shrink-0" />
-                                             <div>
-                                                 <h3 className="text-cyan-400 font-bold text-sm mb-1">
-                                                     {lang === 'ar' ? `ØªÙ… ÙƒØ´Ù ${overlapResults.length} Ù†Ù‚Ø·Ø© ØªÙ‚Ø§Ø·Ø¹ Ø¨ÙŠÙ† Ø§Ù„Ø®Ø·ÙˆØ·!` : `Detected ${overlapResults.length} line intersections!`}
-                                                 </h3>
-                                                 <p className="text-cyan-300/80 text-xs leading-relaxed">
-                                                     {lang === 'ar'
-                                                         ? 'â€¢ Ø§Ù„ØªÙ‚Ø§Ø·Ø¹Ø§Øª Ø¹Ø¨Ø§Ø±Ø© Ø¹Ù† Ø®Ø·ÙˆØ· ØªØªÙ„Ø§Ù‚Ù‰ ÙˆØªØªØ¯Ø§Ø®Ù„ Ø¹Ù†Ø¯ Ù†Ù‚Ø·Ø© Ø¹Ø¨ÙˆØ± Ø¯ÙˆÙ† Ø£Ù† ØªÙƒÙˆÙ† Ù…ØªØ·Ø§Ø¨Ù‚Ø© ÙÙˆÙ‚ Ø¨Ø¹Ø¶Ù‡Ø§.\nâ€¢ ÙŠÙ…ÙƒÙ†Ùƒ ØªÙ‚Ù„ÙŠÙ… Ø·ÙˆÙ„ Ø§Ù„Ø®Ø·ÙˆØ· Ø¹Ù†Ø¯ Ù†Ù‚Ø§Ø· Ø§Ù„ØªÙ‚Ø§Ø·Ø¹ Ø¨Ø¯ÙˆÙ† Ø­Ø°Ù Ø§Ù„Ø¹Ù†Ø§ØµØ± âœ‚ï¸.'
-                                                         : 'â€¢ Intersections are line elements crossing at junction points.\nâ€¢ You can trim line lengths at crossing points without deleting elements âœ‚ï¸.'}
-                                                 </p>
-                                             </div>
-                                         </div>
-                                         <div className="flex items-center gap-2 flex-wrap shrink-0">
-                                             <button
-                                                 onClick={handleTrimIntersections}
-                                                 className="px-3.5 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 font-black text-xs rounded-xl border border-blue-500/30 transition-all shadow-md flex items-center gap-1.5 active:scale-95"
-                                             >
-                                                 <Scissors className="w-3.5 h-3.5 text-blue-400" />
-                                                 <span>{lang === 'ar' ? 'ØªÙ‚Ù„ÙŠÙ… Ø¹Ù†Ø¯ Ø§Ù„ØªÙ‚Ø§Ø·Ø¹Ø§Øª âœ‚ï¸' : 'Trim Intersections âœ‚ï¸'}</span>
-                                             </button>
-                                         </div>
-                                     </div>
-                                 )}
-                                 <div className="space-y-3">
-                                     {overlapResults.slice(0, 50).map((overlap, idx) => (
-                                         <div key={idx} className="p-4 bg-white/5 border border-white/10 rounded-xl flex items-center justify-between gap-3 flex-wrap">
-                                             <div className="flex flex-col gap-1">
-                                                 <div className="flex items-center gap-2">
-                                                     <span className="text-[10px] font-black text-white/40 bg-white/5 px-2 py-1 rounded-md">{overlap.type}</span>
-                                                     <span className="text-xs font-bold text-white">ID: {overlap.id1}</span>
-                                                     <span className="text-white/40 mx-1">{overlapModalType === 'duplicates' ? 'â†”' : 'âœ•'}</span>
-                                                     <span className="text-xs font-bold text-white">ID: {overlap.id2}</span>
-                                                 </div>
-                                                 {overlap.intersectionPoint && (
-                                                     <span className="text-[10px] text-cyan-300/80 font-mono">
-                                                         ğŸ“ Lat: {overlap.intersectionPoint.y.toFixed(6)}, Lon: {overlap.intersectionPoint.x.toFixed(6)}
-                                                     </span>
-                                                 )}
-                                             </div>
-                                             <div className="flex items-center gap-2 shrink-0">
-                                                 {overlapModalType === 'duplicates' ? (
-                                                     <>
-                                                         <span className="text-[10px] text-amber-400 font-bold bg-amber-400/10 px-2 py-1 rounded-md">
-                                                             {lang === 'ar' ? 'Ø¹Ù†ØµØ± Ù…ØªØ·Ø§Ø¨Ù‚' : 'Duplicate'}
-                                                         </span>
-                                                         <button
-                                                             onClick={() => handleDeleteDuplicateItem(overlap.id2)}
-                                                             className="px-2.5 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/30 text-[10px] font-bold rounded-lg transition-all flex items-center gap-1 active:scale-95"
-                                                             title={lang === 'ar' ? 'Ø­Ø°Ù Ø§Ù„Ø¹Ù†ØµØ± Ø§Ù„Ù…ÙƒØ±Ø±' : 'Delete Duplicate'}
-                                                         >
-                                                             <Trash2 className="w-3 h-3" />
-                                                             <span>{lang === 'ar' ? `Ø­Ø°Ù ${overlap.id2}` : `Del ${overlap.id2}`}</span>
-                                                         </button>
-                                                     </>
-                                                 ) : (
-                                                     <>
-                                                         <span className="text-[10px] text-cyan-400 font-bold bg-cyan-400/10 px-2 py-1 rounded-md">
-                                                             {lang === 'ar' ? 'ØªÙ‚Ø§Ø·Ø¹ Ø®Ø·ÙˆØ·' : 'Intersection'}
-                                                         </span>
-                                                     </>
-                                                 )}
-                                             </div>
-                                         </div>
-                                     ))}
-                                     {overlapResults && overlapResults.length > 50 && (
-                                         <div className="text-center p-4 text-white/40 text-xs font-bold">
-                                             {lang === 'ar' ? `Ùˆ ${overlapResults.length - 50} Ø¹Ù†ØµØ± Ø¢Ø®Ø±...` : `And ${overlapResults.length - 50} more items...`}
-                                         </div>
-                                     )}
-                                 </div>
-                             </>
-                         ) : (
-                             <div className="text-center p-12 space-y-4">
-                                 <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-green-500/20">
-                                     <Check className="w-8 h-8 text-green-400" />
-                                 </div>
-                                 <h3 className="text-green-400 font-black text-xl">
-                                     {overlapModalType === 'duplicates'
-                                         ? (lang === 'ar' ? 'ØªÙ…Øª Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬Ø© - Ø§Ù„Ø®Ø±ÙŠØ·Ø© Ø®Ø§Ù„ÙŠØ© ØªÙ…Ø§Ù…Ø§Ù‹ Ù…Ù† Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø©!' : 'Processed - No Duplicate Elements Remaining!')
-                                         : (lang === 'ar' ? 'ØªÙ…Øª Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬Ø© - Ø§Ù„Ø®Ø±ÙŠØ·Ø© Ø®Ø§Ù„ÙŠØ© Ù…Ù† ØªÙ‚Ø§Ø·Ø¹Ø§Øª Ø§Ù„Ø®Ø·ÙˆØ·!' : 'Processed - No Line Intersections Remaining!')}
-                                 </h3>
-                                 <p className="text-white/70 text-xs max-w-md mx-auto leading-relaxed">
-                                     {lang === 'ar'
-                                         ? 'Ø¬Ù…ÙŠØ¹ Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ÙƒØ§Ù†ÙŠØ© Ø§Ù„Ø¢Ù† ÙØ±ÙŠØ¯Ø© ÙˆØ®Ø§Ù„ÙŠØ© Ù…Ù† Ø§Ù„Ù…Ø´Ø§ÙƒÙ„ Ø§Ù„Ù‡Ù†Ø¯Ø³ÙŠØ©. ÙŠÙ…ÙƒÙ†Ùƒ Ø¥ØºÙ„Ø§Ù‚ Ø§Ù„Ù†Ø§ÙØ°Ø© ÙˆØªØµØ¯ÙŠØ± Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ù…Ø¨Ø§Ø´Ø±Ø© ÙˆØ¨Ø¯Ù‚Ø© Ø¹Ø§Ù„ÙŠØ©.'
-                                         : 'All spatial elements are now clean and unique. You can close this modal and safely export your file.'}
-                                 </p>
-                                 <button
-                                     onClick={() => setShowOverlapModal(false)}
-                                     className="px-6 py-2.5 bg-accent text-primary font-black text-xs rounded-xl hover:brightness-110 transition-all shadow-lg active:scale-95"
-                                 >
-                                     {lang === 'ar' ? 'Ø­ÙØ¸ ÙˆØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª' : 'Confirm & Close'}
-                                 </button>
-                             </div>
-                         )}
-                     </div>
-                 </div>
-             </div>
-         )}
-
-         <UserManualModal lang={lang} isOpen={showManual} onClose={() => setShowManual(false)} />
-
-          {/* Field Geotagged Photos Modal */}
-          {showPhotoModal && (
-            <GeotaggedPhotoModal
-              lang={lang}
-              isOpen={showPhotoModal}
-              onClose={() => setShowPhotoModal(false)}
-              onAddPointsToMap={(newPts) => {
-                setGlobalPoints(prev => [...prev, ...newPts]);
-                setActiveTab('map-viewer');
-              }}
-            />
-          )}
-
-          {/* Field Inspection & Handover A4 Sheet Modal */}
-          {showInspectionModal && (
-            <FieldInspectionSheetModal
-              lang={lang}
-              isOpen={showInspectionModal}
-              onClose={() => setShowInspectionModal(false)}
-              points={globalPoints.length > 0 ? globalPoints : plannedStreets}
-            />
-          )}
-
-          {/* Smart Topology Cleaner & Healer Modal */}
-          {showTopologyModal && (
-            <TopologyCleanerModal
-              lang={lang}
-              isOpen={showTopologyModal}
-              onClose={() => setShowTopologyModal(false)}
-              points={globalPoints.length > 0 ? globalPoints : plannedStreets}
-              onApplyCleanedPoints={(cleaned) => {
-                setGlobalPoints(cleaned);
-              }}
-            />
-          )}
-
-         {/* Engineering Suite Modals */}
-         {showProfileModal && (
-           <LongitudinalProfileModal
-             lang={lang}
-             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
-             selectedPipe={focusedPoint ? (displayPoints.find(p => p.id === (focusedPoint as any).id) || null) : null}
-             onClose={() => setShowProfileModal(false)}
-             onFocusPoint={(pt) => {
-               setFocusedPoint({ id: `pt-${Date.now()}`, x: pt.lng, y: pt.lat, lat: pt.lat, lng: pt.lng } as any);
-               setDataId(`profile-focus-${Date.now()}`);
-             }}
-           />
-         )}
-
-         {showEarthworkModal && (
-           <EarthworkBoqModal
-             lang={lang}
-             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
-             onClose={() => setShowEarthworkModal(false)}
-           />
-         )}
-
-         {showClashModal && (
-           <ClashDetectionModal
-             lang={lang}
-             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
-             onClose={() => setShowClashModal(false)}
-             onFocusClash={(pt) => {
-               setFocusedPoint({ id: `pt-${Date.now()}`, x: pt.lng, y: pt.lat, lat: pt.lat, lng: pt.lng } as any);
-               setDataId(`clash-focus-${Date.now()}`);
-             }}
-           />
-         )}
-
-         {showOverflowModal && (
-           <OverflowSimulationModal
-             lang={lang}
-             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
-             onClose={() => setShowOverflowModal(false)}
-             onFocusManhole={(pt) => {
-               setFocusedPoint({ id: `pt-${Date.now()}`, x: pt.lng, y: pt.lat, lat: pt.lat, lng: pt.lng } as any);
-               setDataId(`overflow-focus-${Date.now()}`);
-             }}
-           />
-         )}
-         <InstallPwaModal
-            isOpen={showInstallModal}
-            onClose={() => setShowInstallModal(false)}
-            lang={lang}
-            deferredPrompt={deferredPrompt}
-            setDeferredPrompt={setDeferredPrompt}
-            isStandalone={isStandalone}
-         />
-         <CheckResultModalPopup
-            checkResultModal={checkResultModal}
-            setCheckResultModal={setCheckResultModal}
-            lang={lang}
-            setActiveTab={setActiveTab}
-            onFocusIssuePoint={(pt) => {
-              setFocusedPoint(pt);
-              setDataId(`focus-point-${Date.now()}`);
-            }}
-            onShowAllIssuesOnMap={(items) => {
-              if (items && items.length > 0) {
-                setActiveIssueItems(items);
-              }
-              setShowIssuesOnly(true);
-              setDataId(`show-issues-${Date.now()}`);
-            }}
-            onClearAudit={clearAuditResults}
-         />
-      </main>
-
-      {/* Global High-Priority Progress & Loading Modal Overlay */}
-      {loading && typeof document !== 'undefined' && createPortal(
-        <div 
-          className="fixed inset-0 flex items-center justify-center p-4 animate-in fade-in duration-200 pointer-events-auto select-none" 
-          style={{ backgroundColor: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)', zIndex: 99999999 }}
-          dir={lang === 'ar' ? 'rtl' : 'ltr'}
-        >
-          <div className="text-center p-8 sm:p-10 bg-[#0b2d3d] border-2 border-amber-400/60 rounded-[3rem] shadow-[0_0_80px_rgba(245,158,11,0.45)] max-w-md w-full animate-in zoom-in-95 duration-200">
-            
-            {/* Spinning Indicator */}
-            <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full border-4 border-amber-400/20 border-t-amber-400 animate-spin" />
-              <MapPin className="w-8 h-8 text-amber-400 animate-pulse stroke-[2.5]" />
-            </div>
-
-            {/* Title Badge */}
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-amber-400/10 border border-amber-400/30 text-amber-400 text-[11px] font-black mb-3">
-              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              <span>
-                {lang === 'ar' ? 'Ø¬Ø§Ø±ÙŠ Ù…Ø¹Ø§Ù„Ø¬Ø© Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ù…ÙƒØ§Ù†ÙŠØ©' : 'Processing Spatial Data'}
-              </span>
-            </div>
-
-            {/* Message Body */}
-            <div className="space-y-2 mb-4 px-2">
-              {(statusMessage || (lang === 'ar' ? 'Ø¬Ø§Ø±ÙŠ Ù…Ø¹Ø§Ù„Ø¬Ø© ÙˆØ¬Ù„Ø¨ Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª...' : 'Processing data...')).split('\n').map((line, idx) => (
-                <p key={idx} className="text-white font-black text-base sm:text-lg leading-relaxed">
-                  {line}
-                </p>
-              ))}
-            </div>
-
-            {/* Progress Bar & Percentage */}
-            {progressPercent !== null && progressPercent !== undefined ? (
-              <div className="w-full mt-4 space-y-2.5">
-                <div className="w-full bg-black/60 rounded-full h-4 overflow-hidden p-0.5 border border-white/10 shadow-inner">
-                  <div
-                    className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-500 h-full rounded-full transition-all duration-300 shadow-[0_0_15px_rgba(245,158,11,0.8)]"
-                    style={{ width: `${Math.min(100, Math.max(0, progressPercent))}%` }}
-                  />
-                </div>
-                <div className="flex items-center justify-between text-xs font-black pt-1 px-1">
-                  <span className="text-amber-400 text-sm font-black">{Math.round(progressPercent)}%</span>
-                  <span className="text-white/60 font-bold">{lang === 'ar' ? 'Ù†Ø³Ø¨Ø© Ø§Ù„Ø¥Ù†Ø¬Ø§Ø²' : 'Progress'}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="w-full mt-4 bg-black/60 rounded-full h-3 overflow-hidden p-0.5 border border-white/10 shadow-inner">
-                <div className="bg-amber-400/80 h-full rounded-full animate-pulse w-full shadow-[0_0_10px_rgba(245,158,11,0.5)]" />
-              </div>
-            )}
-
-            <p className="text-[10px] text-white/40 font-bold mt-5 pt-3 border-t border-white/5">
-              {lang === 'ar' ? 'âš¡ ÙŠØ±Ø¬Ù‰ Ø§Ù„Ø§Ù†ØªØ¸Ø§Ø±ØŒ Ù„Ø§ ØªØºÙ„Ù‚ Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ Ø£Ùˆ Ø§Ù„Ù…ØªØµÙØ­ Ø£Ø«Ù†Ø§Ø¡ Ø§Ù„Ù…Ø¹Ø§Ù„Ø¬Ø©...' : 'âš¡ Please wait, do not close the browser during processing...'}
-            </p>
-          </div>
-        </div>,
-        document.body
-      )}
-      {hoveredTabTooltip && (
-        <ToolHoverTooltip
-          toolId={hoveredTabTooltip.id}
-          lang={lang}
-          position={{ top: hoveredTabTooltip.top, left: hoveredTabTooltip.left, side: hoveredTabTooltip.side }}
-        />
-      )}
-      </div>
-    </div>
-  );
-};
-
-export const CheckResultModalPopup: React.FC<{
-  checkResultModal: CheckResultModalState | null;
-  setCheckResultModal: (val: CheckResultModalState | null) => void;
-  lang: 'ar' | 'en';
-  setActiveTab: (tab: any) => void;
-  onFocusIssuePoint?: (pt: GeoPoint) => void;
-  onShowAllIssuesOnMap?: (issueItems?: GeoPoint[]) => void;
-  onClearAudit?: () => void;
-}> = ({ checkResultModal, setCheckResultModal, lang, setActiveTab, onFocusIssuePoint, onShowAllIssuesOnMap, onClearAudit }) => {
-  if (!checkResultModal) return null;
-
-  const handleLocateAll = () => {
-    if (onShowAllIssuesOnMap) {
-      onShowAllIssuesOnMap(checkResultModal.issueItems);
-    }
-    setCheckResultModal(null);
-    setActiveTab('preview');
-  };
-
-  const handleFocusItem = (item: GeoPoint) => {
-    if (onFocusIssuePoint) {
-      onFocusIssuePoint(item);
-    }
-    setCheckResultModal(null);
-    setActiveTab('preview');
-  };
-
-  return (
-    <div 
-      className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-300"
-      onClick={() => setCheckResultModal(null)}
-    >
-      <div 
-        className="bg-[#0b2d3d] border border-accent/40 rounded-[2.5rem] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)] max-w-xl w-full overflow-hidden flex flex-col text-right animate-in zoom-in-95 duration-200"
-        onClick={(e) => e.stopPropagation()}
-        dir={lang === 'ar' ? 'rtl' : 'ltr'}
-      >
-        {/* Modal Header */}
-        <div className={cn(
-          "p-6 flex items-center justify-between border-b shrink-0",
-          checkResultModal.issuesCount > 0
-            ? "bg-gradient-to-r from-rose-950/80 via-rose-900/40 to-[#0b2d3d] border-rose-500/30"
-            : "bg-gradient-to-r from-emerald-950/80 via-teal-900/40 to-[#0b2d3d] border-emerald-500/30"
-        )}>
-          <div className="flex items-center gap-3">
-            <div className={cn(
-              "p-3 rounded-2xl border shadow-inner flex items-center justify-center",
-              checkResultModal.issuesCount > 0
-                ? "bg-rose-500/10 border-rose-500/40 text-rose-400"
-                : "bg-emerald-500/10 border-emerald-500/40 text-emerald-400"
-            )}>
-              {checkResultModal.issuesCount > 0 ? (
-                <AlertTriangle className="w-7 h-7 animate-bounce" />
-              ) : (
-                <CheckCircle2 className="w-7 h-7" />
-              )}
-            </div>
-            <div>
-              <h3 className="text-lg font-black text-white leading-snug">
-                {lang === 'ar' ? checkResultModal.titleAr : checkResultModal.titleEn}
-              </h3>
-              <span className={cn(
-                "inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black mt-1 border shadow-sm",
-                checkResultModal.issuesCount > 0
-                  ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
-                  : "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
-              )}>
-                <span className={cn("w-2 h-2 rounded-full", checkResultModal.issuesCount > 0 ? "bg-rose-400 animate-pulse" : "bg-emerald-400")} />
-                {lang === 'ar' ? checkResultModal.badgeTextAr : checkResultModal.badgeTextEn}
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => setCheckResultModal(null)}
-            className="p-2.5 rounded-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Modal Content Body */}
-        <div className="p-6 space-y-6 overflow-y-auto max-h-[65vh] custom-scrollbar">
-          {/* Detailed summary paragraph */}
-          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-white/80 leading-relaxed font-semibold">
-            {lang === 'ar' ? checkResultModal.detailsAr : checkResultModal.detailsEn}
-          </div>
-
-          {/* Statistics Grid */}
-          <div className="grid grid-cols-2 gap-3">
-            {(checkResultModal.stats || []).map((st, i) => (
-              <div key={i} className="p-4 rounded-2xl bg-[#071f2b] border border-white/5 shadow-inner flex flex-col justify-between space-y-1">
-                <span className="text-[10px] text-white/50 font-bold uppercase tracking-wide">
-                  {lang === 'ar' ? st.labelAr : st.labelEn}
-                </span>
-                <span className={cn("text-2xl font-black tracking-tight", st.colorClass)}>
-                  {st.value}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Interactive Issues List */}
-          {checkResultModal.issuesCount > 0 && checkResultModal.issueItems && checkResultModal.issueItems.length > 0 && (
-            <div className="space-y-3 pt-2 border-t border-white/10">
-              <div className="flex items-center justify-between text-xs font-black text-rose-300">
-                <span className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-rose-400 animate-pulse" />
-                  <span>{lang === 'ar' ? `Ù‚Ø§Ø¦Ù…Ø© Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ù…ÙØ­ÙˆØµØ© Ø°Ø§Øª Ø§Ù„Ù…Ù„Ø§Ø­Ø¸Ø§Øª (${checkResultModal.issueItems.length})` : `Issues List (${checkResultModal.issueItems.length})`}</span>
-                </span>
-                <button
-                  onClick={handleLocateAll}
-                  className="text-[11px] text-accent hover:underline font-black flex items-center gap-1"
-                >
-                  <Maximize className="w-3 h-3" />
-                  <span>{lang === 'ar' ? 'Ø¹Ø±Ø¶ Ø§Ù„ÙƒÙ„ Ø¹Ù„Ù‰ Ø§Ù„Ø®Ø±ÙŠØ·Ø©' : 'View All on Map'}</span>
-                </button>
-              </div>
-
-              <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                {checkResultModal.issueItems.slice(0, 50).map((item, idx) => (
-                  <div 
-                    key={idx}
-                    className="p-3 rounded-xl bg-white/5 hover:bg-rose-500/10 border border-white/10 hover:border-rose-500/30 flex items-center justify-between gap-3 text-xs transition-all group"
-                  >
-                    <div className="flex items-center gap-2.5 overflow-hidden">
-                      <span className="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center justify-center font-black text-[10px] shrink-0">
-                        {idx + 1}
-                      </span>
-                      <div className="overflow-hidden">
-                        <div className="font-black text-white truncate text-[11px]">
-                          {item.id}
-                        </div>
-                        <div className="text-[10px] text-rose-300/80 truncate font-semibold">
-                          {item.issueReason || (lang === 'ar' ? 'Ù…Ù„Ø§Ø­Ø¸Ø© ØªØ¯Ù‚ÙŠÙ‚ ÙÙŠ Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¹Ù†ØµØ±' : 'Audit validation issue')}
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => handleFocusItem(item)}
-                      className="px-3 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-white text-[10px] font-black shrink-0 flex items-center gap-1 transition-all shadow-md active:scale-95"
-                    >
-                      <span>ğŸ”</span>
-                      <span>{lang === 'ar' ? 'Ø°Ù‡Ø§Ø¨ Ù„Ù„Ù…ÙˆÙ‚Ø¹' : 'Locate'}</span>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Informational Guidance */}
-          {checkResultModal.issuesCount > 0 ? (
-            <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 font-bold space-y-1">
-              <p className="flex items-center gap-2">
-                <span>ğŸ’¡</span>
-                <span>
-                  {lang === 'ar' 
-                    ? `Ø§Ù†Ù‚Ø± Ø¹Ù„Ù‰ "ØªØ­Ø¯ÙŠØ¯ Ù…ÙˆÙ‚Ø¹ Ø§Ù„Ù…Ø´Ø§ÙƒÙ„" Ù„Ù„Ø°Ù‡Ø§Ø¨ ÙÙˆØ±Ø§Ù‹ Ù„Ù„Ø®Ø±ÙŠØ·Ø© ÙˆØªØ­Ø¯ÙŠØ¯ Ø£Ù…Ø§ÙƒÙ† Ø§Ù„Ù€ (${checkResultModal.issuesCount}) Ø¹Ù†ØµØ± Ø§Ù„Ù…Ø¹Ù†ÙŠØ© Ù…Ø¹ Ø§Ù„ØªÙƒØ¨ÙŠØ± Ø§Ù„Ù…Ø¨Ø§Ø´Ø±.` 
-                    : `Click "Locate Issues" to jump directly to the map and view all ${checkResultModal.issuesCount} issue elements in high focus.`}
-                </span>
-              </p>
-            </div>
-          ) : (
-            <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-200 font-bold space-y-1">
-              <p className="flex items-center gap-2">
-                <span>âœ¨</span>
-                <span>
-                  {lang === 'ar' 
-                    ? 'Ù…Ù…ØªØ§Ø²! ØªÙÙŠ Ø´Ø¨ÙƒØ© Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø§Ù„Ø­Ø§Ù„ÙŠØ© Ø¨Ø¬Ù…ÙŠØ¹ Ù…Ø¹Ø§ÙŠÙŠØ± Ù‡Ø°Ø§ Ø§Ù„ÙØ­Øµ Ø¯ÙˆÙ† Ø£ÙŠ Ø§Ø³ØªØ«Ù†Ø§Ø¡Ø§Øª.' 
-                    : 'Excellent! Current network elements meet all check parameters without exceptions.'}
-                </span>
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Modal Footer */}
-        <div className="p-5 bg-black/30 border-t border-white/5 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          {checkResultModal.issuesCount > 0 ? (
-            <button
-              onClick={handleLocateAll}
-              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white border border-rose-400 text-xs font-black transition-all flex items-center gap-2 shadow-xl animate-pulse active:scale-95"
-            >
-              <MapPin className="w-4 h-4" />
-              <span>{lang === 'ar' ? `ğŸ¯ ØªØ­Ø¯ÙŠØ¯ ÙˆØªÙ‚Ø±ÙŠØ¨ Ø£Ù…Ø§ÙƒÙ† Ø§Ù„Ù€ (${checkResultModal.issuesCount}) Ù…Ø´ÙƒÙ„Ø© Ø¹Ù„Ù‰ Ø§Ù„Ø®Ø±ÙŠØ·Ø©` : `Locate ${checkResultModal.issuesCount} Issues on Map`}</span>
-            </button>
-          ) : <div />}
-
-          <div className="flex flex-wrap items-center gap-2">
-            {onClearAudit && (
-              <button
-                onClick={() => {
-                  onClearAudit();
-                }}
-                className="px-5 py-3 rounded-2xl bg-rose-500/20 hover:bg-rose-500/40 text-rose-200 border border-rose-500/40 text-xs font-black transition-all flex items-center gap-2 active:scale-95"
-                title={lang === 'ar' ? 'Ø¥Ø²Ø§Ù„Ø© Ù†ØªØ§Ø¦Ø¬ Ø§Ù„ÙØ­Øµ ÙˆØ§Ù„ØªØ¸Ù„ÙŠÙ„' : 'Clear Audit Highlights'}
-              >
-                <RotateCcw className="w-4 h-4 text-rose-400" />
-                <span>{lang === 'ar' ? 'Ø¥Ø²Ø§Ù„Ø© Ù†ØªØ§Ø¦Ø¬ Ø§Ù„ÙØ­Øµ' : 'Clear Audit Highlights'}</span>
-              </button>
-            )}
-            {checkResultModal.type === 'sbc' && checkResultModal.issuesCount > 0 && (
-              <button
-                onClick={() => {
-                  setCheckResultModal(null);
-                  setActiveTab('sbc-checker');
-                }}
-                className="px-5 py-3 rounded-2xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-black transition-all flex items-center gap-2"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                {lang === 'ar' ? 'Ø¹Ø±Ø¶ ØªÙ‚Ø±ÙŠØ± SBC Ø§Ù„ØªÙØµÙŠÙ„ÙŠ' : 'View Full SBC Report'}
-              </button>
-            )}
-            <button
-              onClick={() => setCheckResultModal(null)}
-              className="px-6 py-3 rounded-2xl bg-accent hover:bg-accent/90 text-primary text-xs font-black shadow-lg transition-all"
-            >
-              {lang === 'ar' ? 'Ø¥ØºÙ„Ø§Ù‚' : 'Close'}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default App;
+xœì=]sÜÆ‘ïşÆg.sÄ~‘”dšdŠ¢$[Qd‰<ç®X,kv1»‹  –ËÃÛ’¬ğòro÷v)Ÿ$FR¢(’­<Ş¯Ø}Í/¹î ‹,–¤;%TY\fzzzzúkzÆ„dŸ£SŸéd•xÌdMø¹íÚ-ÃdÛ¶aù^~úÌ-•¼9²ºF¼²¡“Ÿ¬®Ç‡_s½—xL˜é1r$ùïm¯\.K{œØûRÀ’2ù;2 ¥ #)†F‹„ßË&³Ú~‡¬Âªs
+¤¡“v³çA¼dõLsú¡§¡ìU÷å°2e9ĞÓ°_
+SI­= ¹¤E%úOÂ:N¾¶bWâoÉzR†Y=’'[vìæ2ıºÉ¨oØVĞ•´8ÙÒğ¼»é³.tD›¾qÀnF%)ì:vŸó¶,s h%Ş“umk×n·M¶“nS”ÛlÃdÔ]ïé`ßŒ~ßa^ÏLû¿aÚık†äÑ	”Er¬Ò­R9[ğiİ¢æÀ3€Lñ·41€M[g«G†wÍ¥}Ãjã+ùío‰ ñ.mğ59ëù.c¾æ˜Ô²˜;+©áØæ m[ZÓ¶`.ı R)Ç1ŸüàÂ_x‡Á7˜{jÎÎ¥q½eX,†^8ÿP¾k:Tà&ZlY›Ô€ÿœ$Të}
+ØMô2ƒVÌËTm6lÓvã6l«e´ËM,W5ú¥¡ûI£>–«İ¦]&icA±ªÉ-:`2äL,O3Úº®‡D`‡«G(2PÁ¤eÊê,@(Ø8áô1÷ h†`	Öâ“‘iåYÔÙf®Ã,İhöLêîÚ;œ»¸BkQm2P©†¥Öó|"8’Ø.q‡a/Ä°H“TèùK=Rj›vƒš‘Zã<¬‹>á}Œ şk!5¼¹L÷0*è4Ïkê3™~onà‡dW‰O²^ƒ
+û•ê'Ç)ûÕ±!ÀFçÔ^w]:(ÿ[rÊ°¤:søAüõìÚ*©KbÔkÿJÌ(Œ¸“p[ÌAbC3Ÿ"Ò<¹T­JúB–ë|˜sĞ%ğæ æàm$zŠ³€šÌ:!uåŠ÷Vf£Ö±ü4ŸÜ,@QìS¿çm2Ï£mV’Ú0ım1MÔ•Ö äçäîğtô€î¿¾}1|<üF¼¾==şitBJVÿïÏsJî~G†/Â…Ê/‡o+üå£‡Ã'Ğà	)½ Jä°Ì‡›ú1@~2üfôhtŸ$Zê†çS«É6Õ+ûöãé¥ÚÜ1=øÉ]Å–Éİä$á’'¾=^©Óã§‘[œu—‹"Ø•¢'³®rí9	¿8.;ÀeˆksKùœfÛ™»Éµçlëß,İNÈw©tÏG ÿ–=ÊJÕy¢ÕæRHd:9mx„–0d¢ÑşÊXT8fX'Õ›Rõ^š#MÅ’Oò8mslÍ{ ~Ã¶]İ°@˜å[?©‘ é.uÛ –	ú)éÁb@:¾ÔÄ—Ú7_&8.ºİÇµ2¿Ù¹~ÀĞ[b}²Ñó|»+Şg»ÔÑx—š ™>;/]:ó©a.“#âó—U#ÁĞdSšc2“ $wì&0ú–kÀ¨n3¿o»÷ví>uuo«çS˜!æTIA…°“ïj+^!ì.]nw‡uÁë‘6•|’ú[)DEkÉ§"ÔÚÏÅšyy4KTÌ0¶p6ì®c2ÎÖhˆ)¹ú,î„M…,İ/“l`&‹Œ­´¢¦½tÖ_Ù²û¥¹ã»ó’ºhlCí÷úÖüìèÁğêéYXæ³A‡³Ç ¢¼^huı+©É;@Ól™[¬²¯Ü©X&Ûë·®ïî^ß“‚ş—ğsPµ!¥K0N)‹Š—Ì‡4•(mF7Ö]FÅüK;¿j÷,ºƒ ·ÒŸ•Ù°õgØ¤Ò¡ Í^u¿|8Oã·Á<AC8Fúù8)CÂÍş´ÅŸYDùR%P/1_SªUâÂ§²6ş½2_ˆ@ f¼)2Ğ*g£DÇã.g»ÀB§0¸°êğ%uQ´ØSèß"18ux+ÅEÇ©?Á(P@ òÉÄ m‰üYm.q|O»/¬Ÿ÷N|/—œ<úkŒ_*?#›v:%7LÆ’äjÏ÷A@a|‡ù=—ÿÚµmÓ#ÛÔb&ùY%mE7HÓ¤ÇC3f{¹cè:³mx¶Ù—·a¼®v‰˜¬åkµJh¾K-Ïù¦ò‚ßh{µjµº/ü&æjO£=ßY‹d¥Á±K’™TuÈ@1¦OÖ/Í:ˆu:|ÇÙ9Ô–ˆ3ĞH£­íı´Ú¨ëú>ËÔ×h]7ƒ«ZõğGPì¢¨`ºÖŠÃr±|­aÒæ=ÑôĞ#^‡‚É£Õá«É‰aAM8ƒ¤–N=,{Mj2íÃ%ÂIc ci°>fâH¯%G°²c€‹÷‰í¿¾©T_[$mq&!
+x3ĞXÖZVi®8vÃ§àwG÷hørÜ½GàÔü/F'ÜÇƒ"®e®òa'eöx¥ÂûJÌ_EL`\>U€‡€)c\‰Èæ#;z\Z¡âM;³œõ²:wL‚:]Ä°€´*òXóL2Ÿ¥Ê•*iÀ_|y(é¹ZW—LÓ¯À:5ZƒğÕºzİeG«Õg²½g9q'=”@vgíQİpW³Óâú&'°é»³é6k*ª¤(“àsÁÒIÎ®,V#æŞ«»¬»ƒJxI_ğ}—j}íPüèh{W–:û‚øXóf¸öªŸÕ«ÎágKøÛnĞR½^¯]¾<©:_-×–æö	ŠWkBÌHÇ2¦3ã„fà”ÛFeh›Kå’„Àr‚ED‹KV|’¯„di„?úàÊR£4À,e  ½kX÷€ó"†«WgTÈ°‹Œ…\NÈoõ¤@¸áR\¬e…ƒ§Iu°Z'Ñ—Y‘È‰7#>_ß‚àyÌÿ;2çtøˆ¡“Ñ¡Ì9}ví	ü
+¥Îºãp°ä²í²èfpØ=>zÌâ ‹œÃ„üGQ!Æb›2óR+/‘.šòÒÄ	otĞ%1C £Ãÿn–@•`?ı~øh÷-É’‘Àë}Üû_”è£ÿ$£ÏG'¼"x§Ã×Pù9¸ù6è§ßvi›Í	·bLk‚jºËê˜âÑ.vIÃµûP'ÕZ¦#ª8kÚã<„FšFv'g­V…I«U“Ö ,úÉ¢"x¯ÊRUlF.C{°2µ¥jÄFPÆëaébµš6ÖVş=‰rÒòDå'Ğô3’ßn¾¿L›^.	mP#MîÑ¼¦k›fƒº	Ñ3Oh«VËdû—ë¡É*–¿ØHX¥ñ‘â&_Û¥:Æ4ßÖ\Òr¹`Ù×–ÈA5Úm€äÇ©€Y†Jã¯9œv´ò¤ºt¡ê?³=YxOTi=SL)ÍA%ß®arÏ×[ê²kã¯Œ€0ÀØ*ãcâš	µkAÌ¹.u}§c[L²R£¦–ÑEï¤X7YQ<YÔ¨)5@g!«q=¹Æ%=Çan<m”<¦©õÑwªâÓáQïrİ©`®9	ELJãõ'”ÁMË÷ÃŒ­K¤Üãzx¡ø¨òµ±‘—«S)ÚàÉiÒà7´Â½¬¿†~ĞK®&_ÁO	TAé5ßŸâ___Â—·¸kîÒè!«Ğ™ü#dˆ­İeD!.ä–í’_÷@»Õâq|—Q}@)=/cı«‰X@mZwEëÉœsÅ“Ò¶ò¬¨ì“£•e¢9 ‚É|·WÀq±yHÆĞ¤sÜFŒÄŸ`iğÃ.×.×Á/ô¾k´;¾®ÕjUYP!&J…ZI™cÑ8Ñb|2yéüÏèa‚ÃoÛı"ü:É4×+fäM°jerFÒ3¼…k"ØxVËa²&ï,ª%4úq3•„Fãüşğo(ƒ–ú·£¯†/ƒíyø÷Ÿì`¹8^œÖi»†Nğôå/ÑÔ¿Ö‹[ È‘k6’ÃWIÜPHØ…ïÂZ;LÊ)òX×Ài’Í@@}N{‹=ê? `Ô‰8m
+GJ">Ş˜7fD$³-%Rm
+;‚ä9@8†:áò5­
+µz ÔÒ’)ÎâI'e¤I9£‡3@Í™˜Ò¿”p‚„·0w¼ÜşQQI2Í¸™õ]Œ ^À¸¯[mÓğ:Ó»°…Z¼â?ÉŠ~B4È^zÁÍ¸oB›ï1Øo§<ÔıftÂù5Ö¢=Ó'›Ô!˜i8õ{cS°ê5{À€"¥ï*¨‰Læhş,nC±É?+±²H¤(ó®õÀ	Hƒ¨ª'É¡$R¨híÄ¼”˜T‹¯²ñª²{>7‹-îÂõ\Ïvµ`Ç¨€­ÃŸ©äƒíğĞ‚ şŒ¡iâúS†Òã‘Œ°úJEÀ9G×®Mõ.uŠu|GT¾€n;°Fõb½~Âë^@§0™.5¬b½îŠÊÓvË•¯À“„d ÖËäcfëÌ7š`³Œng˜Emÿ8VI„ôÕè!¼Ş4øËÃoÑtsNŸóªä"Ü¯ Mè¾3nãÈœCæÌÃ$•¸%Á~oJÑ³{n“]ßŞùø¼q'‚”R‡?=ìÆîÕ1jö]hÅ£­ÍÍ­ÛŸ!™Ê gJ%æxmNByº¹ú	%ÿ=6X=B(å&,ğãpbc%EtÁ”ó±Äº(‰~„%{ĞbÂ@Î öæ
+3Õ…k+^ñŸCXöx âèK4Ö_àY0â±y‹Ë$øK0™—ğ#Nâ‡gx¦ó´ËéM#âğÁdB0QX]ÏáÓ5¬Õ£Ú4Â‹·¢‡«GW¦m,Úè ]t¶lZ@2É¼‘ZºİÃ]¹´ JRã“Ø	ªW‰0oB+çlN>·ŒÄ“Ïÿ±ğo€V_[„Å !õ”,~¡Ñ€²Êäƒ)?‡ÉëøãL=?£qÏ/¶”Ó•ØÈ—[ÂÃW`9½åvğSi>†H·{æñISäpbäğm¢ƒ«¨T+¾5sÆ™xG™=.Ş‘	N† ~|Êe&ø°ÅÚÚImÆÄ¶bÂ‹š<ï"‘q‘r„’[1I‚XHçi¨“‡&	—BëôíSŸm4ûŠ¼¢‚[ÙÊT¢¯Ç¬ûÏæI88Æ²ë¦<	TÖc@f®€É.Ù|•Eµ€ˆåëåféÅ’Š-½ód&Ifs=oß1‹Qº+™Ÿ´ËvÉAuGHÙàW,—-Tàœ·Cp¿‹ŸÈİ‚<sZ”ôCºfiü‚j-°è¡›Çç4¥Úxæsü˜F&ñyå–üÏ3U:”G:ˆÈ°÷ÂPrpKxşšTÎ‰sãË©ƒé)h†·å°àæˆ82©j©ÓsÇÈx»’¤g’H×©ëwğø—‚LÑ÷«ö¯ôIb\ˆBÉ&SÓh$AGAşíó£ë6~ ã[ˆ:ãêSSf+HRT'ü¼ct{&ıá(v!%Z SRhÅr-ƒÌN!ºR‚
+Û}š¡U|ñ´›¼^²,	úŠIĞÑVvù‰ª®ã¯%ßSÇ×ük©Ú™¢ãähv|j>¶Å¯¨¿å²âñ
+ù”šxRQ$€‹ËyÈ¶íôašXMÔR°+¨$/ä‚YºÀC0Wf²L˜´b6RØ‹Ói)ŞòèKúDSfüg?ì² &ÏôçZ0õwÒ¹•é¬dŒYÖµü|J77açæY²ç:—ò=¦ÇÏL(¬º•ÁL]rô"J——Béyäœ‘‰1Ûª31*K5³,Òâ ì¾ÉÖ]X)òO×-…œsBF’‡†7'bìOÊÅ<‚ÕÛl€ËG}Î‰<ãU5oÊrµ«vFÉ&§}œöá?ö°HG9ùTGJdUxS
+¿\&ÊT'G–Îxr$‡‰Åáã ŒÉ¨›×.3)hJ9Ofaq‰'gàà£”}9ëf‹3Z´ct¿üKÜÀ”–•=µõ=a¯[’ØÄŸóÄÈßäıóÍ>#½¥7åŞS^À%=ÊàA-uŠàRĞë2İèuóc¾™ùÇá–MÚ`&Ÿññ«RDqÌ&DÈS˜ó|C‰Ú [›™òË$Ğâ×´Å1I0wH¼9ß493Æy_;1ª&ÙÚ…Ç…DòÄÉ§<+(Ëşã»?¥Ërü¹ĞÚÌ‹Éãı9x¨®°åh´õÔ¦¹°r‚ó™kJ'œ¯P2 RË*A¥î~ Ù4«ª¬Ú9HÆOÏ?b¡gŠ¤ª6e˜«L¹ëƒÔy7ÅÅQUğS­ß„W >>¾Æ#±£RQâ¬ˆÄÁxÒi¦"o3 '+%ßƒ©–šıHªD6WP²OŞÉİ$:›&İ‡ùOÃú‚SZìd•M(›ÔÆè’IR!×zâÈÌµ,†¯ rÃ°Å{p9ñ+ª±“|kæ]Xã]Xãû	k|løx·ueG›QÌ:=Å[(†Ï—¾ÏäâÖŞ‹ÑıèĞ/‡O‚#É££/áïÃ uG\ÆÉ¥Ær‰„W«6ÿQÑ»£G£ßŸÁ8OÉûGI¡Ç‚ƒJâãÿÃè^ßÁoæ¾½‹ÜŞ@æSƒ	Š=Øz$°ïş‚*Å«xŞEUÎUY<kT%7qtqrÚèÅbä|‹Âäˆ…/ñş[qyA˜o¦‰FwÜ
+¾—øÖ£ÏaI~ÁóIùÔÏ‡}>7/ÑêÖŞèédø—ÑWÃÇXó±¸`ô0Lãz…÷©.¶^¾Â'&á =:)+FRí?ìŞ^N\æÙæ/İp=;˜T n•o Z×>À’¦íh{»âÊI,ò;¬Ë¯æá’/80¼HL0¥œàòj¹!©È®Q6©æÅ¥j†Óü¦˜é”‹nz^ªÎ‰“‹·¸çFœTñ&GÜû2äùCV‹ıÈ&Îd‚¢£zE®Ê Kù-áM]@dş?T¨•}r*—<1RqŒ°¿?ü¯éaLÀ¬^ ³	a,)ÖqÍË@Çn×»×ç»¹ˆ¨ÑPDËäzœ¬Á"P’Ğ¸Kfª‚Š	³Ó˜,åry|õÀ_@ş	ïÎ—#«²Ç„Gx¼àëá<?4:™ã‚¢j›%hŞµ]¦¶S”TUK2yéÅ¹~í»`‡æ†ëù^Jë)¸`…üØ¿Š¸q öB_©ÆìQt¹Z-âPs:{¬ÜˆR_v‡
+ø$PÁc…ı$¡‘ÿşì¿EäiF8©x™Zä„§ŠO‘¸A}<GSMk{ôiÜ:Å’¥)&çÂga×¥^'uÍäÄdcåÜ­”‘&&1J‡G"Æ"Nßİ¬×-IÌß»øaD¯•J—ÔXµèçÜGï¿÷;tl×Ï:à½b½÷ÿ   ÿÿ Øı8

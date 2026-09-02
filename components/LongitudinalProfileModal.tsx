@@ -17,6 +17,7 @@ interface LongitudinalProfileModalProps {
   points: GeoPoint[];
   selectedPipe?: GeoPoint | null;
   hydraulicMap?: Map<string | number, PipeHydraulicData> | null;
+  isOpen?: boolean;
   onClose: () => void;
   onFocusPoint?: (pt: { lat: number; lng: number }) => void;
 }
@@ -44,9 +45,12 @@ export const LongitudinalProfileModal: React.FC<LongitudinalProfileModalProps> =
   points,
   selectedPipe,
   hydraulicMap,
+  isOpen = true,
   onClose,
   onFocusPoint
 }) => {
+  if (isOpen === false) return null;
+
   const linePipes = useMemo(() => {
     return points.filter(p => p.type === 'LineString' && p.path && p.path.length >= 2);
   }, [points]);
