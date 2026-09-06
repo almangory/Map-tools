@@ -8652,19 +8652,485 @@ const App: React.FC = () => {
                   const exists = selectedProfilePoints.some((s) => s.id === pt.id);
                   let updated: GeoPoint[];
                   if (exists) {
-xœì=]sÜÆ‘ïşÆg.sÄ~‘”dšdŠ¢$[Qd‰<ç®X,kv1»‹  –ËÃÛ’¬ğòro÷v)Ÿ$FR¢(’­<Ş¯Ø}Í/¹î ‹,–¤;%TY\fzzzzúkzÆ„dŸ£SŸéd•xÌdMø¹íÚ-ÃdÛ¶aù^~úÌ-•¼9²ºF¼²¡“Ÿ¬®Ç‡_s½—xL˜é1r$ùïm¯\.K{œØûRÀ’2ù;2 ¥ #)†F‹„ßË&³Ú~‡¬Âªs
-¤¡“v³çA¼dõLsú¡§¡ìU÷å°2e9ĞÓ°_
-SI­= ¹¤E%úOÂ:N¾¶bWâoÉzR†Y=’'[vìæ2ıºÉ¨oØVĞ•´8ÙÒğ¼»é³.tD›¾qÀnF%)ì:vŸó¶,s h%Ş“umk×n·M¶“nS”ÛlÃdÔ]ïé`ßŒ~ßa^ÏLû¿aÚık†äÑ	”Er¬Ò­R9[ğiİ¢æÀ3€Lñ·41€M[g«G†wÍ¥}Ãjã+ùío‰ ñ.mğ59ëù.c¾æ˜Ô²˜;+©áØæ m[ZÓ¶`.ı R)Ç1ŸüàÂ_x‡Á7˜{jÎÎ¥q½eX,†^8ÿP¾k:Tà&ZlY›Ô€ÿœ$Të}
-ØMô2ƒVÌËTm6lÓvã6l«e´ËM,W5ú¥¡ûI£>–«İ¦]&icA±ªÉ-:`2äL,O3Úº®‡D`‡«G(2PÁ¤eÊê,@(Ø8áô1÷ h†`	Öâ“‘iåYÔÙf®Ã,İhöLêîÚ;œ»¸BkQm2P©†¥Öó|"8’Ø.q‡a/Ä°H“TèùK=Rj›vƒš‘Zã<¬‹>á}Œ şk!5¼¹L÷0*è4Ïkê3™~onà‡dW‰O²^ƒ
-û•ê'Ç)ûÕ±!ÀFçÔ^w]:(ÿ[rÊ°¤:søAüõìÚ*©KbÔkÿJÌ(Œ¸“p[ÌAbC3Ÿ"Ò<¹T­JúB–ë|˜sĞ%ğæ æàm$zŠ³€šÌ:!uåŠ÷Vf£Ö±ü4ŸÜ,@QìS¿çm2Ï£mV’Ú0ım1MÔ•Ö äçäîğtô€î¿¾}1|<üF¼¾==şitBJVÿïÏsJî~G†/Â…Ê/‡o+üå£‡Ã'Ğà	)½ Jä°Ì‡›ú1@~2üfôhtŸ$Zê†çS«É6Õ+ûöãé¥ÚÜ1=øÉ]Å–Éİä$á’'¾=^©Óã§‘[œu—‹"Ø•¢'³®rí9	¿8.;ÀeˆksKùœfÛ™»Éµçlëß,İNÈw©tÏG ÿ–=ÊJÕy¢ÕæRHd:9mx„–0d¢ÑşÊXT8fX'Õ›Rõ^š#MÅ’Oò8mslÍ{ ~Ã¶]İ°@˜å[?©‘ é.uÛ –	ú)éÁb@:¾ÔÄ—Ú7_&8.ºİÇµ2¿Ù¹~ÀĞ[b}²Ñó|»+Şg»ÔÑx—š ™>;/]:ó©a.“#âó—U#ÁĞdSšc2“ $wì&0ú–kÀ¨n3¿o»÷ví>uuo«çS˜!æTIA…°“ïj+^!ì.]nw‡uÁë‘6•|’ú[)DEkÉ§"ÔÚÏÅšyy4KTÌ0¶p6ì®c2ÎÖhˆ)¹ú,î„M…,İ/“l`&‹Œ­´¢¦½tÖ_Ù²û¥¹ã»ó’ºhlCí÷úÖüìèÁğêéYXæ³A‡³Ç ¢¼^huı+©É;@Ól™[¬²¯Ü©X&Ûë·®ïî^ß“‚ş—ğsPµ!¥K0N)‹Š—Ì‡4•(mF7Ö]FÅüK;¿j÷,ºƒ ·ÒŸ•Ù°õgØ¤Ò¡ Í^u¿|8Oã·Á<AC8Fúù8)CÂÍş´ÅŸYDùR%P/1_SªUâÂ§²6ş½2_ˆ@ f¼)2Ğ*g£DÇã.g»ÀB§0¸°êğ%uQ´ØSèß"18ux+ÅEÇ©?Á(P@ òÉÄ m‰üYm.q|O»/¬Ÿ÷N|/—œ<úkŒ_*?#›v:%7LÆ’äjÏ÷A@a|‡ù=—ÿÚµmÓ#ÛÔb&ùY%mE7HÓ¤ÇC3f{¹cè:³mx¶Ù—·a¼®v‰˜¬åkµJh¾K-Ïù¦ò‚ßh{µjµº/ü&æjO£=ßY‹d¥Á±K’™TuÈ@1¦OÖ/Í:ˆu:|ÇÙ9Ô–ˆ3ĞH£­íı´Ú¨ëú>ËÔ×h]7ƒ«ZõğGPì¢¨`ºÖŠÃr±|­aÒæ=ÑôĞ#^‡‚É£Õá«É‰aAM8ƒ¤–N=,{Mj2íÃ%ÂIc ci°>fâH¯%G°²c€‹÷‰í¿¾©T_[$mq&!
-x3ĞXÖZVi®8vÃ§àwG÷hørÜ½GàÔü/F'ÜÇƒ"®e®òa'eöx¥ÂûJÌ_EL`\>U€‡€)c\‰Èæ#;z\Z¡âM;³œõ²:wL‚:]Ä°€´*òXóL2Ÿ¥Ê•*iÀ_|y(é¹ZW—LÓ¯À:5ZƒğÕºzİeG«Õg²½g9q'=”@vgíQİpW³Óâú&'°é»³é6k*ª¤(“àsÁÒIÎ®,V#æŞ«»¬»ƒJxI_ğ}—j}íPüèh{W–:û‚øXóf¸öªŸÕ«ÎágKøÛnĞR½^¯]¾<©:_-×–æö	ŠWkBÌHÇ2¦3ã„fà”ÛFeh›Kå’„Àr‚ED‹KV|’¯„di„?úàÊR£4À,e  ½kX÷€ó"†«WgTÈ°‹Œ…\NÈoõ¤@¸áR\¬e…ƒ§Iu°Z'Ñ—Y‘È‰7#>_ß‚àyÌÿ;2çtøˆ¡“Ñ¡Ì9}ví	ü
-¥Îºãp°ä²í²èfpØ=>zÌâ ‹œÃ„üGQ!Æb›2óR+/‘.šòÒÄ	otĞ%1C £Ãÿn–@•`?ı~øh÷-É’‘Àë}Üû_”è£ÿ$£ÏG'¼"x§Ã×Pù9¸ù6è§ßvi›Í	·bLk‚jºËê˜âÑ.vIÃµûP'ÕZ¦#ª8kÚã<„FšFv'g­V…I«U“Ö ,úÉ¢"x¯ÊRUlF.C{°2µ¥jÄFPÆëaébµš6ÖVş=‰rÒòDå'Ğô3’ßn¾¿L›^.	mP#MîÑ¼¦k›fƒº	Ñ3Oh«VËdû—ë¡É*–¿ØHX¥ñ‘â&_Û¥:Æ4ßÖ\Òr¹`Ù×–ÈA5Úm€äÇ©€Y†Jã¯9œv´ò¤ºt¡ê?³=YxOTi=SL)ÍA%ß®arÏ×[ê²kã¯Œ€0ÀØ*ãcâš	µkAÌ¹.u}§c[L²R£¦–ÑEï¤X7YQ<YÔ¨)5@g!«q=¹Æ%=Çan<m”<¦©õÑwªâÓáQïrİ©`®9	ELJãõ'”ÁMË÷ÃŒ­K¤Üãzx¡ø¨òµ±‘—«S)ÚàÉiÒà7´Â½¬¿†~ĞK®&_ÁO	TAé5ßŸâ___Â—·¸kîÒè!«Ğ™ü#dˆ­İeD!.ä–í’_÷@»Õâq|—Q}@)=/cı«‰X@mZwEëÉœsÅ“Ò¶ò¬¨ì“£•e¢9 ‚É|·WÀq±yHÆĞ¤sÜFŒÄŸ`iğÃ.×.×Á/ô¾k´;¾®ÕjUYP!&J…ZI™cÑ8Ñb|2yéüÏèa‚ÃoÛı"ü:É4×+fäM°jerFÒ3¼…k"ØxVËa²&ï,ª%4úq3•„Fãüşğo(ƒ–ú·£¯†/ƒíyø÷Ÿì`¹8^œÖi»†Nğôå/ÑÔ¿Ö‹[ È‘k6’ÃWIÜPHØ…ïÂZ;LÊ)òX×Ài’Í@@}N{‹=ê? `Ô‰8m
-GJ">Ş˜7fD$³-%Rm
-;‚ä9@8†:áò5­
-µz ÔÒ’)ÎâI'e¤I9£‡3@Í™˜Ò¿”p‚„·0w¼ÜşQQI2Í¸™õ]Œ ^À¸¯[mÓğ:Ó»°…Z¼â?ÉŠ~B4È^zÁÍ¸oB›ï1Øo§<ÔıftÂù5Ö¢=Ó'›Ô!˜i8õ{cS°ê5{À€"¥ï*¨‰Læhş,nC±É?+±²H¤(ó®õÀ	Hƒ¨ª'É¡$R¨híÄ¼”˜T‹¯²ñª²{>7‹-îÂõ\Ïvµ`Ç¨€­ÃŸ©äƒíğĞ‚ şŒ¡iâúS†Òã‘Œ°úJEÀ9G×®Mõ.uŠu|GT¾€n;°Fõb½~Âë^@§0™.5¬b½îŠÊÓvË•¯À“„d ÖËäcfëÌ7š`³Œng˜Emÿ8VI„ôÕè!¼Ş4øËÃoÑtsNŸóªä"Ü¯ Mè¾3nãÈœCæÌÃ$•¸%Á~oJÑ³{n“]ßŞùø¼q'‚”R‡?=ìÆîÕ1jö]hÅ£­ÍÍ­ÛŸ!™Ê gJ%æxmNByº¹ú	%ÿ=6X=B(å&,ğãpbc%EtÁ”ó±Äº(‰~„%{ĞbÂ@Î öæ
-3Õ…k+^ñŸCXöx âèK4Ö_àY0â±y‹Ë$øK0™—ğ#Nâ‡gx¦ó´ËéM#âğÁdB0QX]ÏáÓ5¬Õ£Ú4Â‹·¢‡«GW¦m,Úè ]t¶lZ@2É¼‘ZºİÃ]¹´ JRã“Ø	ªW‰0oB+çlN>·ŒÄ“Ïÿ±ğo€V_[„Å !õ”,~¡Ñ€²Êäƒ)?‡ÉëøãL=?£qÏ/¶”Ó•ØÈ—[ÂÃW`9½åvğSi>†H·{æñISäpbäğm¢ƒ«¨T+¾5sÆ™xG™=.Ş‘	N† ~|Êe&ø°ÅÚÚImÆÄ¶bÂ‹š<ï"‘q‘r„’[1I‚XHçi¨“‡&	—BëôíSŸm4ûŠ¼¢‚[ÙÊT¢¯Ç¬ûÏæI88Æ²ë¦<	TÖc@f®€É.Ù|•Eµ€ˆåëåféÅ’Š-½ód&Ifs=oß1‹Qº+™Ÿ´ËvÉAuGHÙàW,—-Tàœ·Cp¿‹ŸÈİ‚<sZ”ôCºfiü‚j-°è¡›Çç4¥Úxæsü˜F&ñyå–üÏ3U:”G:ˆÈ°÷ÂPrpKxşšTÎ‰sãË©ƒé)h†·å°àæˆ82©j©ÓsÇÈx»’¤g’H×©ëwğø—‚LÑ÷«ö¯ôIb\ˆBÉ&SÓh$AGAşíó£ë6~ ã[ˆ:ãêSSf+HRT'ü¼ct{&ıá(v!%Z SRhÅr-ƒÌN!ºR‚
-Û}š¡U|ñ´›¼^²,	úŠIĞÑVvù‰ª®ã¯%ßSÇ×ük©Ú™¢ãähv|j>¶Å¯¨¿å²âñ
-ù”šxRQ$€‹ËyÈ¶íôašXMÔR°+¨$/ä‚YºÀC0Wf²L˜´b6RØ‹Ói)ŞòèKúDSfüg?ì² &ÏôçZ0õwÒ¹•é¬dŒYÖµü|J77açæY²ç:—ò=¦ÇÏL(¬º•ÁL]rô"J——Béyäœ‘‰1Ûª31*K5³,Òâ ì¾ÉÖ]X)òO×-…œsBF’‡†7'bìOÊÅ<‚ÕÛl€ËG}Î‰<ãU5oÊrµ«vFÉ&§}œöá?ö°HG9ùTGJdUxS
-¿\&ÊT'G–Îxr$‡‰Åáã ŒÉ¨›×.3)hJ9Ofaq‰'gàà£”}9ëf‹3Z´ct¿üKÜÀ”–•=µõ=a¯[’ØÄŸóÄÈßäıóÍ>#½¥7åŞS^À%=ÊàA-uŠàRĞë2İèuóc¾™ùÇá–MÚ`&Ÿññ«RDqÌ&DÈS˜ó|C‰Ú [›™òË$Ğâ×´Å1I0wH¼9ß493Æy_;1ª&ÙÚ…Ç…DòÄÉ§<+(Ëşã»?¥Ërü¹ĞÚÌ‹Éãı9x¨®°åh´õÔ¦¹°r‚ó™kJ'œ¯P2 RË*A¥î~ Ù4«ª¬Ú9HÆOÏ?b¡gŠ¤ª6e˜«L¹ëƒÔy7ÅÅQUğS­ß„W >>¾Æ#±£RQâ¬ˆÄÁxÒi¦"o3 '+%ßƒ©–šıHªD6WP²OŞÉİ$:›&İ‡ùOÃú‚SZìd•M(›ÔÆè’IR!×zâÈÌµ,†¯ rÃ°Å{p9ñ+ª±“|kæ]Xã]Xãû	k|løx·ueG›QÌ:=Å[(†Ï—¾ÏäâÖŞ‹ÑıèĞ/‡O‚#É££/áïÃ uG\ÆÉ¥Ær‰„W«6ÿQÑ»£G£ßŸÁ8OÉûGI¡Ç‚ƒJâãÿÃè^ßÁoæ¾½‹ÜŞ@æSƒ	Š=Øz$°ïş‚*Å«xŞEUÎUY<kT%7qtqrÚèÅbä|‹Âäˆ…/ñş[qyA˜o¦‰FwÜ
-¾—øÖ£ÏaI~ÁóIùÔÏ‡}>7/ÑêÖŞèédø—ÑWÃÇXó±¸`ô0Lãz…÷©.¶^¾Â'&á =:)+FRí?ìŞ^N\æÙæ/İp=;˜T n•o Z×>À’¦íh{»âÊI,ò;¬Ë¯æá’/80¼HL0¥œàòj¹!©È®Q6©æÅ¥j†Óü¦˜é”‹nz^ªÎ‰“‹·¸çFœTñ&GÜû2äùCV‹ıÈ&Îd‚¢£zE®Ê Kù-áM]@dş?T¨•}r*—<1RqŒ°¿?ü¯éaLÀ¬^ ³	a,)ÖqÍË@Çn×»×ç»¹ˆ¨ÑPDËäzœ¬Á"P’Ğ¸Kfª‚Š	³Ó˜,åry|õÀ_@ş	ïÎ—#«²Ç„Gx¼àëá<?4:™ã‚¢j›%hŞµ]¦¶S”TUK2yéÅ¹~í»`‡æ†ëù^Jë)¸`…üØ¿Š¸q öB_©ÆìQt¹Z-âPs:{¬ÜˆR_v‡
-ø$PÁc…ı$¡‘ÿşì¿EäiF8©x™Zä„§ŠO‘¸A}<GSMk{ôiÜ:Å’¥)&çÂga×¥^'uÍäÄdcåÜ­”‘&&1J‡G"Æ"Nßİ¬×-IÌß»øaD¯•J—ÔXµèçÜGï¿÷;tl×Ï:à½b½÷ÿ   ÿÿ Øı8
+                    updated = selectedProfilePoints.filter((s) => s.id !== pt.id);
+                  } else {
+                    updated = [...selectedProfilePoints, pt];
+                  }
+                  setSelectedProfilePoints(updated);
+                  if (updated.length === 0) {
+                    setFocusedPoint(null);
+                  } else {
+                    setFocusedPoint(updated[0]);
+                  }
+                } else {
+                  setFocusedPoint(pt);
+                  setSelectedProfilePoints([pt]);
+                }
+              } else {
+                setFocusedPoint(pt);
+              }
+            }}
+            focusedPoint={focusedPoint}
+            selectedProfilePoints={selectedProfilePoints}
+            hoveredElevationPoint={hoveredElevationPoint}
+            issueItems={activeIssueItems}
+            showIssuesOnly={showIssuesOnly}
+            onToggleShowIssuesOnly={setShowIssuesOnly}
+            onClearAudit={clearAuditResults}
+            showFlowDirection={showFlowDirection}
+            onToggleFlowDirection={setShowFlowDirection}
+            flowAnalysis={flowAnalysis}
+            isSelectionMode={isDrawingMode || activeTab === 'street-planner' || activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')}
+            isLineDrawingMode={activeTab === 'line-drawer' && isLineDrawingOnMainMap}
+            activeLineVertices={lineDrawerVertices}
+            activeLineColor={lineDrawerConfig.color}
+            activeLineWidth={lineDrawerConfig.width}
+            activeLineName={lineDrawerConfig.name}
+            activeLineLayer={lineDrawerConfig.layer}
+            onAddLineVertex={(pt) => {
+              if (lineDrawerConfig.lineType === 'service-connection' && lineDrawerConfig.snapPerpendicularToStreet !== false) {
+                // Find nearest street or pipeline in candidate polylines (globalPoints, plannedStreets, lineDrawerDrawnLines)
+                const candidateLines = [...(globalPoints || []), ...(plannedStreets || []), ...(lineDrawerDrawnLines || [])]
+                  .filter(p => p.type === 'LineString' && Array.isArray(p.path) && p.path.length >= 2);
+                
+                const projection = findNearestPerpendicularPoint(pt, candidateLines, 600);
+                if (projection) {
+                  // Property point -> Perpendicular point on street centerline
+                  setLineDrawerVertices([pt, projection.projectedPoint]);
+                  setStatusMessage(
+                    lang === 'ar'
+                      ? `ØªÙ… Ø§Ù„Ø¥Ø³Ù‚Ø§Ø· Ø§Ù„Ø¹Ù…ÙˆØ¯ÙŠ (90Â°) Ø¹Ù„Ù‰ Ø®Ø· Ø§Ù„Ø´Ø§Ø±Ø¹/Ø§Ù„Ø£Ù†Ø¨ÙˆØ¨ (${projection.streetName || projection.streetId}) Ø¨Ø·ÙˆÙ„ ${projection.distanceMeters.toFixed(1)} Ù…!`
+                      : `Perpendicular snap to pipeline (${projection.streetName || projection.streetId}) - Length: ${projection.distanceMeters.toFixed(1)}m!`
+                  );
+                } else {
+                  setLineDrawerVertices(prev => [...prev, pt]);
+                }
+              } else {
+                setLineDrawerVertices(prev => [...prev, pt]);
+              }
+            }}
+            onUndoLineVertex={() => {
+              setLineDrawerVertices(prev => prev.slice(0, -1));
+            }}
+            onFinishLine={handleFinishLineDrawerLine}
+            onCancelLineDraw={() => {
+              setIsLineDrawingOnMainMap(false);
+              setLineDrawerVertices([]);
+            }}
+            isPickingCoordinate={activeTab === 'line-drawer' ? lineDrawerPickingTarget : null}
+            onPickMapCoordinate={(coord) => {
+              if (lineDrawerPickingTarget) {
+                window.dispatchEvent(new CustomEvent('map-coord-picked', {
+                  detail: { target: lineDrawerPickingTarget, coord }
+                }));
+                setLineDrawerPickingTarget(null);
+              }
+            }}
+            onOrientNetworkTowardsOutfall={handleOrientNetworkTowardsOutfall}
+            outfallTargets={outfallTargets}
+            onAddOutfallTarget={handleAddOutfallTarget}
+            onRemoveOutfallTarget={handleRemoveOutfallTarget}
+            onClearOutfallTargets={handleClearOutfallTargets}
+            onOrientNetworkTowardsMultiOutfalls={handleOrientNetworkTowardsMultiOutfalls}
+            onPolygonComplete={(poly) => {
+              if (activeTab === 'splitter' && splitMode === 'spatial') {
+                const newPoly: SplitPolygon = {
+                  id: `poly-${Date.now()}`,
+                  name: `${lang === 'ar' ? 'Ù…Ø¶Ù„Ø¹' : 'Polygon'} ${splitPolygons.length + 1}`,
+                  path: poly,
+                  color: PALETTE[splitPolygons.length % PALETTE.length]
+                };
+                setSplitPolygons([...splitPolygons, newPoly]);
+              } else {
+                setSelectedArea(poly);
+                setBoundaryPolygon({ id: 'Selected_Area', x: poly[0].x, y: poly[0].y, type: 'Polygon', path: poly, color: '#ffffff' });
+              }
+              setIsDrawingMode(false);
+            }}
+         />
+         <ElevationProfileModal
+           lang={lang}
+           focusedPoint={focusedPoint}
+           selectedProfilePoints={selectedProfilePoints}
+           allDatasetPoints={displayPoints}
+           onClose={() => {
+             setFocusedPoint(null);
+             setSelectedProfilePoints([]);
+           }}
+           onHoverPoint={setHoveredElevationPoint}
+           onSelectPointsChange={(pts) => {
+             setSelectedProfilePoints(pts);
+             if (pts.length === 0) setFocusedPoint(null);
+           }}
+         />
+
+         {/* Mobile Floating Button to Return to Tools Panel */}
+         <div className="lg:hidden absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] pointer-events-auto">
+           <button
+             onClick={() => setMobileView('panel')}
+             className="px-5 py-3 bg-[#0b2d3d] text-accent border-2 border-accent rounded-full font-black text-xs shadow-2xl flex items-center gap-2 active:scale-95 transition-all"
+           >
+             <SlidersHorizontal className="w-4 h-4" />
+             <span>{lang === 'ar' ? 'Ø§Ù„Ø¹ÙˆØ¯Ø© Ø¨Ù„ÙˆØ­Ø© Ø§Ù„Ø£Ø¯ÙˆØ§Øª ÙˆØ§Ù„Ø®ÙŠØ§Ø±Ø§Øª' : 'Back to Tools Panel'}</span>
+           </button>
+         </div>
+
+
+         {showSettingsModal && (
+              <div 
+                className="fixed inset-0 z-[2000] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-12" 
+                onClick={() => setShowSettingsModal(false)}
+                dir={lang === 'ar' ? 'rtl' : 'ltr'}
+              >
+                  <div 
+                    className="bg-[#0b2d3d] border border-accent/40 rounded-[2rem] sm:rounded-[3rem] w-full max-w-xl max-h-[85vh] flex flex-col shadow-[0_20px_50px_rgba(220,177,60,0.15)] overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                      <div className="p-6 sm:p-8 border-b border-white/5 flex items-center justify-between shrink-0 bg-black/20">
+                          <div className="flex items-center gap-3">
+                              <Settings2 className="w-6 h-6 text-accent" />
+                              <div>
+                                 <h2 className="text-xl font-black text-white">{lang === 'ar' ? 'Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ ÙˆØ§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª' : 'App Settings & Preferences'}</h2>
+                                 <p className="text-[10px] text-accent/80 font-bold flex items-center gap-1.5 mt-0.5">
+                                   <Check className="w-3.5 h-3.5 text-accent" />
+                                   <span>{lang === 'ar' ? 'ØªÙØ­ÙØ¸ Ø§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ÙÙŠ Ø§Ù„Ù…ØªØµÙØ­ (localStorage)' : 'Preferences automatically saved in browser (localStorage)'}</span>
+                                 </p>
+                               </div>
+                          </div>
+                          <button onClick={() => setShowSettingsModal(false)} className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-red-500/20 hover:text-red-400 transition-all"><X className="w-5 h-5" /></button>
+                      </div>
+                      
+                      <div className="p-6 sm:p-8 overflow-y-auto space-y-6 flex-1 custom-scrollbar text-white">
+                          {/* 0. PWA Mobile App Section */}
+                          <div className="space-y-3 bg-gradient-to-r from-accent/15 via-amber-500/10 to-accent/15 p-5 rounded-2xl border border-accent/30 shadow-lg">
+                              <div className="flex items-center justify-between gap-3">
+                                 <div className="flex items-center gap-3 text-accent min-w-0">
+                                    <div className="w-10 h-10 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center shrink-0">
+                                       <Smartphone className="w-5 h-5 text-accent animate-bounce" />
+                                    </div>
+                                    <div className="min-w-0">
+                                       <h3 className="text-xs font-black text-white uppercase tracking-wider">{lang === 'ar' ? 'ØªØ«Ø¨ÙŠØª ØªØ·Ø¨ÙŠÙ‚ Ø§Ù„Ø¬ÙˆØ§Ù„ (Mobile App)' : 'Install Mobile Application'}</h3>
+                                       <p className="text-[10px] text-white/70 mt-0.5">
+                                          {lang === 'ar' ? 'ØªØ«Ø¨ÙŠØª Ø§Ù„ØªØ·Ø¨ÙŠÙ‚ Ø¹Ù„Ù‰ Ø§Ù„Ø´Ø§Ø´Ø© Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠØ© Ù„Ù„ÙˆØµÙˆÙ„ Ø§Ù„Ø³Ø±ÙŠØ¹ Ø¨Ø¯ÙˆÙ† Ù…ØªØµÙØ­' : 'Install the app on home screen for quick offline-ready access'}
+                                       </p>
+                                    </div>
+                                 </div>
+                                 <button
+                                    onClick={() => {
+                                      setShowSettingsModal(false);
+                                      setShowInstallModal(true);
+                                    }}
+                                    className="px-3.5 py-1.5 bg-accent text-[#071720] hover:brightness-110 font-black text-xs rounded-xl shadow transition-all shrink-0"
+                                 >
+                                    {lang === 'ar' ? 'ØªØ«Ø¨ÙŠØª Ø§Ù„Ø¢Ù†' : 'Install Now'}
+                                 </button>
+                              </div>
+                          </div>
+
+                          {/* 1. Language & Display */}
+                          <div className="space-y-3">
+                              <h4 className="text-xs font-bold text-accent uppercase tracking-wider">{lang === 'ar' ? 'Ø§Ù„Ù„ØºØ© ÙˆØ§Ù„Ù…Ø¸Ù‡Ø± Ø§Ù„Ø¹Ø§Ù…' : 'Language & Display'}</h4>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div className="bg-black/30 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
+                                      <span className="text-xs font-semibold">{lang === 'ar' ? 'Ù„ØºØ© Ø§Ù„ÙˆØ§Ø¬Ù‡Ø©' : 'Interface Language'}</span>
+                                      <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
+                                          <button onClick={() => setLang('ar')} className={cn("px-2.5 py-1 text-xs rounded font-bold transition-all", lang === 'ar' ? "bg-accent text-[#071720]" : "text-white/60 hover:text-white")}>Ø¹Ø±Ø¨ÙŠ</button>
+                                          <button onClick={() => setLang('en')} className={cn("px-2.5 py-1 text-xs rounded font-bold transition-all", lang === 'en' ? "bg-accent text-[#071720]" : "text-white/60 hover:text-white")}>English</button>
+                                      </div>
+                                  </div>
+                                  <div className="bg-black/30 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
+                                      <span className="text-xs font-semibold">{lang === 'ar' ? 'Ù†Ù…Ø· Ø§Ù„Ø®Ø±ÙŠØ·Ø© Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ' : 'Default Map Type'}</span>
+                                      <select
+                                          value={globalBaseMap}
+                                          onChange={(e) => setGlobalBaseMap(e.target.value as any)}
+                                          className="bg-white/10 border border-white/10 text-xs text-white rounded-lg px-2.5 py-1 font-bold outline-none cursor-pointer"
+                                      >
+                                          <option value="satellite" className="bg-[#0b2d3d] text-white">Satellite</option>
+                                          <option value="roadmap" className="bg-[#0b2d3d] text-white">Roadmap</option>
+                                          <option value="hybrid" className="bg-[#0b2d3d] text-white">Hybrid</option>
+                                          <option value="terrain" className="bg-[#0b2d3d] text-white">Terrain</option>
+                                      </select>
+                                  </div>
+                              </div>
+                          </div>
+
+                          {/* 2. Geodetic & Engineering Preferences */}
+                          <div className="space-y-3">
+                              <h4 className="text-xs font-bold text-accent uppercase tracking-wider">{lang === 'ar' ? 'Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„Ù‡Ù†Ø¯Ø³ÙŠØ© ÙˆÙ†Ø¸Ø§Ù… Ø§Ù„Ø¥Ø­Ø¯Ø§Ø«ÙŠØ§Øª' : 'Geodetic & Engineering Settings'}</h4>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div className="bg-black/30 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
+                                      <span className="text-xs font-semibold">{lang === 'ar' ? 'Ù†Ø¸Ø§Ù… Ø§Ù„Ø¥Ø­Ø¯Ø§Ø«ÙŠØ§Øª Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ' : 'Default Projection'}</span>
+                                      <select
+                                          value={sourceEPSG}
+                                          onChange={(e) => setSourceEPSG(e.target.value)}
+                                          className="bg-white/10 border border-white/10 text-xs text-white rounded-lg px-2.5 py-1 font-bold outline-none cursor-pointer max-w-[140px]"
+                                      >
+                                          {COMMON_EPSG.map((epsg) => (
+                                              <option key={epsg.code} value={epsg.code} className="bg-[#0b2d3d] text-white">
+                                                  {epsg.code} ({epsg.name})
+                                              </option>
+                                          ))}
+                                      </select>
+                                  </div>
+                                  <div className="bg-black/30 p-3.5 rounded-xl border border-white/5 flex items-center justify-between">
+                                      <span className="text-xs font-semibold">{lang === 'ar' ? 'Ø³Ù…Ø§ÙƒØ© Ø®Ø·ÙˆØ· KML' : 'KML Line Width'}</span>
+                                      <div className="flex items-center gap-2">
+                                          <input
+                                              type="range"
+                                              min={1}
+                                              max={8}
+                                              value={converterLineWidth}
+                                              onChange={(e) => setConverterLineWidth(Number(e.target.value))}
+                                              className="w-20 accent-accent cursor-pointer"
+                                          />
+                                          <span className="text-xs font-black text-accent w-4">{converterLineWidth}</span>
+                                      </div>
+                                  </div>
+                              </div>
+                          </div>
+
+                          {/* 3. Reset Preferences */}
+                          <div className="pt-2 border-t border-white/10 flex items-center justify-between">
+                              <span className="text-xs text-white/50">{lang === 'ar' ? 'Ø§Ø³ØªØ¹Ø§Ø¯Ø© Ø§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª Ø§Ù„Ø£ØµÙ„ÙŠØ©' : 'Reset preferences to default'}</span>
+                              <button
+                                  onClick={() => {
+                                      localStorage.clear();
+                                      window.location.reload();
+                                  }}
+                                  className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-bold text-xs rounded-xl border border-red-500/30 transition-all flex items-center gap-1.5"
+                              >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                  <span>{lang === 'ar' ? 'Ø¥Ø¹Ø§Ø¯Ø© Ø¶Ø¨Ø· Ø§Ù„ØªÙØ¶ÙŠÙ„Ø§Øª' : 'Reset All'}</span>
+                              </button>
+                          </div>
+                      </div>
+
+                      <div className="p-4 border-t border-white/10 bg-black/20 flex items-center justify-end shrink-0">
+                          <button
+                              onClick={() => setShowSettingsModal(false)}
+                              className="px-5 py-2.5 bg-accent text-[#071720] font-black text-xs rounded-xl hover:brightness-110 active:scale-95 transition-all shadow-lg"
+                          >
+                              {lang === 'ar' ? 'ØªÙ… ÙˆØ­ÙØ¸ Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª' : 'Save & Close'}
+                          </button>
+                      </div>
+                  </div>
+              </div>
+         )}
+
+         {/* Engineering Suite Modals */}
+         {showProfileModal && (
+           <LongitudinalProfileModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             isOpen={showProfileModal}
+             onClose={() => setShowProfileModal(false)}
+           />
+         )}
+         {showEarthworkModal && (
+           <EarthworkBoqModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             isOpen={showEarthworkModal}
+             onClose={() => setShowEarthworkModal(false)}
+           />
+         )}
+         {showClashModal && (
+           <ClashDetectionModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             isOpen={showClashModal}
+             onClose={() => setShowClashModal(false)}
+           />
+         )}
+         {showOverflowModal && (
+           <OverflowSimulationModal
+             lang={lang}
+             points={globalPoints.length > 0 ? globalPoints : plannedStreets}
+             isOpen={showOverflowModal}
+             onClose={() => setShowOverflowModal(false)}
+           />
+         )}
+
+         {/* PWA Mobile Installation Modal */}
+         <InstallPwaModal
+           isOpen={showInstallModal}
+           onClose={() => setShowInstallModal(false)}
+           lang={lang}
+           deferredPrompt={deferredPrompt}
+           setDeferredPrompt={setDeferredPrompt}
+           isStandalone={isStandalone}
+         />
+
+         {/* Audit / Validation Check Result Popup Modal */}
+         {checkResultModal && (
+           <div
+             className="fixed inset-0 z-[2500] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-8"
+             onClick={() => setCheckResultModal(null)}
+             dir={lang === 'ar' ? 'rtl' : 'ltr'}
+           >
+             <div
+               className="bg-[#0b2d3d] border border-accent/40 rounded-3xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+               onClick={(e) => e.stopPropagation()}
+             >
+               <div className="p-6 border-b border-white/10 flex items-center justify-between bg-black/20 shrink-0">
+                 <div className="flex items-center gap-3">
+                   <div className="w-10 h-10 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center text-accent">
+                     <ShieldCheck className="w-5 h-5" />
+                   </div>
+                   <div>
+                     <h2 className="text-lg font-black text-white">
+                       {lang === 'ar' ? checkResultModal.titleAr : checkResultModal.titleEn}
+                     </h2>
+                     <p className="text-xs text-accent font-bold mt-0.5">
+                       {lang === 'ar' ? checkResultModal.badgeTextAr : checkResultModal.badgeTextEn}
+                     </p>
+                   </div>
+                 </div>
+                 <button
+                   onClick={() => setCheckResultModal(null)}
+                   className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-red-500/20 hover:text-red-400 transition-all"
+                 >
+                   <X className="w-5 h-5" />
+                 </button>
+               </div>
+
+               <div className="p-6 overflow-y-auto space-y-5 flex-1 custom-scrollbar text-white">
+                 <p className="text-xs text-slate-300 leading-relaxed">
+                   {lang === 'ar' ? checkResultModal.detailsAr : checkResultModal.detailsEn}
+                 </p>
+
+                 {checkResultModal.stats && checkResultModal.stats.length > 0 && (
+                   <div className="grid grid-cols-2 gap-3">
+                     {checkResultModal.stats.map((stat, i) => (
+                       <div key={i} className="bg-black/30 p-3.5 rounded-xl border border-white/5">
+                         <div className="text-[11px] text-white/60 font-medium">
+                           {lang === 'ar' ? stat.labelAr : stat.labelEn}
+                         </div>
+                         <div className={cn("text-lg font-black mt-1", stat.colorClass || "text-white")}>
+                           {stat.value}
+                         </div>
+                       </div>
+                     ))}
+                   </div>
+                 )}
+               </div>
+
+               <div className="p-4 border-t border-white/10 bg-black/20 flex items-center justify-end gap-3 shrink-0">
+                 {checkResultModal.issueItems && checkResultModal.issueItems.length > 0 && (
+                   <button
+                     onClick={() => {
+                       if (checkResultModal.issueItems) {
+                         setActiveIssueItems(checkResultModal.issueItems);
+                         setShowIssuesOnly(true);
+                       }
+                       setCheckResultModal(null);
+                       setMobileView('map');
+                     }}
+                     className="px-4 py-2.5 bg-accent text-[#071720] font-black text-xs rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center gap-2"
+                   >
+                     <Eye className="w-4 h-4" />
+                     <span>{lang === 'ar' ? 'Ø¹Ø±Ø¶ Ø§Ù„Ø¹Ù†Ø§ØµØ± Ø¹Ù„Ù‰ Ø§Ù„Ø®Ø±ÙŠØ·Ø©' : 'Show Issues on Map'}</span>
+                   </button>
+                 )}
+                 <button
+                   onClick={() => setCheckResultModal(null)}
+                   className="px-4 py-2.5 bg-white/10 hover:bg-white/15 text-white font-bold text-xs rounded-xl transition-all"
+                 >
+                   {lang === 'ar' ? 'Ø¥ØºÙ„Ø§Ù‚' : 'Close'}
+                 </button>
+               </div>
+             </div>
+           </div>
+         )}
+
+         {/* Overlap / Duplicates Modal */}
+         {showOverlapModal && overlapResults && (
+           <div
+             className="fixed inset-0 z-[2500] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-8"
+             onClick={() => setShowOverlapModal(false)}
+             dir={lang === 'ar' ? 'rtl' : 'ltr'}
+           >
+             <div
+               className="bg-[#0b2d3d] border border-accent/40 rounded-3xl w-full max-w-xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden"
+               onClick={(e) => e.stopPropagation()}
+             >
+               <div className="p-6 border-b border-white/10 flex items-center justify-between bg-black/20 shrink-0">
+                 <div className="flex items-center gap-3">
+                   <div className="w-10 h-10 rounded-xl bg-accent/20 border border-accent/40 flex items-center justify-center text-accent">
+                     <GitCompare className="w-5 h-5" />
+                   </div>
+                   <div>
+                     <h2 className="text-lg font-black text-white">
+                       {lang === 'ar' ? 'Ù†ØªØ§Ø¦Ø¬ ÙØ­Øµ Ø§Ù„ØªØ¯Ø§Ø®Ù„ ÙˆØ§Ù„ØªØ·Ø§Ø¨Ù‚ Ø§Ù„Ù…ÙƒØ§Ù†ÙŠ' : 'Spatial Overlap & Duplicate Analysis'}
+                     </h2>
+                     <p className="text-xs text-accent font-bold mt-0.5">
+                       {lang === 'ar' ? `ÙˆÙØ¬Ø¯Øª ${overlapResults.length} Ø­Ø§Ù„Ø© ØªØ·Ø§Ø¨Ù‚ Ø£Ùˆ ØªÙ‚Ø§Ø·Ø¹` : `Found ${overlapResults.length} overlaps / duplicates`}
+                     </p>
+                   </div>
+                 </div>
+                 <button
+                   onClick={() => setShowOverlapModal(false)}
+                   className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center text-white/50 hover:bg-red-500/20 hover:text-red-400 transition-all"
+                 >
+                   <X className="w-5 h-5" />
+                 </button>
+               </div>
+
+               <div className="p-6 overflow-y-auto space-y-4 flex-1 custom-scrollbar text-white">
+                 <div className="bg-black/30 p-4 rounded-xl border border-white/5 text-xs text-slate-300 leading-relaxed">
+                   {lang === 'ar'
+                     ? 'ÙŠÙ…ÙƒÙ†Ùƒ Ù…Ø¹Ø§Ù„Ø¬Ø© Ø§Ù„Ø®Ø·ÙˆØ· Ø§Ù„Ù…ØªØ·Ø§Ø¨Ù‚Ø© (Ø®Ø· ÙÙˆÙ‚ Ø®Ø·) Ø¨Ø­Ø°Ù Ø§Ù„Ù…ÙƒØ±Ø± Ø£Ùˆ ØªÙ…ÙŠÙŠØ²Ù‡Ø§ Ø¨Ø§Ù„Ù„ÙˆÙ† Ø§Ù„Ø£Ø³ÙˆØ¯ Ù„ØªØ³Ù‡ÙŠÙ„ Ø§Ù„ÙØ­Øµ Ø§Ù„Ø¨ØµØ±ÙŠ.'
+                     : 'You can resolve duplicate overlapping lines by removing copies or coloring them in black for visual inspection.'}
+                 </div>
+
+                 <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                   {overlapResults.slice(0, 50).map((res, i) => (
+                     <div key={i} className="p-3 bg-white/5 rounded-xl border border-white/5 flex items-center justify-between text-xs">
+                       <div className="flex items-center gap-2">
+                         <span className="w-2 h-2 rounded-full bg-accent" />
+                         <span className="font-bold text-white">{res.line1.id}</span>
+                         <span className="text-white/40">â†”</span>
+                         <span className="font-bold text-white">{res.line2.id}</span>
+                       </div>
+                       <span className="text-accent font-semibold">{res.distanceMeters.toFixed(2)}m</span>
+                     </div>
+                   ))}
+                   {overlapResults.length > 50 && (
+                     <div className="text-center text-xs text-white/40 pt-2">
+                       {lang === 'ar' ? `... ÙˆØ§Ù„Ù…Ø²ÙŠØ¯ (${overlapResults.length - 50} Ø¹Ù†ØµØ± Ø¥Ø¶Ø§ÙÙŠ)` : `... and ${overlapResults.length - 50} more`}
+                     </div>
+                   )}
+                 </div>
+               </div>
+
+               <div className="p-4 border-t border-white/10 bg-black/20 flex flex-wrap items-center justify-end gap-2 shrink-0">
+                 <button
+                   onClick={handleColorDuplicatesBlack}
+                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl border border-white/10 transition-all flex items-center gap-1.5"
+                 >
+                   <span>{lang === 'ar' ? 'ØªÙ„ÙˆÙŠÙ† Ø§Ù„Ù…ÙƒØ±Ø± Ø¨Ø§Ù„Ø£Ø³ÙˆØ¯ â¬›' : 'Color Black â¬›'}</span>
+                 </button>
+                 <button
+                   onClick={handleRemoveDuplicates}
+                   className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5"
+                 >
+                   <Trash2 className="w-3.5 h-3.5" />
+                   <span>{lang === 'ar' ? 'Ø­Ø°Ù Ø§Ù„Ø®Ø·ÙˆØ· Ø§Ù„Ù…ÙƒØ±Ø±Ø©' : 'Remove Duplicates'}</span>
+                 </button>
+                 <button
+                   onClick={() => setShowOverlapModal(false)}
+                   className="px-4 py-2 bg-white/10 hover:bg-white/15 text-white font-bold text-xs rounded-xl transition-all"
+                 >
+                   {lang === 'ar' ? 'Ø¥ØºÙ„Ø§Ù‚' : 'Close'}
+                 </button>
+               </div>
+             </div>
+           </div>
+         )}
+      </main>
+      </div>
+    </div>
+  );
+}
+
+export default App;

@@ -47,7 +47,7 @@ interface MapViewerProps {
 
 export const MapViewer: React.FC<MapViewerProps> = ({
   lang,
-  points,
+  points = [],
   globalBaseMap,
   setGlobalBaseMap,
   focusedPoint,
@@ -688,3 +688,5 @@ export const MapViewer: React.FC<MapViewerProps> = ({
     </div>
   );
 };
+
+export default MapViewer;

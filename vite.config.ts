@@ -15,6 +15,9 @@ export default defineConfig(({ mode }) => {
         VitePWA({
           registerType: 'autoUpdate',
           injectRegister: 'auto',
+          devOptions: {
+            enabled: false,
+          },
           workbox: {
             maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
             globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
@@ -109,7 +112,7 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         },
-        dedupe: ['react', 'react-dom', 'react-dom/client']
+        dedupe: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', 'react/jsx-dev-runtime']
       },
       optimizeDeps: {
         include: [
