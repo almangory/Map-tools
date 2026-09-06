@@ -59,6 +59,7 @@ import { UserManualModal } from './components/UserManualModal';
 import { GeotaggedPhotoModal } from './components/GeotaggedPhotoModal';
 import { FieldInspectionSheetModal } from './components/FieldInspectionSheetModal';
 import { TopologyCleanerModal } from './components/TopologyCleanerModal';
+import { ExcelStreetDistrictEnricher } from './components/ExcelStreetDistrictEnricher';
 import { getSampleInfrastructureProject } from './services/sampleProjectService';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
@@ -4698,17 +4699,23 @@ const App: React.FC = () => {
                 }
             });
 
-            rowObj[lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)'] = lat;
-            rowObj[lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)'] = lon;
+            const latKey = lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)';
+            const lonKey = lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)';
+            const streetKey = lang === 'ar' ? 'الشارع' : 'Street';
+            const districtKey = lang === 'ar' ? 'الحي' : 'District';
+            const linkKey = lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link';
+
+            if (!originalHeaders.includes(latKey)) rowObj[latKey] = lat;
+            if (!originalHeaders.includes(lonKey)) rowObj[lonKey] = lon;
             
-            if (!streetMappingCol) {
-                rowObj[lang === 'ar' ? 'الشارع' : 'Street'] = street;
+            if (!streetMappingCol && !originalHeaders.includes(streetKey)) {
+                rowObj[streetKey] = street;
             }
-            if (!districtMappingCol) {
-                rowObj[lang === 'ar' ? 'الحي' : 'District'] = district;
+            if (!districtMappingCol && !originalHeaders.includes(districtKey)) {
+                rowObj[districtKey] = district;
             }
             
-            rowObj[lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'] = link;
+            if (!originalHeaders.includes(linkKey)) rowObj[linkKey] = link;
 
             return rowObj;
         });
@@ -6499,50 +6506,27 @@ const App: React.FC = () => {
                                     </div>
                                 )}
 
-                                {/* Street/District Mapping Options */}
-                                {activeFile.headers && activeFile.headers.length > 0 && (
-                                    <div className="bg-[#0b2d3d]/40 p-6 rounded-[2.5rem] border border-white/5 space-y-4 animate-in slide-in-from-bottom">
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <MapPin className="w-4 h-4 text-accent" />
-                                            <h3 className="text-white font-black text-sm">{lang === 'ar' ? 'ربط بيانات العنوان (اختياري)' : 'Address Data Mapping (Optional)'}</h3>
-                                        </div>
-                                        <p className="text-[9px] text-white/40 leading-relaxed font-bold">
-                                            {lang === 'ar' ? 'يمكنك ربط الشارع والحي المستخرجين من الإحداثيات بأعمدة موجودة مسبقاً لاستبدال محتواها، أو اتركها فارغة لإنشاء أعمدة جديدة.' : 'You can map the extracted Street and District to existing columns to replace their content, or leave empty to create new columns.'}
-                                        </p>
-                                        
-                                        <div className="flex gap-4">
-                                            <div className="flex-1 space-y-2">
-                                                <label className="text-[10px] font-bold text-white/60">
-                                                    {lang === 'ar' ? 'الشارع' : 'Street'}
-                                                </label>
-                                                <select
-                                                    value={streetMappingCol}
-                                                    onChange={(e) => setStreetMappingCol(e.target.value)}
-                                                    className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2.5 text-[11px] font-bold text-white outline-none"
-                                                >
-                                                    <option value="">{lang === 'ar' ? '-- بدون ربط (عمود جديد) --' : '-- No mapping (New Column) --'}</option>
-                                                    {activeFile.headers.map((h, hIdx) => (
-                                                        <option key={`street-h-${h}-${hIdx}`} value={h}>{h}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                            <div className="flex-1 space-y-2">
-                                                <label className="text-[10px] font-bold text-white/60">
-                                                    {lang === 'ar' ? 'الحي' : 'District'}
-                                                </label>
-                                                <select
-                                                    value={districtMappingCol}
-                                                    onChange={(e) => setDistrictMappingCol(e.target.value)}
-                                                    className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-4 py-2.5 text-[11px] font-bold text-white outline-none"
-                                                >
-                                                    <option value="">{lang === 'ar' ? '-- بدون ربط (عمود جديد) --' : '-- No mapping (New Column) --'}</option>
-                                                    {activeFile.headers.map((h, hIdx) => (
-                                                        <option key={`dist-h-${h}-${hIdx}`} value={h}>{h}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
-                                        </div>
-                                    </div>
+                                {/* Street/District Enrichment & Mapping Component */}
+                                {activeFile && (activeFile.type === 'excel' || activeFile.type === 'csv') && (
+                                    <ExcelStreetDistrictEnricher
+                                        activeFile={activeFile}
+                                        setActiveFile={setActiveFile}
+                                        globalPoints={globalPoints}
+                                        setGlobalPoints={setGlobalPoints}
+                                        selectedHeaders={selectedHeaders}
+                                        setSelectedHeaders={setSelectedHeaders}
+                                        lang={lang}
+                                        geocodingMode={geocodingMode}
+                                        setGeocodingMode={setGeocodingMode}
+                                        streetMappingCol={streetMappingCol}
+                                        setStreetMappingCol={setStreetMappingCol}
+                                        districtMappingCol={districtMappingCol}
+                                        setDistrictMappingCol={setDistrictMappingCol}
+                                        onSuccessNotification={(msg) => {
+                                            setStatusMessage(msg);
+                                            setTimeout(() => setStatusMessage(''), 5000);
+                                        }}
+                                    />
                                 )}
 
                                  {/* Custom Folder Grouping Options */}
