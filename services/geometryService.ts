@@ -299,12 +299,19 @@ export const utmToLatLon = (easting: number, northing: number, zone: number = 38
   return { lat, lon };
 };
 
+export interface ReverseGeocodeResult {
+  governorate: string;
+  city: string;
+  district: string;
+  street: string;
+}
+
 export const getReverseGeocode = async (
     lat: number, 
     lon: number, 
     mode: 'accurate' | 'fast' = 'accurate'
-): Promise<{street: string, district: string}> => {
-    if (!lat || !lon) return { street: "غير متوفر", district: "غير متوفر" };
+): Promise<ReverseGeocodeResult> => {
+    if (!lat || !lon) return { governorate: "غير متوفر", city: "غير متوفر", district: "غير متوفر", street: "غير متوفر" };
 
     let queryLat = lat;
     let queryLon = lon;
@@ -330,15 +337,17 @@ export const getReverseGeocode = async (
           queryLat = bestConverted.lat;
           queryLon = bestConverted.lon;
         } else {
-          return { street: "غير متوفر", district: "غير متوفر" };
+          return { governorate: "غير متوفر", city: "غير متوفر", district: "غير متوفر", street: "غير متوفر" };
         }
       } else {
-        return { street: "غير متوفر", district: "غير متوفر" };
+        return { governorate: "غير متوفر", city: "غير متوفر", district: "غير متوفر", street: "غير متوفر" };
       }
     }
 
     let street = "";
     let district = "";
+    let city = "";
+    let governorate = "";
 
     const isAccurate = mode === 'accurate';
     const primaryTimeout = isAccurate ? 2400 : 1200;
@@ -363,11 +372,26 @@ export const getReverseGeocode = async (
                                 district = comp.long_name;
                             }
                         }
-                        if (!district && (types.includes('locality') || types.includes('administrative_area_level_2'))) {
-                            district = comp.long_name;
+                        if (types.includes('locality')) {
+                            if (!city && comp.long_name) {
+                                city = comp.long_name;
+                            }
+                        }
+                        if (types.includes('administrative_area_level_2')) {
+                            if (!governorate && comp.long_name) {
+                                governorate = comp.long_name;
+                            }
+                        }
+                        if (types.includes('administrative_area_level_1')) {
+                            if (!governorate && comp.long_name) {
+                                governorate = comp.long_name;
+                            }
+                            if (!city && comp.long_name && !comp.long_name.includes('منطقة')) {
+                                city = comp.long_name;
+                            }
                         }
                     }
-                    if (street && district) break;
+                    if (street && district && city && governorate) break;
                 }
             }
         }
@@ -376,7 +400,7 @@ export const getReverseGeocode = async (
     }
 
     // 2. Layer 2: ArcGIS World Geocoding Service (Esri High Precision in KSA & Riyadh)
-    if (!street || street.length <= 2 || !district) {
+    if (!street || street.length <= 2 || !district || !city || !governorate) {
         try {
             const arcgisUrl = `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=pjson&location=${queryLon},${queryLat}&langCode=ar`;
             const arcgisRes = await fetchWithTimeout(arcgisUrl, {}, primaryTimeout);
@@ -384,8 +408,14 @@ export const getReverseGeocode = async (
                 const arcgisData = await arcgisRes.json();
                 if (arcgisData && arcgisData.address) {
                     const addr = arcgisData.address;
+                    if (!city) {
+                        city = addr.City || "";
+                    }
+                    if (!governorate) {
+                        governorate = addr.Subregion || addr.Region || "";
+                    }
                     if (!district) {
-                        district = addr.District || addr.Neighborhood || addr.City || addr.Subregion || "";
+                        district = addr.District || addr.Neighborhood || "";
                     }
                     if (!street || street.length <= 2) {
                         let rawStreet = addr.Address || addr.ShortLabel || addr.Match_addr || addr.StAddr || "";
@@ -466,15 +496,21 @@ export const getReverseGeocode = async (
     }
 
     // 4. Layer 4: BigDataCloud Localized Reverse Geocoding
-    if (!street || street.length <= 2 || !district) {
+    if (!street || street.length <= 2 || !district || !city || !governorate) {
         try {
             const bdcUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${queryLat}&longitude=${queryLon}&localityLanguage=ar`;
             const bdcRes = await fetchWithTimeout(bdcUrl, {}, 2200);
             if (bdcRes && bdcRes.ok) {
                 const bdcData = await bdcRes.json();
                 if (bdcData) {
+                    if (!city) {
+                        city = bdcData.city || "";
+                    }
+                    if (!governorate) {
+                        governorate = bdcData.principalSubdivision || "";
+                    }
                     if (!district) {
-                        district = bdcData.locality || bdcData.city || bdcData.principalSubdivision || "";
+                        district = bdcData.locality || "";
                     }
                     if (!street || street.length <= 2) {
                         const info = bdcData.localityInfo?.informative || [];
@@ -494,7 +530,7 @@ export const getReverseGeocode = async (
     }
 
     // 5. Layer 5: Photon Geocoding Engine (Komoot / OSM)
-    if (!street || street.length <= 2 || !district) {
+    if (!street || street.length <= 2 || !district || !city || !governorate) {
         try {
             const photonUrl = `https://photon.komoot.io/reverse?lat=${queryLat}&lon=${queryLon}`;
             const photonRes = await fetchWithTimeout(photonUrl, {}, 2000);
@@ -502,11 +538,17 @@ export const getReverseGeocode = async (
                 const photonData = await photonRes.json();
                 if (photonData?.features?.[0]?.properties) {
                     const props = photonData.features[0].properties;
-                    if (!street || street.length <= 2) {
-                        street = props.street || props.name || street;
+                    if (!city) {
+                        city = props.city || "";
+                    }
+                    if (!governorate) {
+                        governorate = props.county || props.state || "";
                     }
                     if (!district) {
-                        district = props.district || props.suburb || props.locality || props.city || district;
+                        district = props.district || props.suburb || props.locality || district;
+                    }
+                    if (!street || street.length <= 2) {
+                        street = props.street || props.name || street;
                     }
                 }
             }
@@ -516,7 +558,7 @@ export const getReverseGeocode = async (
     }
 
     // 6. Layer 6: OpenStreetMap Nominatim Engine
-    if (!street || street.length <= 2 || !district) {
+    if (!street || street.length <= 2 || !district || !city || !governorate) {
         try {
             const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${queryLat}&lon=${queryLon}&zoom=18&addressdetails=1&accept-language=ar`;
             const nomRes = await fetchWithTimeout(nomUrl, {}, 2000);
@@ -524,11 +566,20 @@ export const getReverseGeocode = async (
                 const text = await nomRes.text();
                 if (text && text.trim().startsWith('{')) {
                     const nomData = JSON.parse(text);
-                    if (!street || street.length <= 2) {
-                        street = nomData.address?.road || nomData.address?.pedestrian || nomData.address?.path || nomData.address?.residential || nomData.address?.street || nomData.name || street;
-                    }
-                    if (!district) {
-                        district = nomData.address?.neighbourhood || nomData.address?.suburb || nomData.address?.city_district || nomData.address?.village || nomData.address?.quarter || district;
+                    if (nomData.address) {
+                        const a = nomData.address;
+                        if (!city) {
+                            city = a.city || a.town || a.municipality || "";
+                        }
+                        if (!governorate) {
+                            governorate = a.county || a.state_district || a.state || "";
+                        }
+                        if (!district) {
+                            district = a.neighbourhood || a.suburb || a.city_district || a.village || a.quarter || district;
+                        }
+                        if (!street || street.length <= 2) {
+                            street = a.road || a.pedestrian || a.path || a.residential || a.street || nomData.name || street;
+                        }
                     }
                 }
             }
@@ -538,18 +589,34 @@ export const getReverseGeocode = async (
     }
 
     // Cleanup and normalize names
-    if (street) {
-        street = street
+    const cleanItem = (val: string) => {
+        if (!val) return "";
+        return val
             .replace(/^[\d\s\-]+/, '')
             .replace(/,.*$/, '')
             .replace(/^Unnamed Road/i, '')
             .replace(/^طريق غير مسمى/i, '')
             .trim();
+    };
+
+    street = cleanItem(street);
+    district = cleanItem(district);
+    city = cleanItem(city);
+    governorate = cleanItem(governorate);
+
+    // Contextual intelligent cross-fill for city/governorate if one is missing
+    if (!city && governorate) {
+        city = governorate.replace(/^(محافظة|منطقة)\s+/, '').trim();
+    }
+    if (!governorate && city) {
+        governorate = `محافظة ${city}`;
     }
     
-    const result = {
-        street: street || "غير متوفر",
-        district: district || "غير متوفر"
+    const result: ReverseGeocodeResult = {
+        governorate: governorate || "غير متوفر",
+        city: city || "غير متوفر",
+        district: district || "غير متوفر",
+        street: street || "غير متوفر"
     };
 
     return result;

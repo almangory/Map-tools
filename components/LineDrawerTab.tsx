@@ -1650,11 +1650,13 @@ export const LineDrawerTab: React.FC<Props> = ({
             streetName: geoInfo.street || pt.streetName,
             neighborhood: geoInfo.district || pt.neighborhood,
             city: geoInfo.city || pt.city,
+            governorate: geoInfo.governorate || pt.governorate,
             attributes: {
               ...pt.attributes,
-              ...(geoInfo.street ? { 'Street': geoInfo.street, 'الشارع': geoInfo.street } : {}),
+              ...(geoInfo.governorate ? { 'Governorate': geoInfo.governorate, 'المحافظة': geoInfo.governorate } : {}),
+              ...(geoInfo.city ? { 'City': geoInfo.city, 'المدينة': geoInfo.city } : {}),
               ...(geoInfo.district ? { 'District': geoInfo.district, 'الحي': geoInfo.district } : {}),
-              ...(geoInfo.city ? { 'City': geoInfo.city, 'المدينة': geoInfo.city } : {})
+              ...(geoInfo.street ? { 'Street': geoInfo.street, 'الشارع': geoInfo.street } : {})
             }
           });
         } catch {

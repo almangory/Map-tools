@@ -16,7 +16,10 @@ import {
   AlertCircle,
   FileSpreadsheet,
   Compass,
-  ArrowDown
+  ArrowDown,
+  Navigation,
+  Landmark,
+  Layers
 } from 'lucide-react';
 import { GeoPoint, ParsedFile } from '../types';
 import { getReverseGeocode } from '../services/geometryService';
@@ -38,6 +41,10 @@ export interface ExcelStreetDistrictEnricherProps {
   lang: 'ar' | 'en';
   geocodingMode: 'accurate' | 'fast';
   setGeocodingMode?: (mode: 'accurate' | 'fast') => void;
+  governorateMappingCol?: string;
+  setGovernorateMappingCol?: (col: string) => void;
+  cityMappingCol?: string;
+  setCityMappingCol?: (col: string) => void;
   streetMappingCol: string;
   setStreetMappingCol: (col: string) => void;
   districtMappingCol: string;
@@ -55,18 +62,51 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
   lang,
   geocodingMode,
   setGeocodingMode,
+  governorateMappingCol = '',
+  setGovernorateMappingCol,
+  cityMappingCol = '',
+  setCityMappingCol,
   streetMappingCol,
   setStreetMappingCol,
   districtMappingCol,
   setDistrictMappingCol,
   onSuccessNotification
 }) => {
-  // Column names configuration
-  const defaultStreetCol = lang === 'ar' ? 'الشارع' : 'Street';
+  // Column names defaults
+  const defaultGovCol = lang === 'ar' ? 'المحافظة' : 'Governorate';
+  const defaultCityCol = lang === 'ar' ? 'المدينة' : 'City';
   const defaultDistrictCol = lang === 'ar' ? 'الحي' : 'District';
+  const defaultStreetCol = lang === 'ar' ? 'الشارع' : 'Street';
 
-  const [streetColName, setStreetColName] = useState<string>(defaultStreetCol);
+  // Toggle inclusion of columns (Order: Governorate -> City -> District -> Street)
+  const [includeGovernorate, setIncludeGovernorate] = useState<boolean>(true);
+  const [includeCity, setIncludeCity] = useState<boolean>(true);
+  const [includeDistrict, setIncludeDistrict] = useState<boolean>(true);
+  const [includeStreet, setIncludeStreet] = useState<boolean>(true);
+
+  // Column names configuration
+  const [govColName, setGovColName] = useState<string>(defaultGovCol);
+  const [cityColName, setCityColName] = useState<string>(defaultCityCol);
   const [districtColName, setDistrictColName] = useState<string>(defaultDistrictCol);
+  const [streetColName, setStreetColName] = useState<string>(defaultStreetCol);
+
+  // Internal mapping fallback if parent doesn't provide setters
+  const [internalGovMap, setInternalGovMap] = useState<string>(governorateMappingCol);
+  const [internalCityMap, setInternalCityMap] = useState<string>(cityMappingCol);
+
+  const activeGovMap = governorateMappingCol || internalGovMap;
+  const activeCityMap = cityMappingCol || internalCityMap;
+
+  const handleSetGovMap = (val: string) => {
+    setInternalGovMap(val);
+    if (setGovernorateMappingCol) setGovernorateMappingCol(val);
+  };
+
+  const handleSetCityMap = (val: string) => {
+    setInternalCityMap(val);
+    if (setCityMappingCol) setCityMappingCol(val);
+  };
+
   const [addCoordinates, setAddCoordinates] = useState<boolean>(true);
   const [addMapLink, setAddMapLink] = useState<boolean>(true);
 
@@ -87,8 +127,11 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
 
   const abortControllerRef = useRef<boolean>(false);
 
-  // Check if current points already have streets/districts resolved
-  const resolvedPointsCount = globalPoints.filter(p => p.street && p.street !== 'غير متوفر' && p.street !== 'Unknown').length;
+  // Check if current points already have address information resolved
+  const resolvedPointsCount = globalPoints.filter(p => 
+    (p.street && p.street !== 'غير متوفر' && p.street !== 'Unknown') ||
+    (p.city && p.city !== 'غير متوفر' && p.city !== 'Unknown')
+  ).length;
 
   useEffect(() => {
     if (resolvedPointsCount > 0 && resolvedPointsCount >= Math.floor(globalPoints.length * 0.7)) {
@@ -106,8 +149,33 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     setIsFetching(false);
   };
 
+  // Quick Preset Handlers
+  const applyPreset = (mode: 'all' | 'city-district-street' | 'gov-district-street' | 'district-street') => {
+    if (mode === 'all') {
+      setIncludeGovernorate(true);
+      setIncludeCity(true);
+      setIncludeDistrict(true);
+      setIncludeStreet(true);
+    } else if (mode === 'city-district-street') {
+      setIncludeGovernorate(false);
+      setIncludeCity(true);
+      setIncludeDistrict(true);
+      setIncludeStreet(true);
+    } else if (mode === 'gov-district-street') {
+      setIncludeGovernorate(true);
+      setIncludeCity(false);
+      setIncludeDistrict(true);
+      setIncludeStreet(true);
+    } else if (mode === 'district-street') {
+      setIncludeGovernorate(false);
+      setIncludeCity(false);
+      setIncludeDistrict(true);
+      setIncludeStreet(true);
+    }
+  };
+
   // Main Fetch and Enrich Process
-  const handleFetchStreetAndDistrict = async () => {
+  const handleFetchAddressHierarchy = async () => {
     if (!activeFile || globalPoints.length === 0) return;
 
     setIsFetching(true);
@@ -118,8 +186,11 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     setTotalCount(total);
     setProcessedCount(0);
 
-    const finalStreetCol = streetColName.trim() || (lang === 'ar' ? 'الشارع' : 'Street');
-    const finalDistrictCol = districtColName.trim() || (lang === 'ar' ? 'الحي' : 'District');
+    const finalGovCol = govColName.trim() || defaultGovCol;
+    const finalCityCol = cityColName.trim() || defaultCityCol;
+    const finalDistrictCol = districtColName.trim() || defaultDistrictCol;
+    const finalStreetCol = streetColName.trim() || defaultStreetCol;
+
     const latCol = lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)';
     const lonCol = lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)';
     const linkCol = lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link';
@@ -134,11 +205,16 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
       const chunk = updatedPoints.slice(i, i + batchSize);
       await Promise.all(
         chunk.map(async (pt) => {
-          let street = pt.street;
+          let governorate = pt.governorate;
+          let city = pt.city;
           let district = pt.district;
+          let street = pt.street;
 
-          const isMissing = !street || street === 'غير متوفر' || street === 'Unknown' || street.trim() === '' ||
-                            !district || district === 'غير متوفر' || district === 'Unknown' || district.trim() === '';
+          const isMissing = 
+            (!governorate || governorate === 'غير متوفر' || governorate === 'Unknown') ||
+            (!city || city === 'غير متوفر' || city === 'Unknown') ||
+            (!district || district === 'غير متوفر' || district === 'Unknown') ||
+            (!street || street === 'غير متوفر' || street === 'Unknown');
 
           if (isMissing) {
             try {
@@ -152,13 +228,21 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
 
               if (targetY && targetX && !isNaN(targetY) && !isNaN(targetX)) {
                 const geo = await getReverseGeocode(targetY, targetX, geocodingMode);
-                if (geo.street && geo.street !== 'غير متوفر') {
-                  street = geo.street;
-                  pt.street = street;
+                if (geo.governorate && geo.governorate !== 'غير متوفر') {
+                  governorate = geo.governorate;
+                  pt.governorate = governorate;
+                }
+                if (geo.city && geo.city !== 'غير متوفر') {
+                  city = geo.city;
+                  pt.city = city;
                 }
                 if (geo.district && geo.district !== 'غير متوفر') {
                   district = geo.district;
                   pt.district = district;
+                }
+                if (geo.street && geo.street !== 'غير متوفر') {
+                  street = geo.street;
+                  pt.street = street;
                 }
               }
             } catch (err) {
@@ -166,15 +250,23 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
             }
           }
 
-          const safeStreet = street && street !== 'غير متوفر' ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          const safeGov = governorate && governorate !== 'غير متوفر' ? governorate : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          const safeCity = city && city !== 'غير متوفر' ? city : (lang === 'ar' ? 'غير معروف' : 'Unknown');
           const safeDistrict = district && district !== 'غير متوفر' ? district : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+          const safeStreet = street && street !== 'غير متوفر' ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
-          pt.street = safeStreet;
+          pt.governorate = safeGov;
+          pt.city = safeCity;
           pt.district = safeDistrict;
+          pt.street = safeStreet;
 
           pt.attributes = { ...(pt.attributes || {}) };
-          pt.attributes[finalStreetCol] = safeStreet;
-          pt.attributes[finalDistrictCol] = safeDistrict;
+
+          if (includeGovernorate) pt.attributes[finalGovCol] = safeGov;
+          if (includeCity) pt.attributes[finalCityCol] = safeCity;
+          if (includeDistrict) pt.attributes[finalDistrictCol] = safeDistrict;
+          if (includeStreet) pt.attributes[finalStreetCol] = safeStreet;
+
           if (addCoordinates) {
             pt.attributes[latCol] = String(pt.y);
             pt.attributes[lonCol] = String(pt.x);
@@ -183,9 +275,17 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
             pt.attributes[linkCol] = `https://www.google.com/maps?q=${pt.y},${pt.x}`;
           }
 
-          if (safeStreet && safeStreet !== 'غير معروف' && safeStreet !== 'Unknown') {
+          // Build live feedback message in logical order: Governorate > City > District > Street
+          const parts = [
+            safeGov !== 'غير معروف' && safeGov !== 'Unknown' ? safeGov : null,
+            safeCity !== 'غير معروف' && safeCity !== 'Unknown' ? safeCity : null,
+            safeDistrict !== 'غير معروف' && safeDistrict !== 'Unknown' ? safeDistrict : null,
+            safeStreet !== 'غير معروف' && safeStreet !== 'Unknown' ? safeStreet : null
+          ].filter(Boolean);
+
+          if (parts.length > 0) {
             resolvedCount++;
-            setLastResolvedMsg(`${safeStreet}${safeDistrict && safeDistrict !== 'غير معروف' ? ` (${safeDistrict})` : ''}`);
+            setLastResolvedMsg(parts.join(' ◂ '));
           }
         })
       );
@@ -195,28 +295,51 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
       setProgressPct(Math.round((currentDone / total) * 100));
 
       // Yield briefly to keep browser UI reactive
-      await new Promise((res) => setTimeout(res, 25));
+      await new Promise((res) => setTimeout(res, 20));
     }
 
-    // 1. Prepare new headers list
+    // 1. Prepare new headers list with strict hierarchy order:
+    // [المحافظة] -> [المدينة] -> [الحي] -> [الشارع] -> [الإحداثيات] -> [الرابط]
     const originalHeaders = activeFile.headers ? [...activeFile.headers] : [];
     const headersToAdd: string[] = [];
 
-    // Street column
-    if (streetMappingCol && originalHeaders.includes(streetMappingCol)) {
-      // mapped to existing column
-    } else if (!originalHeaders.includes(finalStreetCol)) {
-      headersToAdd.push(finalStreetCol);
+    // 1. Governorate column
+    if (includeGovernorate) {
+      if (activeGovMap && originalHeaders.includes(activeGovMap)) {
+        // mapped to existing column
+      } else if (!originalHeaders.includes(finalGovCol)) {
+        headersToAdd.push(finalGovCol);
+      }
     }
 
-    // District column
-    if (districtMappingCol && originalHeaders.includes(districtMappingCol)) {
-      // mapped to existing column
-    } else if (!originalHeaders.includes(finalDistrictCol)) {
-      headersToAdd.push(finalDistrictCol);
+    // 2. City column
+    if (includeCity) {
+      if (activeCityMap && originalHeaders.includes(activeCityMap)) {
+        // mapped to existing column
+      } else if (!originalHeaders.includes(finalCityCol)) {
+        headersToAdd.push(finalCityCol);
+      }
     }
 
-    // Additional columns
+    // 3. District column
+    if (includeDistrict) {
+      if (districtMappingCol && originalHeaders.includes(districtMappingCol)) {
+        // mapped to existing column
+      } else if (!originalHeaders.includes(finalDistrictCol)) {
+        headersToAdd.push(finalDistrictCol);
+      }
+    }
+
+    // 4. Street column
+    if (includeStreet) {
+      if (streetMappingCol && originalHeaders.includes(streetMappingCol)) {
+        // mapped to existing column
+      } else if (!originalHeaders.includes(finalStreetCol)) {
+        headersToAdd.push(finalStreetCol);
+      }
+    }
+
+    // Additional columns (Lat, Lon, Link)
     if (addCoordinates) {
       if (!originalHeaders.includes(latCol)) headersToAdd.push(latCol);
       if (!originalHeaders.includes(lonCol)) headersToAdd.push(lonCol);
@@ -237,24 +360,52 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
         newRow.push('');
       }
 
-      // Handle Street
-      const stVal = pt ? pt.street || '' : '';
-      if (streetMappingCol && originalHeaders.includes(streetMappingCol)) {
-        const idx = originalHeaders.indexOf(streetMappingCol);
-        if (idx !== -1) newRow[idx] = stVal;
-      } else {
-        const stIdx = newHeaders.indexOf(finalStreetCol);
-        if (stIdx !== -1) newRow[stIdx] = stVal;
+      // Handle Governorate
+      if (includeGovernorate) {
+        const govVal = pt ? pt.governorate || '' : '';
+        if (activeGovMap && originalHeaders.includes(activeGovMap)) {
+          const idx = originalHeaders.indexOf(activeGovMap);
+          if (idx !== -1) newRow[idx] = govVal;
+        } else {
+          const gIdx = newHeaders.indexOf(finalGovCol);
+          if (gIdx !== -1) newRow[gIdx] = govVal;
+        }
+      }
+
+      // Handle City
+      if (includeCity) {
+        const cityVal = pt ? pt.city || '' : '';
+        if (activeCityMap && originalHeaders.includes(activeCityMap)) {
+          const idx = originalHeaders.indexOf(activeCityMap);
+          if (idx !== -1) newRow[idx] = cityVal;
+        } else {
+          const cIdx = newHeaders.indexOf(finalCityCol);
+          if (cIdx !== -1) newRow[cIdx] = cityVal;
+        }
       }
 
       // Handle District
-      const distVal = pt ? pt.district || '' : '';
-      if (districtMappingCol && originalHeaders.includes(districtMappingCol)) {
-        const idx = originalHeaders.indexOf(districtMappingCol);
-        if (idx !== -1) newRow[idx] = distVal;
-      } else {
-        const distIdx = newHeaders.indexOf(finalDistrictCol);
-        if (distIdx !== -1) newRow[distIdx] = distVal;
+      if (includeDistrict) {
+        const distVal = pt ? pt.district || '' : '';
+        if (districtMappingCol && originalHeaders.includes(districtMappingCol)) {
+          const idx = originalHeaders.indexOf(districtMappingCol);
+          if (idx !== -1) newRow[idx] = distVal;
+        } else {
+          const distIdx = newHeaders.indexOf(finalDistrictCol);
+          if (distIdx !== -1) newRow[distIdx] = distVal;
+        }
+      }
+
+      // Handle Street
+      if (includeStreet) {
+        const stVal = pt ? pt.street || '' : '';
+        if (streetMappingCol && originalHeaders.includes(streetMappingCol)) {
+          const idx = originalHeaders.indexOf(streetMappingCol);
+          if (idx !== -1) newRow[idx] = stVal;
+        } else {
+          const stIdx = newHeaders.indexOf(finalStreetCol);
+          if (stIdx !== -1) newRow[stIdx] = stVal;
+        }
       }
 
       // Handle Lat / Lon
@@ -297,9 +448,15 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     setIsCompleted(true);
     setProgressPct(100);
 
+    const summaryParts: string[] = [];
+    if (includeGovernorate) summaryParts.push(lang === 'ar' ? 'المحافظة' : 'Governorate');
+    if (includeCity) summaryParts.push(lang === 'ar' ? 'المدينة' : 'City');
+    if (includeDistrict) summaryParts.push(lang === 'ar' ? 'الحي' : 'District');
+    if (includeStreet) summaryParts.push(lang === 'ar' ? 'الشارع' : 'Street');
+
     const successMsg = lang === 'ar'
-      ? `تم بنجاح جلب وتحديث بيانات الشارع والحي لـ (${total}) موقع وإضافتها كأعمدة رسمية في الملف!`
-      : `Successfully fetched street & district names for (${total}) locations and added columns to file!`;
+      ? `تم بنجاح جلب بيانات (${summaryParts.join(' و ')}) لـ (${total}) موقع وإضافتها بالترتيب القياسي في الملف!`
+      : `Successfully fetched (${summaryParts.join(', ')}) for (${total}) locations and added columns to file!`;
 
     if (onSuccessNotification) {
       onSuccessNotification(successMsg);
@@ -310,7 +467,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     if (autoFetchPreference && !isCompleted && !isFetching && globalPoints.length > 0 && activeFile) {
       const alreadyFetched = globalPoints.filter(p => p.street && p.street !== 'غير متوفر' && p.street !== 'Unknown').length;
       if (alreadyFetched === 0) {
-        handleFetchStreetAndDistrict();
+        handleFetchAddressHierarchy();
       }
     }
   }, [activeFile?.filename, autoFetchPreference]);
@@ -337,17 +494,36 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     });
     worksheet['!cols'] = colWidths;
 
-    const sheetTitle = lang === 'ar' ? 'البيانات مع الشارع والحي' : 'Data with Streets';
+    const sheetTitle = lang === 'ar' ? 'البيانات مع العناوين المحللة' : 'Data with Address Details';
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetTitle);
 
     const baseName = (activeFile.filename || 'export').replace(/\.[^/.]+$/, '');
-    const outName = `${baseName}_with_streets_and_districts.xlsx`;
+    const outName = `${baseName}_with_address_hierarchy.xlsx`;
     XLSX.writeFile(workbook, outName);
   };
 
   if (!activeFile || (activeFile.type !== 'excel' && activeFile.type !== 'csv')) {
     return null;
   }
+
+  // List of all new address column names to highlight in preview
+  const newColumnKeys = [
+    govColName,
+    cityColName,
+    districtColName,
+    streetColName,
+    'المحافظة',
+    'المدينة',
+    'الحي',
+    'الشارع',
+    'Governorate',
+    'City',
+    'District',
+    'Street',
+    lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)',
+    lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)',
+    lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'
+  ];
 
   return (
     <div className="bg-[#0b2d3d]/50 p-6 rounded-[2.5rem] border border-accent/20 shadow-2xl space-y-6 animate-in slide-in-from-bottom duration-400 relative overflow-hidden">
@@ -363,17 +539,17 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-white font-black text-sm">
-                {lang === 'ar' ? 'إضافة أعمدة الشارع والحي من الخريطة' : 'Add Street & District Columns from Map'}
+                {lang === 'ar' ? 'جلب بيانات العنوان: المحافظة / المدينة قبل الحي والشارع' : 'Fetch Address: Governorate / City before District & Street'}
               </h3>
               <span className="bg-accent/20 text-accent text-[9px] font-black px-2 py-0.5 rounded-full border border-accent/30 flex items-center gap-1">
                 <Sparkles className="w-2.5 h-2.5" />
-                {lang === 'ar' ? 'ميزة ذكية' : 'Smart Enrich'}
+                {lang === 'ar' ? 'تسلسل جغرافي ذكي' : 'Smart Hierarchy'}
               </span>
             </div>
             <p className="text-[10px] text-white/50 font-bold mt-0.5">
               {lang === 'ar'
-                ? 'استخراج أسماء الشوارع والأحياء تلقائياً من الخريطة وتضمينها كأعمدة رسمية في الإكسل'
-                : 'Extract street and district names automatically from map coordinates and add columns to Excel'}
+                ? 'استخراج بيانات الموقع وترتيب الأعمدة تلقائياً: (المحافظة ◂ المدينة ◂ الحي ◂ الشارع) وتضمينها في الإكسل'
+                : 'Extract and arrange columns: (Governorate ◂ City ◂ District ◂ Street) automatically into Excel'}
             </p>
           </div>
         </div>
@@ -394,76 +570,254 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
         </div>
       </div>
 
-      {/* Main Options & Column Names */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Street Column Setup */}
-        <div className="bg-black/20 p-4 rounded-2xl border border-white/5 space-y-2">
+      {/* Quick Selection Presets */}
+      <div className="flex flex-wrap items-center gap-2 bg-black/25 p-2.5 rounded-2xl border border-white/5">
+        <span className="text-[10px] font-black text-white/60 px-2 flex items-center gap-1.5">
+          <Layers className="w-3.5 h-3.5 text-accent" />
+          {lang === 'ar' ? 'التسلسل المطلوب:' : 'Hierarchy Preset:'}
+        </span>
+        <button
+          type="button"
+          onClick={() => applyPreset('all')}
+          className={cn(
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
+            includeGovernorate && includeCity && includeDistrict && includeStreet
+              ? "bg-accent text-primary shadow-sm"
+              : "bg-white/5 text-white/70 hover:bg-white/10"
+          )}
+        >
+          {lang === 'ar' ? '✨ شامل (المحافظة + المدينة + الحي + الشارع)' : '✨ Full (Gov + City + District + Street)'}
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('city-district-street')}
+          className={cn(
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
+            !includeGovernorate && includeCity && includeDistrict && includeStreet
+              ? "bg-accent text-primary shadow-sm"
+              : "bg-white/5 text-white/70 hover:bg-white/10"
+          )}
+        >
+          {lang === 'ar' ? 'المدينة + الحي + الشارع' : 'City + District + Street'}
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('gov-district-street')}
+          className={cn(
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
+            includeGovernorate && !includeCity && includeDistrict && includeStreet
+              ? "bg-accent text-primary shadow-sm"
+              : "bg-white/5 text-white/70 hover:bg-white/10"
+          )}
+        >
+          {lang === 'ar' ? 'المحافظة + الحي + الشارع' : 'Gov + District + Street'}
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('district-street')}
+          className={cn(
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
+            !includeGovernorate && !includeCity && includeDistrict && includeStreet
+              ? "bg-accent text-primary shadow-sm"
+              : "bg-white/5 text-white/70 hover:bg-white/10"
+          )}
+        >
+          {lang === 'ar' ? 'الحي والشارع فقط' : 'District & Street only'}
+        </button>
+      </div>
+
+      {/* Main Options: 4 Columns in Exact Order (Governorate -> City -> District -> Street) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* 1. Governorate Column */}
+        <div className={cn(
+          "p-3.5 rounded-2xl border transition-all space-y-2 relative",
+          includeGovernorate ? "bg-black/30 border-accent/40" : "bg-black/10 border-white/5 opacity-60"
+        )}>
           <div className="flex items-center justify-between">
-            <label className="text-[11px] font-black text-white flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-accent" />
-              {lang === 'ar' ? 'عمود الشارع (Street Column):' : 'Street Column Name:'}
+            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] font-black text-white">
+              <input
+                type="checkbox"
+                checked={includeGovernorate}
+                onChange={(e) => setIncludeGovernorate(e.target.checked)}
+                className="w-3.5 h-3.5 accent-accent rounded"
+              />
+              <span className="w-2 h-2 rounded-full bg-cyan-400" />
+              <span>{lang === 'ar' ? '1. المحافظة' : '1. Governorate'}</span>
             </label>
-            {streetMappingCol && (
-              <span className="text-[9px] text-amber-400 font-bold">
-                {lang === 'ar' ? '(ربط بعمود موجود)' : '(Mapped)'}
+            {activeGovMap && (
+              <span className="text-[8.5px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded">
+                {lang === 'ar' ? 'مربوط' : 'Mapped'}
               </span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="space-y-1.5">
             <input
               type="text"
-              value={streetColName}
-              onChange={(e) => setStreetColName(e.target.value)}
-              placeholder={defaultStreetCol}
-              className="flex-1 bg-[#0e3f53] border border-white/10 rounded-xl px-3 py-2 text-[11px] font-bold text-white outline-none focus:border-accent"
+              disabled={!includeGovernorate}
+              value={govColName}
+              onChange={(e) => setGovColName(e.target.value)}
+              placeholder={defaultGovCol}
+              className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2.5 py-1.5 text-[10.5px] font-bold text-white outline-none focus:border-accent disabled:opacity-50"
             />
             {activeFile.headers && activeFile.headers.length > 0 && (
               <select
-                value={streetMappingCol}
-                onChange={(e) => setStreetMappingCol(e.target.value)}
-                className="bg-[#0e3f53] border border-white/10 rounded-xl px-2.5 py-2 text-[10px] font-bold text-white/80 outline-none max-w-[120px]"
-                title={lang === 'ar' ? 'أو اختر عمود موجود مسبقاً لاستبداله' : 'Or map to existing column'}
+                disabled={!includeGovernorate}
+                value={activeGovMap}
+                onChange={(e) => handleSetGovMap(e.target.value)}
+                className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2 py-1 text-[9.5px] font-bold text-white/80 outline-none disabled:opacity-50"
               >
-                <option value="">{lang === 'ar' ? '+ عمود جديد' : '+ New Col'}</option>
+                <option value="">{lang === 'ar' ? '+ عمود جديد (المحافظة)' : '+ New Column'}</option>
                 {activeFile.headers.map((h, idx) => (
-                  <option key={`st-opt-${h}-${idx}`} value={h}>{h}</option>
+                  <option key={`gov-opt-${h}-${idx}`} value={h}>
+                    {lang === 'ar' ? `استبدال: ${h}` : `Replace: ${h}`}
+                  </option>
                 ))}
               </select>
             )}
           </div>
         </div>
 
-        {/* District Column Setup */}
-        <div className="bg-black/20 p-4 rounded-2xl border border-white/5 space-y-2">
+        {/* 2. City Column */}
+        <div className={cn(
+          "p-3.5 rounded-2xl border transition-all space-y-2 relative",
+          includeCity ? "bg-black/30 border-accent/40" : "bg-black/10 border-white/5 opacity-60"
+        )}>
           <div className="flex items-center justify-between">
-            <label className="text-[11px] font-black text-white flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              {lang === 'ar' ? 'عمود الحي (District Column):' : 'District Column Name:'}
+            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] font-black text-white">
+              <input
+                type="checkbox"
+                checked={includeCity}
+                onChange={(e) => setIncludeCity(e.target.checked)}
+                className="w-3.5 h-3.5 accent-accent rounded"
+              />
+              <span className="w-2 h-2 rounded-full bg-blue-400" />
+              <span>{lang === 'ar' ? '2. المدينة' : '2. City'}</span>
             </label>
-            {districtMappingCol && (
-              <span className="text-[9px] text-amber-400 font-bold">
-                {lang === 'ar' ? '(ربط بعمود موجود)' : '(Mapped)'}
+            {activeCityMap && (
+              <span className="text-[8.5px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded">
+                {lang === 'ar' ? 'مربوط' : 'Mapped'}
               </span>
             )}
           </div>
-          <div className="flex gap-2">
+          <div className="space-y-1.5">
             <input
               type="text"
-              value={districtColName}
-              onChange={(e) => setDistrictColName(e.target.value)}
-              placeholder={defaultDistrictCol}
-              className="flex-1 bg-[#0e3f53] border border-white/10 rounded-xl px-3 py-2 text-[11px] font-bold text-white outline-none focus:border-accent"
+              disabled={!includeCity}
+              value={cityColName}
+              onChange={(e) => setCityColName(e.target.value)}
+              placeholder={defaultCityCol}
+              className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2.5 py-1.5 text-[10.5px] font-bold text-white outline-none focus:border-accent disabled:opacity-50"
             />
             {activeFile.headers && activeFile.headers.length > 0 && (
               <select
+                disabled={!includeCity}
+                value={activeCityMap}
+                onChange={(e) => handleSetCityMap(e.target.value)}
+                className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2 py-1 text-[9.5px] font-bold text-white/80 outline-none disabled:opacity-50"
+              >
+                <option value="">{lang === 'ar' ? '+ عمود جديد (المدينة)' : '+ New Column'}</option>
+                {activeFile.headers.map((h, idx) => (
+                  <option key={`city-opt-${h}-${idx}`} value={h}>
+                    {lang === 'ar' ? `استبدال: ${h}` : `Replace: ${h}`}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+
+        {/* 3. District Column */}
+        <div className={cn(
+          "p-3.5 rounded-2xl border transition-all space-y-2 relative",
+          includeDistrict ? "bg-black/30 border-accent/40" : "bg-black/10 border-white/5 opacity-60"
+        )}>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] font-black text-white">
+              <input
+                type="checkbox"
+                checked={includeDistrict}
+                onChange={(e) => setIncludeDistrict(e.target.checked)}
+                className="w-3.5 h-3.5 accent-accent rounded"
+              />
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              <span>{lang === 'ar' ? '3. الحي' : '3. District'}</span>
+            </label>
+            {districtMappingCol && (
+              <span className="text-[8.5px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded">
+                {lang === 'ar' ? 'مربوط' : 'Mapped'}
+              </span>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <input
+              type="text"
+              disabled={!includeDistrict}
+              value={districtColName}
+              onChange={(e) => setDistrictColName(e.target.value)}
+              placeholder={defaultDistrictCol}
+              className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2.5 py-1.5 text-[10.5px] font-bold text-white outline-none focus:border-accent disabled:opacity-50"
+            />
+            {activeFile.headers && activeFile.headers.length > 0 && (
+              <select
+                disabled={!includeDistrict}
                 value={districtMappingCol}
                 onChange={(e) => setDistrictMappingCol(e.target.value)}
-                className="bg-[#0e3f53] border border-white/10 rounded-xl px-2.5 py-2 text-[10px] font-bold text-white/80 outline-none max-w-[120px]"
-                title={lang === 'ar' ? 'أو اختر عمود موجود مسبقاً لاستبداله' : 'Or map to existing column'}
+                className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2 py-1 text-[9.5px] font-bold text-white/80 outline-none disabled:opacity-50"
               >
-                <option value="">{lang === 'ar' ? '+ عمود جديد' : '+ New Col'}</option>
+                <option value="">{lang === 'ar' ? '+ عمود جديد (الحي)' : '+ New Column'}</option>
                 {activeFile.headers.map((h, idx) => (
-                  <option key={`dist-opt-${h}-${idx}`} value={h}>{h}</option>
+                  <option key={`dist-opt-${h}-${idx}`} value={h}>
+                    {lang === 'ar' ? `استبدال: ${h}` : `Replace: ${h}`}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+
+        {/* 4. Street Column */}
+        <div className={cn(
+          "p-3.5 rounded-2xl border transition-all space-y-2 relative",
+          includeStreet ? "bg-black/30 border-accent/40" : "bg-black/10 border-white/5 opacity-60"
+        )}>
+          <div className="flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] font-black text-white">
+              <input
+                type="checkbox"
+                checked={includeStreet}
+                onChange={(e) => setIncludeStreet(e.target.checked)}
+                className="w-3.5 h-3.5 accent-accent rounded"
+              />
+              <span className="w-2 h-2 rounded-full bg-accent" />
+              <span>{lang === 'ar' ? '4. الشارع' : '4. Street'}</span>
+            </label>
+            {streetMappingCol && (
+              <span className="text-[8.5px] text-amber-400 font-bold bg-amber-400/10 px-1.5 py-0.5 rounded">
+                {lang === 'ar' ? 'مربوط' : 'Mapped'}
+              </span>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <input
+              type="text"
+              disabled={!includeStreet}
+              value={streetColName}
+              onChange={(e) => setStreetColName(e.target.value)}
+              placeholder={defaultStreetCol}
+              className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2.5 py-1.5 text-[10.5px] font-bold text-white outline-none focus:border-accent disabled:opacity-50"
+            />
+            {activeFile.headers && activeFile.headers.length > 0 && (
+              <select
+                disabled={!includeStreet}
+                value={streetMappingCol}
+                onChange={(e) => setStreetMappingCol(e.target.value)}
+                className="w-full bg-[#0e3f53] border border-white/10 rounded-xl px-2 py-1 text-[9.5px] font-bold text-white/80 outline-none disabled:opacity-50"
+              >
+                <option value="">{lang === 'ar' ? '+ عمود جديد (الشارع)' : '+ New Column'}</option>
+                {activeFile.headers.map((h, idx) => (
+                  <option key={`st-opt-${h}-${idx}`} value={h}>
+                    {lang === 'ar' ? `استبدال: ${h}` : `Replace: ${h}`}
+                  </option>
                 ))}
               </select>
             )}
@@ -543,7 +897,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
                   onChange={(e) => handleToggleAutoFetch(e.target.checked)}
                   className="w-3.5 h-3.5 accent-accent rounded"
                 />
-                <span>{lang === 'ar' ? 'جلب الشارع والحي تلقائياً عند رفع أي إكسل مستقبلاً' : 'Auto-fetch on future Excel uploads'}</span>
+                <span>{lang === 'ar' ? 'جلب العناوين تلقائياً عند رفع أي إكسل مستقبلاً' : 'Auto-fetch on future Excel uploads'}</span>
               </label>
             </div>
           </div>
@@ -558,8 +912,8 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>
                 {lang === 'ar'
-                  ? `جاري التواصل مع الخريطة وجلب الشوارع والأحياء (${processedCount} من ${totalCount})...`
-                  : `Contacting map and fetching names (${processedCount} of ${totalCount})...`}
+                  ? `جاري التواصل مع الخريطة وجلب المحافظة والمدينة والحي والشارع (${processedCount} من ${totalCount})...`
+                  : `Contacting map and fetching address hierarchy (${processedCount} of ${totalCount})...`}
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -587,7 +941,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
           {lastResolvedMsg && (
             <div className="text-[10px] font-bold text-white/80 truncate flex items-center gap-1.5">
               <MapPin className="w-3 h-3 text-accent shrink-0" />
-              <span>{lang === 'ar' ? 'آخر موقع مستخرج:' : 'Latest resolved:'}</span>
+              <span>{lang === 'ar' ? 'الموقع الأخير المستخرج:' : 'Latest resolved:'}</span>
               <span className="text-accent font-semibold">{lastResolvedMsg}</span>
             </div>
           )}
@@ -598,8 +952,8 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
       <div className="flex flex-wrap items-center gap-3 pt-2">
         <button
           type="button"
-          disabled={isFetching || globalPoints.length === 0}
-          onClick={handleFetchStreetAndDistrict}
+          disabled={isFetching || globalPoints.length === 0 || (!includeGovernorate && !includeCity && !includeDistrict && !includeStreet)}
+          onClick={handleFetchAddressHierarchy}
           className={cn(
             "flex-1 min-w-[220px] py-3.5 px-6 rounded-2xl text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg",
             isFetching
@@ -617,8 +971,8 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
               <Sparkles className="w-4 h-4 fill-current" />
               <span>
                 {isCompleted
-                  ? (lang === 'ar' ? 'إعادة جلب وتحديث الشارع والحي من الخريطة 🔄' : 'Re-fetch & Update from Map 🔄')
-                  : (lang === 'ar' ? 'جلب بيانات الشارع والحي وتضمين الأعمدة الآن ⚡' : 'Fetch Street & District from Map Now ⚡')}
+                  ? (lang === 'ar' ? 'إعادة جلب وتحديث العناوين من الخريطة 🔄' : 'Re-fetch & Update Addresses from Map 🔄')
+                  : (lang === 'ar' ? 'جلب بيانات العناوين وتضمين الأعمدة الآن ⚡' : 'Fetch Address Hierarchy & Add Columns Now ⚡')}
               </span>
             </>
           )}
@@ -661,12 +1015,12 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
                 </div>
                 <div>
                   <h3 className="text-white font-black text-base">
-                    {lang === 'ar' ? 'معاينة جدول البيانات مع أعمدة الشارع والحي' : 'Preview Table with Street & District Columns'}
+                    {lang === 'ar' ? 'معاينة جدول البيانات مع أعمدة العناوين (المحافظة • المدينة • الحي • الشارع)' : 'Preview Table with Address Columns'}
                   </h3>
                   <p className="text-[11px] text-white/50 font-bold">
                     {lang === 'ar'
                       ? `تم تحديث (${activeFile.data.length}) صف وإضافة الأعمدة الجديدة باللون الأخضر المميز`
-                      : `Updated (${activeFile.data.length}) rows with newly added columns highlighted`}
+                      : `Updated (${activeFile.data.length}) rows with newly added columns highlighted in emerald`}
                   </p>
                 </div>
               </div>
@@ -686,17 +1040,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
                   <tr className="border-b border-white/10 bg-black/40">
                     <th className="p-3 text-white/40 font-mono text-[10px]">#</th>
                     {(activeFile.headers || []).map((h, hIdx) => {
-                      const isNewCol = [
-                        streetColName,
-                        districtColName,
-                        'الشارع',
-                        'الحي',
-                        'Street',
-                        'District',
-                        lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)',
-                        lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)',
-                        lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'
-                      ].includes(h);
+                      const isNewCol = newColumnKeys.includes(h);
 
                       return (
                         <th
@@ -721,17 +1065,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
                       <td className="p-3 text-white/30 font-mono text-[10px]">{rIdx + 1}</td>
                       {(activeFile.headers || []).map((h, cIdx) => {
                         const cellVal = row[cIdx] !== undefined && row[cIdx] !== null ? String(row[cIdx]) : '';
-                        const isNewCol = [
-                          streetColName,
-                          districtColName,
-                          'الشارع',
-                          'الحي',
-                          'Street',
-                          'District',
-                          lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)',
-                          lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)',
-                          lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link'
-                        ].includes(h);
+                        const isNewCol = newColumnKeys.includes(h);
 
                         return (
                           <td
@@ -748,7 +1082,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
                                 rel="noreferrer"
                                 className="text-accent underline hover:text-white inline-flex items-center gap-1"
                               >
-                                <span>{lang === 'ar' ? 'عرض على الخريطة ↗' : 'View on Map ↗'}</span>
+                                {lang === 'ar' ? 'فتح في خرائط جوجل ↗' : 'Open in Google Maps ↗'}
                               </a>
                             ) : (
                               cellVal || '-'
@@ -760,36 +1094,26 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
                   ))}
                 </tbody>
               </table>
-
-              {activeFile.data.length > 25 && (
-                <div className="text-center p-4 text-white/40 text-xs font-bold border-t border-white/5">
-                  {lang === 'ar'
-                    ? `يتم عرض أول 25 صفاً من أصل (${activeFile.data.length}) صفاً. تنزيل ملف الإكسل سيشمل جميع الصفوف بالكامل.`
-                    : `Showing first 25 of (${activeFile.data.length}) rows. Downloading Excel includes all rows.`}
-                </div>
-              )}
             </div>
 
             {/* Modal Footer */}
-            <div className="p-6 border-t border-white/10 flex flex-wrap items-center justify-between gap-3 bg-black/40">
-              <div className="text-xs text-white/60 font-bold">
-                {lang === 'ar'
-                  ? `الأعمدة المميزة باللون الأخضر هي الأعمدة المستخرجة والمضافة تلقائياً من الخريطة.`
-                  : `Green highlighted columns were automatically resolved and added from the map.`}
-              </div>
-              <div className="flex gap-3">
+            <div className="p-4 border-t border-white/10 bg-black/40 flex items-center justify-between">
+              <span className="text-[10px] text-white/50 font-bold">
+                {lang === 'ar' ? `عرض أول 25 صف من أصل (${activeFile.data.length}) صف` : `Showing first 25 of (${activeFile.data.length}) rows`}
+              </span>
+              <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={handleDownloadUpdatedExcel}
-                  className="py-2.5 px-5 rounded-xl text-xs font-black bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center gap-2 shadow-lg transition-all"
+                  className="px-4 py-2 rounded-xl text-xs font-black bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/30 flex items-center gap-1.5 transition-all"
                 >
-                  <Download className="w-4 h-4" />
-                  <span>{lang === 'ar' ? 'تحميل ملف Excel الآن' : 'Download Excel File'}</span>
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{lang === 'ar' ? 'تحميل كـ Excel' : 'Download as Excel'}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowPreviewModal(false)}
-                  className="py-2.5 px-4 rounded-xl text-xs font-black bg-white/10 hover:bg-white/20 text-white transition-all"
+                  className="px-4 py-2 rounded-xl text-xs font-black bg-white/10 hover:bg-white/15 text-white transition-all"
                 >
                   {lang === 'ar' ? 'إغلاق' : 'Close'}
                 </button>
@@ -801,5 +1125,3 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     </div>
   );
 };
-
-export default ExcelStreetDistrictEnricher;

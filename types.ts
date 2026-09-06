@@ -14,6 +14,8 @@ export interface GeoPoint {
   color?: string; // Hex color for analysis
   length?: number; // Calculated length in meters
   originalLength?: number; // Total length of lines before joining
+  governorate?: string; // Governorate / Province name from geocoding
+  city?: string; // City name from geocoding
   district?: string; // Neighborhood / District name from geocoding
   street?: string; // Street name from geocoding
   originalRow?: any[]; // The raw data from Excel/CSV

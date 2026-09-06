@@ -3477,6 +3477,8 @@ const App: React.FC = () => {
   });
   const [selectedHeaders, setSelectedHeaders] = useState<string[]>([]);
   const [selectedLayers, setSelectedLayers] = useState<string[]>([]);
+  const [governorateMappingCol, setGovernorateMappingCol] = useState<string>('');
+  const [cityMappingCol, setCityMappingCol] = useState<string>('');
   const [streetMappingCol, setStreetMappingCol] = useState<string>('');
   const [districtMappingCol, setDistrictMappingCol] = useState<string>('');
   const [groupingMode, setGroupingMode] = useState<'none' | 'layer' | 'color' | 'column' | 'geometry'>(() => loadSavedPreference('groupingMode', 'layer'));
@@ -4685,10 +4687,18 @@ const App: React.FC = () => {
             originalHeaders.forEach((h, i) => {
                 if (selectedHeaders.includes(h)) {
                     const hLower = String(h || '').toLowerCase();
-                    if (streetMappingCol === h && pt && pt.street) {
+                    if (governorateMappingCol === h && pt && pt.governorate) {
+                        rowObj[h] = pt.governorate;
+                    } else if (cityMappingCol === h && pt && pt.city) {
+                        rowObj[h] = pt.city;
+                    } else if (streetMappingCol === h && pt && pt.street) {
                         rowObj[h] = pt.street;
                     } else if (districtMappingCol === h && pt && pt.district) {
                         rowObj[h] = pt.district;
+                    } else if (!governorateMappingCol && ['governorate', 'province', 'المحافظة', 'محافظة'].includes(hLower) && pt && pt.governorate) {
+                        rowObj[h] = pt.governorate;
+                    } else if (!cityMappingCol && ['city', 'town', 'المدينة', 'مدينة'].includes(hLower) && pt && pt.city) {
+                        rowObj[h] = pt.city;
                     } else if (!streetMappingCol && ['streetname', 'street', 'الشارع', 'اسم الشارع'].includes(hLower) && pt && pt.street) {
                         rowObj[h] = pt.street;
                     } else if (!districtMappingCol && ['district', 'الحي'].includes(hLower) && pt && pt.district) {
@@ -4699,22 +4709,29 @@ const App: React.FC = () => {
                 }
             });
 
+            const govKey = lang === 'ar' ? 'المحافظة' : 'Governorate';
+            const cityKey = lang === 'ar' ? 'المدينة' : 'City';
+            const districtKey = lang === 'ar' ? 'الحي' : 'District';
+            const streetKey = lang === 'ar' ? 'الشارع' : 'Street';
             const latKey = lang === 'ar' ? 'خط العرض المحول (Y)' : 'Converted Latitude (Y)';
             const lonKey = lang === 'ar' ? 'خط الطول المحول (X)' : 'Converted Longitude (X)';
-            const streetKey = lang === 'ar' ? 'الشارع' : 'Street';
-            const districtKey = lang === 'ar' ? 'الحي' : 'District';
             const linkKey = lang === 'ar' ? 'رابط خرائط جوجل' : 'Google Maps Link';
 
-            if (!originalHeaders.includes(latKey)) rowObj[latKey] = lat;
-            if (!originalHeaders.includes(lonKey)) rowObj[lonKey] = lon;
-            
-            if (!streetMappingCol && !originalHeaders.includes(streetKey)) {
-                rowObj[streetKey] = street;
+            if (!governorateMappingCol && pt?.governorate && pt.governorate !== 'غير متوفر' && pt.governorate !== 'غير معروف' && !originalHeaders.includes(govKey)) {
+                rowObj[govKey] = pt.governorate;
+            }
+            if (!cityMappingCol && pt?.city && pt.city !== 'غير متوفر' && pt.city !== 'غير معروف' && !originalHeaders.includes(cityKey)) {
+                rowObj[cityKey] = pt.city;
             }
             if (!districtMappingCol && !originalHeaders.includes(districtKey)) {
                 rowObj[districtKey] = district;
             }
-            
+            if (!streetMappingCol && !originalHeaders.includes(streetKey)) {
+                rowObj[streetKey] = street;
+            }
+
+            if (!originalHeaders.includes(latKey)) rowObj[latKey] = lat;
+            if (!originalHeaders.includes(lonKey)) rowObj[lonKey] = lon;
             if (!originalHeaders.includes(linkKey)) rowObj[linkKey] = link;
 
             return rowObj;
@@ -4883,7 +4900,13 @@ const App: React.FC = () => {
                         }
                         if (targetY && targetX) {
                           const geoData = await getReverseGeocode(targetY, targetX, geocodingMode);
-                          updated[idx] = { ...pt, street: geoData.street, district: geoData.district };
+                          updated[idx] = { 
+                            ...pt, 
+                            governorate: geoData.governorate || pt.governorate,
+                            city: geoData.city || pt.city,
+                            street: geoData.street, 
+                            district: geoData.district 
+                          };
                           if (geoData.street && geoData.street !== "غير متوفر") {
                             successCount++;
                             lastResolvedDetail = `${geoData.street}${geoData.district && geoData.district !== 'غير متوفر' ? ` (${geoData.district})` : ''}`;
@@ -4948,14 +4971,18 @@ const App: React.FC = () => {
         );
         const chunk = pointsToExport.slice(i, i + batchSize);
         const chunkResults = await Promise.all(chunk.map(async (pt) => {
-            let street = pt.street;
+            let governorate = pt.governorate;
+            let city = pt.city;
             let district = pt.district;
+            let street = pt.street;
 
-            if (!street || !district || street === "غير متوفر") {
+            if (!street || !district || !governorate || !city || street === "غير متوفر") {
               try {
                 const geoData = await getReverseGeocode(pt.y, pt.x, geocodingMode);
-                street = geoData.street;
-                district = geoData.district;
+                if (geoData.governorate && geoData.governorate !== 'غير متوفر') governorate = geoData.governorate;
+                if (geoData.city && geoData.city !== 'غير متوفر') city = geoData.city;
+                if (geoData.district && geoData.district !== 'غير متوفر') district = geoData.district;
+                if (geoData.street && geoData.street !== 'غير متوفر') street = geoData.street;
               } catch (err) {}
             }
 
@@ -4973,8 +5000,10 @@ const App: React.FC = () => {
             const rowObj: Record<string, any> = {
                 [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
                 [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
-                [lang === 'ar' ? 'الشارع' : 'Street']: street || 'غير متوفر',
+                [lang === 'ar' ? 'المحافظة' : 'Governorate']: governorate || 'غير متوفر',
+                [lang === 'ar' ? 'المدينة' : 'City']: city || 'غير متوفر',
                 [lang === 'ar' ? 'الحي' : 'District']: district || 'غير متوفر',
+                [lang === 'ar' ? 'الشارع' : 'Street']: street || 'غير متوفر',
                 [lang === 'ar' ? 'النوع' : 'Type']: pt.type || 'Point',
                 [lang === 'ar' ? 'الطبقة' : 'Layer']: pt.layer || 'Default',
                 [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
@@ -5552,13 +5581,17 @@ const App: React.FC = () => {
 
             const chunk = newGlobalPoints.slice(i, i + batchSize);
             await Promise.all(chunk.map(async (pt) => {
-                let street = pt.street;
+                let governorate = pt.governorate;
+                let city = pt.city;
                 let district = pt.district;
+                let street = pt.street;
 
-                const isStreetMissing = !street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف" || street === "شارع غير معروف" || street.trim() === "";
-                const isDistrictMissing = !district || district === "غير متوفر" || district === "Unknown" || district === "غير معروف" || district.trim() === "";
+                const isMissing = !street || street === "غير متوفر" || street === "Unknown" || street === "غير معروف" || street.trim() === "" ||
+                                  !district || district === "غير متوفر" || district === "Unknown" || district === "غير معروف" || district.trim() === "" ||
+                                  !governorate || governorate === "غير متوفر" ||
+                                  !city || city === "غير متوفر";
 
-                if (isStreetMissing || isDistrictMissing) {
+                if (isMissing) {
                     try {
                         let targetY = pt.y;
                         let targetX = pt.x;
@@ -5569,46 +5602,73 @@ const App: React.FC = () => {
                         }
 
                         if (targetY !== undefined && targetX !== undefined && !isNaN(targetY) && !isNaN(targetX) && (targetY !== 0 || targetX !== 0)) {
-                          const timeoutPromise = new Promise<{street: string, district: string}>((resolve) => {
-                            setTimeout(() => resolve({ street: "غير متوفر", district: "غير متوفر" }), 3500);
+                          const timeoutPromise = new Promise<{governorate?: string, city?: string, street: string, district: string}>((resolve) => {
+                            setTimeout(() => resolve({ governorate: "غير متوفر", city: "غير متوفر", street: "غير متوفر", district: "غير متوفر" }), 3500);
                           });
                           const geoData = await Promise.race([
                             getReverseGeocode(targetY, targetX, geocodingMode),
                             timeoutPromise
                           ]);
-                          if (geoData.street && geoData.street !== "غير متوفر") {
-                            street = geoData.street;
-                            pt.street = street;
-                            lastResolvedDetail = `${street}${geoData.district && geoData.district !== 'غير متوفر' ? ` (${geoData.district})` : ''}`;
+                          if (geoData.governorate && geoData.governorate !== "غير متوفر") {
+                            governorate = geoData.governorate;
+                            pt.governorate = governorate;
+                          }
+                          if (geoData.city && geoData.city !== "غير متوفر") {
+                            city = geoData.city;
+                            pt.city = city;
                           }
                           if (geoData.district && geoData.district !== "غير متوفر") {
                             district = geoData.district;
                             pt.district = district;
+                          }
+                          if (geoData.street && geoData.street !== "غير متوفر") {
+                            street = geoData.street;
+                            pt.street = street;
+                          }
+                          const parts = [governorate, city, district, street].filter(x => x && x !== 'غير متوفر' && x !== 'غير معروف');
+                          if (parts.length > 0) {
+                            lastResolvedDetail = parts.join(' ◂ ');
                           }
                         }
                     } catch (err) {
                         street = street || "";
                     }
                 } else {
-                    lastResolvedDetail = `${street}${district ? ` (${district})` : ''}`;
+                    const parts = [governorate, city, district, street].filter(x => x && x !== 'غير متوفر' && x !== 'غير معروف');
+                    if (parts.length > 0) lastResolvedDetail = parts.join(' ◂ ');
                 }
 
                 pt.attributes = { ...(pt.attributes || {}) };
                 const safeHeaders = Array.isArray(headers) ? headers : [];
 
-                const finalStreet = street && street !== "غير متوفر" ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                const finalGov = governorate && governorate !== "غير متوفر" ? governorate : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                const finalCity = city && city !== "غير متوفر" ? city : (lang === 'ar' ? 'غير معروف' : 'Unknown');
                 const finalDistrict = district && district !== "غير متوفر" ? district : (lang === 'ar' ? 'غير معروف' : 'Unknown');
+                const finalStreet = street && street !== "غير متوفر" ? street : (lang === 'ar' ? 'غير معروف' : 'Unknown');
 
-                pt.street = finalStreet;
+                pt.governorate = finalGov;
+                pt.city = finalCity;
                 pt.district = finalDistrict;
+                pt.street = finalStreet;
 
-                if (streetMappingCol) {
-                    pt.attributes[streetMappingCol] = finalStreet;
+                if (governorateMappingCol) {
+                    pt.attributes[governorateMappingCol] = finalGov;
                 } else if (safeHeaders.length > 0) {
                     safeHeaders.forEach(h => {
                       const lowerH = String(h || '').toLowerCase();
-                      if (['street', 'streetname', 'اسم الشارع', 'الشارع', 'اسم_الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
-                        pt.attributes[h] = finalStreet;
+                      if (['governorate', 'province', 'المحافظة', 'محافظة'].includes(lowerH) || h === 'المحافظة') {
+                        pt.attributes[h] = finalGov;
+                      }
+                    });
+                }
+
+                if (cityMappingCol) {
+                    pt.attributes[cityMappingCol] = finalCity;
+                } else if (safeHeaders.length > 0) {
+                    safeHeaders.forEach(h => {
+                      const lowerH = String(h || '').toLowerCase();
+                      if (['city', 'town', 'المدينة', 'مدينة'].includes(lowerH) || h === 'المدينة') {
+                        pt.attributes[h] = finalCity;
                       }
                     });
                 }
@@ -5620,6 +5680,17 @@ const App: React.FC = () => {
                       const lowerH = String(h || '').toLowerCase();
                       if (['district', 'الحي', 'اسم الحي', 'اسم_الحي'].includes(lowerH) || h === 'الحي' || h === 'اسم الحي') {
                         pt.attributes[h] = finalDistrict;
+                      }
+                    });
+                }
+
+                if (streetMappingCol) {
+                    pt.attributes[streetMappingCol] = finalStreet;
+                } else if (safeHeaders.length > 0) {
+                    safeHeaders.forEach(h => {
+                      const lowerH = String(h || '').toLowerCase();
+                      if (['street', 'streetname', 'اسم الشارع', 'الشارع', 'اسم_الشارع'].includes(lowerH) || h === 'اسم الشارع' || h === 'الشارع') {
+                        pt.attributes[h] = finalStreet;
                       }
                     });
                 }
@@ -6518,6 +6589,10 @@ const App: React.FC = () => {
                                         lang={lang}
                                         geocodingMode={geocodingMode}
                                         setGeocodingMode={setGeocodingMode}
+                                        governorateMappingCol={governorateMappingCol}
+                                        setGovernorateMappingCol={setGovernorateMappingCol}
+                                        cityMappingCol={cityMappingCol}
+                                        setCityMappingCol={setCityMappingCol}
                                         streetMappingCol={streetMappingCol}
                                         setStreetMappingCol={setStreetMappingCol}
                                         districtMappingCol={districtMappingCol}
