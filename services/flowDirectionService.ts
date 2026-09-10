@@ -480,8 +480,8 @@ export async function analyzeNetworkFlowDirections(
 
       const directedPath = p1Result.isReversed ? [...path].reverse() : path;
 
-      segments.set(pt.id, {
-        id: pt.id,
+      segments.set(String(pt.id), {
+        id: String(pt.id),
         originalFeature: pt,
         priority: 1,
         priorityLabelAr: 'الأولوية 1: منسوب الأنبوب (Pipe Elevation)',
@@ -506,8 +506,8 @@ export async function analyzeNetworkFlowDirections(
 
       const directedPath = p2Result.isReversed ? [...path].reverse() : path;
 
-      segments.set(pt.id, {
-        id: pt.id,
+      segments.set(String(pt.id), {
+        id: String(pt.id),
         originalFeature: pt,
         priority: 2,
         priorityLabelAr: 'الأولوية 2: المناهل (Upstream -> Downstream)',
@@ -524,14 +524,14 @@ export async function analyzeNetworkFlowDirections(
 
     // Tertiary Logic Queue: DEM Terrain Fallback
     linesToFetchDem.push({
-      id: pt.id,
+      id: String(pt.id),
       pt,
       startCoord: { x: startNode.x, y: startNode.y },
       endCoord: { x: endNode.x, y: endNode.y }
     });
 
-    segments.set(pt.id, {
-      id: pt.id,
+    segments.set(String(pt.id), {
+      id: String(pt.id),
       originalFeature: pt,
       priority: 3,
       priorityLabelAr: 'الأولوية 3: منسوب الأرض (DEM)',

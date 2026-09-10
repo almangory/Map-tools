@@ -216,10 +216,9 @@ export async function extractPolygonFromUploadedFile(file: File): Promise<{
       items = parsed.data || [];
     } else if (ext === 'dxf') {
       const parsed = await parseDXF(file);
-      const extracted = extractPointsFromDXF(parsed.data, 'EPSG:4326');
-      items = extracted.data || [];
+      items = extractPointsFromDXF(parsed.data) || [];
     } else if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') {
-      const parsed = await parseExcel(file, 'EPSG:4326');
+      const parsed = await parseExcel(file);
       items = parsed.data || [];
     } else {
       // Fallback try KMZ then Excel
@@ -227,7 +226,7 @@ export async function extractPolygonFromUploadedFile(file: File): Promise<{
         const parsed = await parseKMZ(file);
         items = parsed.data || [];
       } catch {
-        const parsed = await parseExcel(file, 'EPSG:4326');
+        const parsed = await parseExcel(file);
         items = parsed.data || [];
       }
     }

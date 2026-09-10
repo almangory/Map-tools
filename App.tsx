@@ -23,7 +23,7 @@ import { twMerge } from 'tailwind-merge';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell } from 'recharts';
 
-import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon, OutfallTarget } from './types';
+import { ParsedFile, ColumnMapping, GeoPoint, SplitterMode, KmlSplitMode, AnalysisItem, KmlExportOptions, SplitPolygon, OutfallTarget, CheckResultModalState } from './types';
 import { COMMON_EPSG } from './constants';
 import { parseExcel, parseDXF, extractPointsFromDXF, parseKMZ, fetchMyMapsKML, extractAllPointAttributes, extractHeadersFromPoints, parseDescriptionToAttributes, stripHtml, cleanZoneValue, isWaterPoint, isSewerPoint } from './services/parserService';
 import { transformPoints, identifyPotentialCRS, parseCoordinatesFromText, resolveGoogleMapsUrls, isShortGoogleMapsUrl, isPotentialMapLinkOrCoord } from './services/crs';
@@ -686,7 +686,7 @@ const App: React.FC = () => {
   const handleOrientNetworkTowardsMultiOutfalls = (targets?: OutfallTarget[]) => {
     const currentLines = (globalPoints || []).filter(p => p.type === 'LineString' && Array.isArray(p.path) && p.path.length >= 2);
     if (currentLines.length === 0) {
-      setErrorMessage(lang === 'ar' ? 'لا توجد خطوط شبكة لتوجيهها نحو المصبات.' : 'No network pipe lines found to orient.');
+      setStatusMessage(lang === 'ar' ? 'لا توجد خطوط شبكة لتوجيهها نحو المصبات.' : 'No network pipe lines found to orient.');
       return;
     }
 
@@ -708,7 +708,7 @@ const App: React.FC = () => {
       // If auto-detected outfalls returned and no targets were explicitly set, update outfallTargets
       if (result.outfallNodes && result.outfallNodes.length > 0) {
         if (targetsToUse.length === 0) {
-          setOutfallTargets(result.outfallNodes);
+          setOutfallTargets(result.outfallNodes as any);
         } else {
           // Merge summary data (furthest pipe info, exceeded flags) into existing targets
           setOutfallTargets(prev => prev.map(t => {
@@ -716,8 +716,8 @@ const App: React.FC = () => {
             if (match) {
               return {
                 ...t,
-                furthestPipe: match.furthestPipe,
-                isDistanceExceeded: match.isDistanceExceeded,
+                furthestPipe: (match as any).furthestPipe,
+                isDistanceExceeded: (match as any).isDistanceExceeded,
                 inflowCount: match.totalConnectedPipes
               };
             }
@@ -741,9 +741,9 @@ const App: React.FC = () => {
       setShowFlowDirection(true);
 
       const outfallsCount = result.outfallNodes?.length || 1;
-      const exceededList = result.outfallNodes?.filter(o => o.isDistanceExceeded) || [];
+      const exceededList = (result.outfallNodes || []).filter((o: any) => o.isDistanceExceeded);
       if (exceededList.length > 0) {
-        const firstEx = exceededList[0];
+        const firstEx = exceededList[0] as any;
         const distStr = firstEx.furthestPipe ? (firstEx.furthestPipe.distanceMeters >= 1000 ? `${(firstEx.furthestPipe.distanceMeters / 1000).toFixed(2)} كم` : `${firstEx.furthestPipe.distanceMeters.toFixed(0)} م`) : '';
         setStatusMessage(
           lang === 'ar'
@@ -759,7 +759,7 @@ const App: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Orient network error:', err);
-      setErrorMessage(err.message || 'Error orienting network to outfall');
+      setStatusMessage(err.message || 'Error orienting network to outfall');
     }
   };
 
@@ -2524,10 +2524,10 @@ const App: React.FC = () => {
       const compliantCount = Math.max(0, pts.length - totalIssues);
 
       const sbcIssueMap = new Map<string, string>();
-      issues.forEach(iss => {
-        const targetId = iss.elementId || iss.element1Id;
+      issues.forEach((iss: any) => {
+        const targetId = iss.elementId || iss.element1Id || iss.id;
         if (targetId) {
-          sbcIssueMap.set(String(targetId), lang === 'ar' ? (iss.messageAr || iss.titleAr) : (iss.messageEn || iss.titleEn));
+          sbcIssueMap.set(String(targetId), lang === 'ar' ? (iss.messageAr || iss.titleAr || iss.descriptionAr) : (iss.messageEn || iss.titleEn || iss.descriptionEn));
         }
       });
 
@@ -2876,7 +2876,7 @@ const App: React.FC = () => {
 
           // Automatically select and focus the first gap marker on the map
           if (gapMarkers.length > 0) {
-            setSelectedPoint(gapMarkers[0]);
+            setFocusedPoint(gapMarkers[0]);
           }
         }
 
@@ -6371,7 +6371,7 @@ const App: React.FC = () => {
                       setLayerOpacity={setLayerOpacity}
                       is3DMode={is3DMode}
                       setIs3DMode={setIs3DMode}
-                      onGenerateReport={() => handleWrapper(lang === 'ar' ? 'جاري تصدير التقرير...' : 'Generating report...', () => downloadDataPDF(globalPoints, activeFile?.filename || 'Map_Report', lang))}
+                      onGenerateReport={() => runWithLoading(lang === 'ar' ? 'جاري تصدير التقرير...' : 'Generating report...', () => downloadDataPDF(globalPoints, activeFile?.filename || 'Map_Report', lang))}
                       isGeneratingReport={loading}
                       showFlowDirection={showFlowDirection}
                       onToggleFlowDirection={setShowFlowDirection}

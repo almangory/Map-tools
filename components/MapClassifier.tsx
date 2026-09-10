@@ -9,6 +9,7 @@ import { identifyPotentialCRS, transformPoints } from '../services/crs';
 import { downloadKMZ } from '../services/kmlService';
 import { downloadDXF } from '../services/dxfExportService';
 import { downloadDataPDF } from '../services/pdfExportService';
+import { COMMON_EPSG } from '../constants';
 import * as XLSX from 'xlsx';
 
 interface Props {
@@ -26,6 +27,14 @@ interface Props {
 export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolygons, setDataId, runWithLoading, setGlobalLoading, setGlobalProgress, setGlobalStatus }: Props) => {
   const [refZones, setRefZones] = useState<GeoPoint[]>([]);
   const [classifiedResults, setClassifiedResults] = useState<ClassifiedAsset[]>([]);
+
+  const exportPoints: GeoPoint[] = React.useMemo(() => {
+    return classifiedResults.map(r => ({
+      ...r,
+      layer: r.district,
+      name: String(r.id)
+    }));
+  }, [classifiedResults]);
   const [loading, setLoading] = useState(false);
   const [zonesStatus, setZonesStatus] = useState<string>('');
   const [zonesUrl, setZonesUrl] = useState<string>('');
@@ -162,7 +171,7 @@ export const MapClassifier = ({ lang, targetAssets, setTargetAssets, setRefPolyg
                   id: idIdx !== -1 && r[idIdx] ? String(r[idIdx]) : `Asset_${i}`,
                   x: parseFloat(r[xIdx]),
                   y: parseFloat(r[yIdx]),
-                  type: 'Point',
+                  type: 'Point' as const,
                   layer: 'Excel Import',
                   originalRow: r
               };

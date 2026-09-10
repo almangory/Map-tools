@@ -448,6 +448,26 @@ const ProcessingModal = ({ lang }: { lang: 'ar' | 'en' }) => {
   );
 };
 
+export interface DataFormatterProps {
+  points: GeoPoint[];
+  headers: string[];
+  lang: 'ar' | 'en';
+  fetchStreets?: (points: GeoPoint[], headers?: string[], callback?: (pts: GeoPoint[]) => void | Promise<void>, forceFetch?: boolean) => Promise<GeoPoint[]>;
+  overlapResults?: OverlapResult[];
+  geocodingMode?: 'accurate' | 'fast';
+  setGeocodingMode?: (m: 'accurate' | 'fast') => void;
+  onVerifyMissingAttributes?: () => void;
+  onVerifyDataSyntaxErrors?: () => void;
+  onVerifyPermitSegment?: () => void;
+  onVerifyPermitNo?: () => void;
+  onVerifyYellowMissing?: () => void;
+  onVerifySbc?: () => void;
+  runWithLoading?: (msg: string, task: () => Promise<any> | any) => Promise<any>;
+  setGlobalLoading?: (l: boolean) => void;
+  setGlobalStatus?: (s: string) => void;
+  setGlobalProgress?: (p: number | null) => void;
+}
+
 export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResults, geocodingMode, setGeocodingMode, onVerifyMissingAttributes, onVerifyDataSyntaxErrors, onVerifyPermitSegment, onVerifyPermitNo, onVerifyYellowMissing, onVerifySbc, runWithLoading, setGlobalLoading, setGlobalStatus, setGlobalProgress }: DataFormatterProps) => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -890,6 +910,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
                     type: 'Point',
                     color: '#9c27b0',
                     layer: 'Intersections',
+                    description: `Intersection between ${o.id1} and ${o.id2}`,
                     attributes: {
                         'Description': `Intersection between ${o.id1} and ${o.id2}`,
                         'Type': 'Intersection'
@@ -1036,7 +1057,7 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
             
             const extracted = extractAllPointAttributes(p);
             templateFields.forEach(f => {
-                let val = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
+                let val: string | number = extracted[f] || (p.attributes ? p.attributes[f] : '') || '';
                 const fUpper = f.toUpperCase();
                 if (fUpper === 'PROJECTID' || fUpper === 'PROJECT_ID' || fUpper === 'PROJECT ID' || f === 'رقم المشروع') {
                     val = formatProjectIdForExcel(val);

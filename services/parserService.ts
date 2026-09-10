@@ -742,7 +742,7 @@ export const extractFolderHierarchy = (pm: Element): { folderPath: string[]; lay
         const tagName = String(curr.localName || curr.tagName || '').toLowerCase();
         if (tagName === 'folder' || tagName === 'networklink') {
             const nameEl = Array.from(curr.childNodes).find(n => {
-                const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                const nName = String((n as any).localName || n.nodeName || '').toLowerCase();
                 return nName === 'name';
             });
             let fName = nameEl?.textContent?.trim();
@@ -753,13 +753,13 @@ export const extractFolderHierarchy = (pm: Element): { folderPath: string[]; lay
                 if (fName) folderNames.unshift(fName);
             }
         } else if (tagName === 'document') {
-            const parentTag = String(curr.parentElement?.localName || curr.parentElement?.tagName || '').toLowerCase();
+            const parentTag = String((curr.parentElement as any)?.localName || curr.parentElement?.tagName || '').toLowerCase();
             // Include document name if it is nested or if there are multiple documents
             const isRootKml = parentTag === 'kml';
             const hasSiblingDocs = isRootKml && (curr.parentElement?.getElementsByTagName('Document').length || 0) > 1;
             if (parentTag === 'folder' || parentTag === 'document' || hasSiblingDocs) {
                 const nameEl = Array.from(curr.childNodes).find(n => {
-                    const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                    const nName = String((n as any).localName || n.nodeName || '').toLowerCase();
                     return nName === 'name';
                 });
                 let dName = nameEl?.textContent?.trim();
@@ -1342,7 +1342,7 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
 
             // Extract the NetworkLink's direct name
             const nlNameNode = Array.from(nl.childNodes).find(n => {
-                const nName = String(n.localName || n.nodeName || '').toLowerCase();
+                const nName = String((n as any).localName || n.nodeName || '').toLowerCase();
                 return nName === 'name';
             });
             let nlName = nlNameNode?.textContent?.trim() || '';

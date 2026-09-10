@@ -1,4 +1,5 @@
 import * as turf from '@turf/turf';
+import type { Feature, Polygon } from 'geojson';
 import { GeoPoint } from '../types';
 import { cleanZoneValue } from './parserService';
 
@@ -35,7 +36,7 @@ export function classifyAssetsToZones(targetAssets: GeoPoint[], refZones: GeoPoi
     } catch (e) {
       return null;
     }
-  }).filter(f => f !== null) as turf.Feature<turf.Polygon>[];
+  }).filter(f => f !== null) as Feature<Polygon>[];
 
 
   // 2. إجراء المطابقة: التحقق من كل نقطة (Asset) أين تقع

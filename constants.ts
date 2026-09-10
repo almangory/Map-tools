@@ -61,3 +61,14 @@ export const COMMON_EPSG: EPSGDefinition[] = [
 ];
 
 export const MAX_PREVIEW_ROWS = 5;
+
+export const PALETTE = [
+  '#3b82f6',
+  '#0284c7',
+  '#10b981',
+  '#f59e0b',
+  '#8b5cf6',
+  '#ec4899',
+  '#06b6d4',
+  '#d946ef'
+];

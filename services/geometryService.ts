@@ -1,5 +1,6 @@
 
 import * as turf from '@turf/turf';
+import type { Feature, Polygon, MultiPolygon } from 'geojson';
 import { GeoPoint } from '../types';
 
 /**
@@ -817,7 +818,7 @@ export const splitLinesAtIntersections = (lines: import('../types').GeoPoint[]):
                 if (!vertexMap.has(k)) {
                     vertexMap.set(k, new Set());
                 }
-                vertexMap.get(k)!.add(line.id);
+                vertexMap.get(k)!.add(String(line.id));
             });
         }
     });
@@ -1831,7 +1832,7 @@ export const generateStreetCenterlinesFromProperties = (options: {
   const degLng = 111320 * Math.cos((avgLat * Math.PI) / 180);
 
   // 2. Convert to Turf Polygons and dissolve adjacent lots into unified urban blocks
-  const turfPolys: turf.Feature<turf.Polygon>[] = [];
+  const turfPolys: Feature<Polygon>[] = [];
   polygonsToProcess.forEach((ring, idx) => {
     const coords = ring.map(pt => [pt.x, pt.y]);
     if (coords.length >= 3) {
@@ -1857,7 +1858,7 @@ export const generateStreetCenterlinesFromProperties = (options: {
   const blockPerimeters: { x: number; y: number }[][] = [];
 
   try {
-    const bufferedPolys: turf.Feature<turf.Polygon | turf.MultiPolygon>[] = [];
+    const bufferedPolys: Feature<Polygon | MultiPolygon>[] = [];
     turfPolys.forEach(tp => {
       try {
         const buf = turf.buffer(tp, 0.0002, { units: 'kilometers' }); // 0.2m buffer to close drafting seams
@@ -1867,7 +1868,7 @@ export const generateStreetCenterlinesFromProperties = (options: {
       }
     });
 
-    let unioned: turf.Feature<turf.Polygon | turf.MultiPolygon> | null = null;
+    let unioned: Feature<Polygon | MultiPolygon> | null = null;
     if (bufferedPolys.length === 1) {
       unioned = bufferedPolys[0];
     } else if (bufferedPolys.length > 1) {

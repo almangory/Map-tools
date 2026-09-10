@@ -1,4 +1,4 @@
-import { GeoPoint, GravityPipeCalculations, GravityNetworkResult, SewerHydraulicStatus } from '../types';
+import { GeoPoint, GravityPipeCalculations, GravityNetworkResult, SewerHydraulicStatus, OutfallFurthestPipeInfo } from '../types';
 import { calculateDistance } from './elevationInterpolationService';
 
 export const DEFAULT_SEWER_MANNING_N = 0.013; // Concrete, VC, uPVC, HDPE standard
@@ -684,7 +684,7 @@ export function orientNetworkTowardsOutfall(
       const matchNode = nodes.find(n => Math.hypot(n.x - pt.x, n.y - pt.y) <= nodeToleranceDeg * 3);
       if (matchNode) {
         matchNode.isExplicitOutfall = true;
-        if (!matchNode.customName) matchNode.customName = pt.description || pt.id || 'مصب محدد';
+        if (!matchNode.customName) matchNode.customName = pt.description || String(pt.id) || 'مصب محدد';
       }
     }
   });

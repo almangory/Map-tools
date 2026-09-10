@@ -50,6 +50,10 @@ export interface CadExtractionSummary {
 // Regex to identify street / road centerline / network axis layers
 export const STREET_LAYER_REGEX = /(?:road|street|cntr|center|centre|axis|corridor|cl|c-road|c-line|c_road|c_line|path|network|pipeline|water|sewer|محور|سنتر|شارع|طريق|طرق|شوارع|مسار|شبكة|أنابيب|خطوط)/i;
 
+export const isValidCoord = (num: any): num is number => {
+  return typeof num === 'number' && Number.isFinite(num) && !Number.isNaN(num);
+};
+
 // Haversine formula to compute geodesic distance in meters
 export const calculatePathLengthMeters = (pts: { x: number; y: number }[]): number => {
   if (pts.length < 2) return 0;
@@ -80,7 +84,12 @@ export const extractStreetNetworkFromDxf = async (
 ): Promise<CadExtractionSummary> => {
   const text = await file.text();
   const parser = new DxfParser();
-  const dxf = parser.parseSync(text);
+  let dxf: any;
+  try {
+    dxf = parser.parseSync(text);
+  } catch (err: any) {
+    throw new Error(`تعذر قراءة أو تحليل ملف الأوتوكاد (DXF): ${err?.message || 'تنسيق غير صالح'}`);
+  }
 
   if (!dxf || !dxf.entities || dxf.entities.length === 0) {
     throw new Error('ملف الـ DXF لا يحتوي على عناصر هندسية قابلة للقراءة.');
@@ -88,10 +97,6 @@ export const extractStreetNetworkFromDxf = async (
 
   const utmDef = COMMON_UTM_CRS[sourceCrs]?.proj4 || COMMON_UTM_CRS['EPSG:32638']?.proj4 || '+proj=utm +zone=38 +ellps=WGS84 +datum=WGS84 +units=m +no_defs';
   const wgs84 = 'EPSG:4326';
-
-  const isValidCoord = (num: any): num is number => {
-    return typeof num === 'number' && Number.isFinite(num) && !Number.isNaN(num);
-  };
 
   const transformPoint = (x: any, y: any): { x: number; y: number } | null => {
     const numX = typeof x === 'number' ? x : parseFloat(x);
@@ -144,35 +149,35 @@ export const extractStreetNetworkFromDxf = async (
     selectedLayers && selectedLayers.length > 0
       ? new Set(selectedLayers)
       : detectedStreetLayers.length > 0
-      ? new Set(detectedStreetLayers)
-      : new Set(layerStats.keys());
+        ? new Set(detectedStreetLayers)
+        : new Set(availableLayers.map(l => l.name));
 
   let lineCounter = 1;
 
-  for (let i = 0; i < dxf.entities.length; i++) {
-    const entity = dxf.entities[i];
-    const layer = entity.layer || '0';
+  for (const entity of dxf.entities) {
+    const ent: any = entity;
+    const layer = ent.layer || '0';
 
     if (!targetLayers.has(layer)) continue;
 
     let rawPts: { x: number; y: number }[] = [];
 
     // Filter ONLY LINE and LWPOLYLINE / POLYLINE / ARC / CIRCLE / SPLINE, ignoring texts, dimensions, blocks
-    if (entity.type === 'LINE') {
-      if (entity.vertices && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
-        rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
-      } else if (entity.start && entity.end) {
-        rawPts = [{ x: entity.start.x, y: entity.start.y }, { x: entity.end.x, y: entity.end.y }];
-      } else if (entity.startPoint && entity.endPoint) {
-        rawPts = [{ x: entity.startPoint.x, y: entity.startPoint.y }, { x: entity.endPoint.x, y: entity.endPoint.y }];
+    if (ent.type === 'LINE') {
+      if (ent.vertices && Array.isArray(ent.vertices) && ent.vertices.length >= 2) {
+        rawPts = ent.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
+      } else if (ent.start && ent.end) {
+        rawPts = [{ x: ent.start.x, y: ent.start.y }, { x: ent.end.x, y: ent.end.y }];
+      } else if (ent.startPoint && ent.endPoint) {
+        rawPts = [{ x: ent.startPoint.x, y: ent.startPoint.y }, { x: ent.endPoint.x, y: ent.endPoint.y }];
       }
-    } else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
-      rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
-      if (entity.shape || entity.closed) {
+    } else if ((ent.type === 'LWPOLYLINE' || ent.type === 'POLYLINE') && Array.isArray(ent.vertices) && ent.vertices.length >= 2) {
+      rawPts = ent.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
+      if (ent.shape || ent.closed) {
         if (rawPts.length >= 2) rawPts.push({ ...rawPts[0] });
       }
-    } else if (entity.type === 'ARC' && entity.center && isValidCoord(entity.center.x) && isValidCoord(entity.center.y) && isValidCoord(entity.radius)) {
-      const { center, radius, startAngle, endAngle } = entity;
+    } else if (ent.type === 'ARC' && ent.center && isValidCoord(ent.center.x) && isValidCoord(ent.center.y) && isValidCoord(ent.radius)) {
+      const { center, radius, startAngle, endAngle } = ent;
       let sAngle = isValidCoord(startAngle) ? startAngle : 0;
       let eAngle = isValidCoord(endAngle) ? endAngle : 360;
       if (eAngle <= sAngle) eAngle += 360;
@@ -186,8 +191,8 @@ export const extractStreetNetworkFromDxf = async (
           y: center.y + radius * Math.sin(theta)
         });
       }
-    } else if (entity.type === 'SPLINE') {
-      const splinePts = entity.controlPoints || entity.fitPoints || entity.points || entity.vertices || [];
+    } else if (ent.type === 'SPLINE') {
+      const splinePts = ent.controlPoints || ent.fitPoints || ent.points || ent.vertices || [];
       if (Array.isArray(splinePts) && splinePts.length >= 2) {
         rawPts = splinePts.map((v: any) => ({ x: v?.x, y: v?.y }));
       }
@@ -211,9 +216,9 @@ export const extractStreetNetworkFromDxf = async (
         const lengthM = calculatePathLengthMeters(geoVertices);
 
         extractedLines.push({
-          id: entity.handle || `STREET_${lineCounter++}`,
+          id: String(ent.handle || `STREET_${lineCounter++}`),
           layer,
-          entityType: entity.type,
+          entityType: ent.type,
           vertices: geoVertices,
           lengthMeters: lengthM
         });

@@ -5,6 +5,8 @@ import { GeoPoint } from '../types';
 import { COMMON_UTM_CRS } from './cadNetworkExtractorService';
 import { computeGravityPipeSegment, enrichGeoPointWithHydraulics, orientNetworkTowardsOutfall } from './gravitySewerEngine';
 
+const isValidCoord = (n: any): boolean => typeof n === 'number' && !isNaN(n) && isFinite(n);
+
 export interface ExtractedCadEntity {
   id: string;
   type: 'Point' | 'LineString' | 'Polygon' | 'Text';
@@ -345,14 +347,14 @@ export const analyzeSubdivisionDxf = async (
 
   // 3. Process Entities
   for (let i = 0; i < dxf.entities.length; i++) {
-    const entity = dxf.entities[i];
-    const layer = entity.layer || '0';
+    const ent: any = dxf.entities[i];
+    const layer = ent.layer || '0';
     const layerCat = layerClassifications.find(l => l.name === layer)?.category || 'other';
 
     // A. TEXT / MTEXT Processing (Street Widths & Parcel Names)
-    if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
-      const rawText = entity.text || entity.string || '';
-      const textPosRaw = entity.startPoint || entity.position || entity.insertionPoint || entity.point || entity.origin || { x: 0, y: 0 };
+    if (ent.type === 'TEXT' || ent.type === 'MTEXT') {
+      const rawText = ent.text || ent.string || '';
+      const textPosRaw = ent.startPoint || ent.position || ent.insertionPoint || ent.point || ent.origin || { x: 0, y: 0 };
       const geoPos = transformPoint(textPosRaw.x, textPosRaw.y);
       if (geoPos) {
         updateBounds(geoPos);
@@ -368,7 +370,7 @@ export const analyzeSubdivisionDxf = async (
         }
 
         otherEntities.push({
-          id: entity.handle || `TXT_${entityCounter++}`,
+          id: String(ent.handle || `TXT_${entityCounter++}`),
           type: 'Text',
           layer,
           vertices: [geoPos],
@@ -383,23 +385,23 @@ export const analyzeSubdivisionDxf = async (
     let rawPts: { x: number; y: number }[] = [];
     let isClosed = false;
 
-    if (entity.type === 'LINE') {
-      if (entity.vertices && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
-        rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
-      } else if (entity.start && entity.end) {
-        rawPts = [{ x: entity.start.x, y: entity.start.y }, { x: entity.end.x, y: entity.end.y }];
-      } else if (entity.startPoint && entity.endPoint) {
-        rawPts = [{ x: entity.startPoint.x, y: entity.startPoint.y }, { x: entity.endPoint.x, y: entity.endPoint.y }];
+    if (ent.type === 'LINE') {
+      if (ent.vertices && Array.isArray(ent.vertices) && ent.vertices.length >= 2) {
+        rawPts = ent.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
+      } else if (ent.start && ent.end) {
+        rawPts = [{ x: ent.start.x, y: ent.start.y }, { x: ent.end.x, y: ent.end.y }];
+      } else if (ent.startPoint && ent.endPoint) {
+        rawPts = [{ x: ent.startPoint.x, y: ent.startPoint.y }, { x: ent.endPoint.x, y: ent.endPoint.y }];
       }
       isClosed = false;
-    } else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && Array.isArray(entity.vertices) && entity.vertices.length >= 2) {
-      rawPts = entity.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
-      isClosed = !!(entity.shape || entity.closed || (rawPts.length >= 3 && Math.hypot((rawPts[0]?.x ?? 0) - (rawPts[rawPts.length - 1]?.x ?? 0), (rawPts[0]?.y ?? 0) - (rawPts[rawPts.length - 1]?.y ?? 0)) < 0.1));
+    } else if ((ent.type === 'LWPOLYLINE' || ent.type === 'POLYLINE') && Array.isArray(ent.vertices) && ent.vertices.length >= 2) {
+      rawPts = ent.vertices.map((v: any) => ({ x: v?.x, y: v?.y }));
+      isClosed = !!(ent.shape || ent.closed || (rawPts.length >= 3 && Math.hypot((rawPts[0]?.x ?? 0) - (rawPts[rawPts.length - 1]?.x ?? 0), (rawPts[0]?.y ?? 0) - (rawPts[rawPts.length - 1]?.y ?? 0)) < 0.1));
       if (isClosed && rawPts.length >= 2 && rawPts[0] && rawPts[rawPts.length - 1] && (rawPts[0].x !== rawPts[rawPts.length - 1].x || rawPts[0].y !== rawPts[rawPts.length - 1].y)) {
         rawPts.push({ ...rawPts[0] });
       }
-    } else if (entity.type === 'ARC' && entity.center && isValidCoord(entity.center.x) && isValidCoord(entity.center.y) && isValidCoord(entity.radius)) {
-      const { center, radius, startAngle, endAngle } = entity;
+    } else if (ent.type === 'ARC' && ent.center && isValidCoord(ent.center.x) && isValidCoord(ent.center.y) && isValidCoord(ent.radius)) {
+      const { center, radius, startAngle, endAngle } = ent;
       let sAngle = isValidCoord(startAngle) ? startAngle : 0;
       let eAngle = isValidCoord(endAngle) ? endAngle : 360;
       if (eAngle <= sAngle) eAngle += 360;
@@ -413,8 +415,8 @@ export const analyzeSubdivisionDxf = async (
           y: center.y + radius * Math.sin(theta)
         });
       }
-    } else if (entity.type === 'CIRCLE' && entity.center && isValidCoord(entity.center.x) && isValidCoord(entity.center.y) && isValidCoord(entity.radius)) {
-      const { center, radius } = entity;
+    } else if (ent.type === 'CIRCLE' && ent.center && isValidCoord(ent.center.x) && isValidCoord(ent.center.y) && isValidCoord(ent.radius)) {
+      const { center, radius } = ent;
       const numSegs = 24;
       for (let s = 0; s <= numSegs; s++) {
         const theta = (s * 2 * Math.PI) / numSegs;
@@ -424,12 +426,12 @@ export const analyzeSubdivisionDxf = async (
         });
       }
       isClosed = true;
-    } else if (entity.type === 'SPLINE') {
-      const splinePts = entity.controlPoints || entity.fitPoints || entity.points || entity.vertices || [];
+    } else if (ent.type === 'SPLINE') {
+      const splinePts = ent.controlPoints || ent.fitPoints || ent.points || ent.vertices || [];
       if (Array.isArray(splinePts) && splinePts.length >= 2) {
         rawPts = splinePts.map((v: any) => ({ x: v?.x, y: v?.y }));
       }
-      isClosed = !!entity.closed;
+      isClosed = !!ent.closed;
     }
 
     // Filter out invalid/non-finite raw points
@@ -452,7 +454,7 @@ export const analyzeSubdivisionDxf = async (
     const areaM2 = isClosed && geoVertices.length >= 3 ? calculatePolygonAreaM2(geoVertices) : undefined;
 
     const cadEntity: ExtractedCadEntity = {
-      id: entity.handle || `ENT_${entityCounter++}`,
+      id: String(ent.handle || `ENT_${entityCounter++}`),
       type: isClosed && geoVertices.length >= 3 ? 'Polygon' : 'LineString',
       layer,
       vertices: geoVertices,

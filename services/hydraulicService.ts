@@ -99,9 +99,7 @@ export function computePipeHydraulics(
     ...(pt.attributes || {})
   };
 
-  const seg = flowAnalysis?.segments?.get(String(pt.id)) || 
-              flowAnalysis?.segments?.get(pt.id as any) ||
-              (typeof pt.id === 'number' ? flowAnalysis?.segments?.get(Number(pt.id)) : undefined);
+  const seg = flowAnalysis?.segments?.get(String(pt.id));
 
   // Compute specialized Gravity Sewer Hydraulics
   const sewerCalc = computeGravityPipeSegment(pt, {

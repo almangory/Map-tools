@@ -106,10 +106,10 @@ export const downloadShapefile = async (data: GeoPoint[], filename: string = 'Ex
         polygon: 'polygons',
         line: 'lines'
       }
-    });
+    } as any);
 
     // Create a Blob and trigger download
-    const blob = new Blob([zipArrayBuffer], { type: 'application/zip' });
+    const blob = new Blob([zipArrayBuffer as any], { type: 'application/zip' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;

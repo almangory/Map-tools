@@ -1,6 +1,7 @@
 
 export interface GeoPoint {
   id: string | number;
+  name?: string; // Optional Point/Feature Name
   x: number; // Easting or Longitude
   y: number; // Northing or Latitude
   z?: number; // Elevation
@@ -8,21 +9,35 @@ export interface GeoPoint {
   attr1?: string; // Extra Attribute 1
   attr2?: string; // Extra Attribute 2
   layer?: string;
+  originalLayer?: string; // Original CAD/GIS layer before any normalization
   folderPath?: string[]; // Nested folder path from source file e.g. ['Main Folder', 'Subfolder 1', 'Subfolder 2']
   type?: 'Point' | 'LineString' | 'Polygon'; // Geometry Type
   path?: { x: number; y: number; z?: number }[]; // Array of coordinates
   color?: string; // Hex color for analysis
+  originalColor?: string; // Original hex color before highlighting/verification
   length?: number; // Calculated length in meters
   originalLength?: number; // Total length of lines before joining
   governorate?: string; // Governorate / Province name from geocoding
   city?: string; // City name from geocoding
+  diameter?: number | string; // Pipe diameter in mm or string representation
+  material?: string; // Pipe or network material (e.g. uPVC, HDPE, DI, Concrete)
+  groundLevel?: number; // Ground Level elevation in meters
+  invertLevel?: number; // Invert Level elevation in meters
   district?: string; // Neighborhood / District name from geocoding
   street?: string; // Street name from geocoding
+  permitNo?: string; // Infrastructure work permit number
+  segmentId?: string; // Segment or asset ID
+  dropManhole?: boolean; // Indicates if sewer manhole is drop type
+  dropHeightM?: number; // Drop height in meters
+  hydraulicSlope?: number; // Hydraulic slope percentage or decimal
+  flowVelocity?: number; // Flow velocity in m/s
+  isCompliantSbc?: boolean; // Flag if element complies with Saudi Building Code
   originalRow?: any[]; // The raw data from Excel/CSV
-  attributes?: Record<string, string>; // Extracted extended data
+  attributes?: Record<string, any>; // Extracted extended data (supports strings, numbers, etc.)
   iconUrl?: string; // Custom KML icon URL
   isIssue?: boolean; // Flag if element has validation issue
   issueReason?: string; // Explanation of validation issue
+  isDuplicateOverlay?: boolean; // Flag for duplicate overlay geometry
 }
 
 export interface CheckResultModalState {
@@ -60,10 +75,11 @@ export interface CADLayerInfo {
 
 export interface ParsedFile {
   filename: string;
-  type: 'excel' | 'csv' | 'dxf' | 'kmz' | 'text';
+  type: 'excel' | 'csv' | 'dxf' | 'kmz' | 'text' | 'shp' | 'kml' | 'gdb';
   headers?: string[];
   data: any[]; 
   preview: any[][];
+  points?: GeoPoint[];
   suggestedMapping?: ColumnMapping;
   layers?: CADLayerInfo[];
 }
@@ -106,6 +122,8 @@ export interface KmlExportOptions {
   maxLineLength?: number;
   optimizeForMyMaps?: boolean;
   keepOriginalDescription?: boolean;
+  removeImagesOnly?: boolean;
+  includeFolderLengths?: boolean;
   cardTheme?: 'goldenCardRtl' | 'modernLtr' | 'standard' | 'myMaps';
   badgeColumn?: string;
   highlightColumns?: string[];

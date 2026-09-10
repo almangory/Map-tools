@@ -1125,7 +1125,7 @@ export const LineDrawerTab: React.FC<Props> = ({
               id: l.id || `CAD_LINE_${Math.random().toString(36).substring(2, 7)}`,
               x: startX,
               y: startY,
-              type: 'LineString',
+              type: 'LineString' as const,
               path: linePath,
               layer: l.layer || 'CAD_Layer',
               color: (l as any).color || '#3b82f6',
@@ -1595,7 +1595,7 @@ export const LineDrawerTab: React.FC<Props> = ({
 
       if (fName.endsWith('.kmz') || fName.endsWith('.kml')) {
         const parsed = await parseKMZ(selectedFile);
-        pts = parsed.points;
+        pts = (parsed as any).points || (parsed.data as GeoPoint[]) || [];
       } else if (fName.endsWith('.dxf')) {
         const parsed = await parseDXF(selectedFile);
         pts = extractPointsFromDXF(parsed.data);
@@ -1644,19 +1644,25 @@ export const LineDrawerTab: React.FC<Props> = ({
         }
 
         try {
-          const geoInfo = await getReverseGeocode(lat, lng, geocodingMode === 'accurate');
+          const geoInfo = await getReverseGeocode(lat, lng, geocodingMode === 'accurate' ? 'accurate' : 'fast');
+          const streetVal = geoInfo.street || (pt as any).streetName || pt.street;
+          const districtVal = geoInfo.district || (pt as any).neighborhood || pt.district;
+          const cityVal = (geoInfo as any).city || (pt as any).city;
+
           updated.push({
             ...pt,
-            streetName: geoInfo.street || pt.streetName,
-            neighborhood: geoInfo.district || pt.neighborhood,
-            city: geoInfo.city || pt.city,
-            governorate: geoInfo.governorate || pt.governorate,
+            streetName: geoInfo.street || (pt as any).streetName || pt.street,
+            neighborhood: geoInfo.district || (pt as any).neighborhood || pt.district,
+            city: geoInfo.city || (pt as any).city,
+            governorate: geoInfo.governorate || (pt as any).governorate,
+            street: streetVal,
+            district: districtVal,
             attributes: {
               ...pt.attributes,
               ...(geoInfo.governorate ? { 'Governorate': geoInfo.governorate, 'المحافظة': geoInfo.governorate } : {}),
-              ...(geoInfo.city ? { 'City': geoInfo.city, 'المدينة': geoInfo.city } : {}),
-              ...(geoInfo.district ? { 'District': geoInfo.district, 'الحي': geoInfo.district } : {}),
-              ...(geoInfo.street ? { 'Street': geoInfo.street, 'الشارع': geoInfo.street } : {})
+              ...((geoInfo.city || cityVal) ? { 'City': geoInfo.city || cityVal, 'المدينة': geoInfo.city || cityVal } : {}),
+              ...((geoInfo.district || districtVal) ? { 'District': geoInfo.district || districtVal, 'الحي': geoInfo.district || districtVal } : {}),
+              ...((geoInfo.street || streetVal) ? { 'Street': geoInfo.street || streetVal, 'الشارع': geoInfo.street || streetVal } : {})
             }
           });
         } catch {

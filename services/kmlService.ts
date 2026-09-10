@@ -359,7 +359,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
     const colorHex = getEffectiveColor(pt, options);
     const type = pt.type || 'Point';
     const isPolygon = type === 'Polygon';
-    const isLine = !isPolygon && (type === 'LineString' || type === 'Polyline' || type === 'MultiLineString' || (pt.path && pt.path.length >= 2));
+    const isLine = !isPolygon && (type === 'LineString' || (type as string) === 'Polyline' || (type as string) === 'MultiLineString' || (pt.path && pt.path.length >= 2));
     
     const { r, g, b, cleanHex, hasColor } = getKMLColorParts(colorHex);
     const iconHash = pt.iconUrl ? Math.abs(pt.iconUrl.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)).toString(16) : 'default';
@@ -472,7 +472,7 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
         const colorHex = getEffectiveColor(pt, options);
         const type = pt.type || 'Point';
         const isPolygon = type === 'Polygon';
-        const isLine = !isPolygon && (type === 'LineString' || type === 'Polyline' || type === 'MultiLineString' || (pt.path && pt.path.length >= 2));
+        const isLine = !isPolygon && (type === 'LineString' || (type as string) === 'Polyline' || (type as string) === 'MultiLineString' || (pt.path && pt.path.length >= 2));
         
         const { r, g, b, cleanHex, hasColor } = getKMLColorParts(colorHex);
         const iconHash = pt.iconUrl ? Math.abs(pt.iconUrl.split('').reduce((a,b)=>{a=((a<<5)-a)+b.charCodeAt(0);return a&a},0)).toString(16) : 'default';
