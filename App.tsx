@@ -9170,7 +9170,7 @@ const App: React.FC = () => {
                    <span>{lang === 'ar' ? 'تلوين المكرر بالأسود ⬛' : 'Color Black ⬛'}</span>
                  </button>
                  <button
-                   onClick={handleRemoveDuplicates}
+                   onClick={handleResolveDuplicates}
                    className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl transition-all flex items-center gap-1.5"
                  >
                    <Trash2 className="w-3.5 h-3.5" />
