@@ -60,6 +60,7 @@ import { GeotaggedPhotoModal } from './components/GeotaggedPhotoModal';
 import { FieldInspectionSheetModal } from './components/FieldInspectionSheetModal';
 import { TopologyCleanerModal } from './components/TopologyCleanerModal';
 import { ExcelStreetDistrictEnricher } from './components/ExcelStreetDistrictEnricher';
+import { GeocodingHierarchySelector, GeocodingHierarchyOptions } from './components/GeocodingHierarchySelector';
 import { getSampleInfrastructureProject } from './services/sampleProjectService';
 import { translations, Language } from './translations';
 import JSZipModule from 'jszip';
@@ -566,6 +567,13 @@ const App: React.FC = () => {
   const [duplicateTolerance, setDuplicateTolerance] = useState<number>(() => loadSavedPreference('duplicateTolerance', 0.5));
   const [overlapResults, setOverlapResults] = useState<OverlapResult[] | null>(null);
   const [geocodingMode, setGeocodingMode] = useState<'accurate' | 'fast'>(() => loadSavedPreference('geocodingMode', 'accurate'));
+  const [geocodingOptions, setGeocodingOptions] = useState<GeocodingHierarchyOptions>({
+    includeGovernorate: true,
+    includeCity: true,
+    includeDistrict: true,
+    includeStreet: true,
+    placeBeforeDistrictStreet: true
+  });
   const [mobileView, setMobileView] = useState<'panel' | 'map'>('panel');
   const [showOverlapModal, setShowOverlapModal] = useState(false);
   const [overlapModalType, setOverlapModalType] = useState<'duplicates' | 'intersections'>('duplicates');
@@ -618,7 +626,7 @@ const App: React.FC = () => {
   const [lineDrawerVertices, setLineDrawerVertices] = useState<{ x: number; y: number }[]>([]);
   const [lineDrawerConfig, setLineDrawerConfig] = useState<import('./components/LineDrawerTab').LineConfig>({
     name: 'LINE_1',
-    layer: 'شبكة المياه',
+    layer: 'Polyline',
     color: '#3b82f6',
     width: 4,
     diameter: '160',
@@ -869,7 +877,8 @@ const App: React.FC = () => {
       return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
     }
     if (activeTab === 'line-drawer') {
-      return [...globalPoints, ...lineDrawerDrawnLines];
+      const source = (lineDrawerDrawnLines && lineDrawerDrawnLines.length > 0) ? lineDrawerDrawnLines : globalPoints;
+      return (source || []).filter(p => p && (p.type === 'LineString' || (Array.isArray(p.path) && p.path.length >= 2)));
     }
 
     return globalPoints;
@@ -2946,7 +2955,7 @@ const App: React.FC = () => {
     }
 
     if (gaps.length === 0) {
-      alert(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
+      setError(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
       return;
     }
 
@@ -2994,7 +3003,7 @@ const App: React.FC = () => {
     }
 
     if (gaps.length === 0) {
-      alert(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
+      setError(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
       return;
     }
 
@@ -3011,7 +3020,7 @@ const App: React.FC = () => {
     }
 
     if (gaps.length === 0) {
-      alert(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
+      setError(lang === 'ar' ? 'لم يتم العثور على أي فجوات شبكية لتصديرها!' : 'No network gaps found to export!');
       return;
     }
 
@@ -4759,8 +4768,10 @@ const App: React.FC = () => {
             const rowObj: Record<string, any> = {
                 [lang === 'ar' ? 'اسم الملف' : 'File Name']: activeFile?.filename || '',
                 [lang === 'ar' ? 'المعرف' : 'ID']: pt.id,
-                [lang === 'ar' ? 'الشارع' : 'Street']: pt.street || '',
-                [lang === 'ar' ? 'الحي' : 'District']: pt.district || '',
+                [lang === 'ar' ? 'المحافظة' : 'Governorate']: pt.governorate || (pt.attributes?.['المحافظة'] || pt.attributes?.['Governorate'] || ''),
+                [lang === 'ar' ? 'المدينة' : 'City']: pt.city || (pt.attributes?.['المدينة'] || pt.attributes?.['City'] || ''),
+                [lang === 'ar' ? 'الحي' : 'District']: pt.district || (pt.attributes?.['الحي'] || pt.attributes?.['District'] || ''),
+                [lang === 'ar' ? 'الشارع' : 'Street']: pt.street || (pt.attributes?.['الشارع'] || pt.attributes?.['Street'] || ''),
                 [lang === 'ar' ? 'النوع' : 'Type']: pt.type || 'Point',
                 [lang === 'ar' ? 'الطبقة' : 'Layer']: pt.layer || 'Default',
                 [lang === 'ar' ? 'اللون' : 'Color']: pt.color || '#dcb13c',
@@ -4881,6 +4892,14 @@ const App: React.FC = () => {
         let lastResolvedDetail = "";
         const batchSize = geocodingMode === 'accurate' ? 2 : 5;
 
+        const {
+          includeGovernorate,
+          includeCity,
+          includeDistrict,
+          includeStreet,
+          placeBeforeDistrictStreet
+        } = geocodingOptions;
+
         for (let i = 0; i < total; i += batchSize) {
             const processed = Math.min(i + batchSize, total);
             const pct = Math.round(25 + ((processed / total) * 70));
@@ -4890,7 +4909,17 @@ const App: React.FC = () => {
             await Promise.all(chunk.map(async (pt, chunkIdx) => {
                 const idx = i + chunkIdx;
 
-                if (!pt.street || pt.street === "شارع غير معروف" || pt.street === "غير متوفر") {
+                const hasGov = pt.governorate && pt.governorate !== 'غير متوفر' && pt.governorate !== 'غير معروف' && pt.governorate !== 'Unknown';
+                const hasCity = pt.city && pt.city !== 'غير متوفر' && pt.city !== 'غير معروف' && pt.city !== 'Unknown';
+                const hasDist = pt.district && pt.district !== 'غير متوفر' && pt.district !== 'غير معروف' && pt.district !== 'Unknown';
+                const hasStr = pt.street && pt.street !== 'غير متوفر' && pt.street !== 'غير معروف' && pt.street !== 'شارع غير معروف' && pt.street !== 'Unknown';
+
+                const needsGov = includeGovernorate && !hasGov;
+                const needsCity = includeCity && !hasCity;
+                const needsDist = includeDistrict && !hasDist;
+                const needsStr = includeStreet && !hasStr;
+
+                if (needsGov || needsCity || needsDist || needsStr) {
                     try {
                         let targetY = pt.y;
                         let targetX = pt.x;
@@ -4900,31 +4929,61 @@ const App: React.FC = () => {
                         }
                         if (targetY && targetX) {
                           const geoData = await getReverseGeocode(targetY, targetX, geocodingMode);
+                          const finalGov = (includeGovernorate && geoData.governorate && geoData.governorate !== "غير متوفر") ? geoData.governorate : pt.governorate;
+                          const finalCity = (includeCity && geoData.city && geoData.city !== "غير متوفر") ? geoData.city : pt.city;
+                          const finalDist = (includeDistrict && geoData.district && geoData.district !== "غير متوفر") ? geoData.district : pt.district;
+                          const finalStr = (includeStreet && geoData.street && geoData.street !== "غير متوفر") ? geoData.street : pt.street;
+
                           updated[idx] = { 
                             ...pt, 
-                            governorate: geoData.governorate || pt.governorate,
-                            city: geoData.city || pt.city,
-                            street: geoData.street, 
-                            district: geoData.district 
+                            governorate: finalGov,
+                            city: finalCity,
+                            district: finalDist,
+                            street: finalStr,
+                            streetName: finalStr || pt.streetName,
+                            neighborhood: finalDist || pt.neighborhood,
+                            attributes: {
+                              ...(pt.attributes || {}),
+                              ...(finalGov ? { 'المحافظة': finalGov, 'Governorate': finalGov } : {}),
+                              ...(finalCity ? { 'المدينة': finalCity, 'City': finalCity } : {}),
+                              ...(finalDist ? { 'الحي': finalDist, 'District': finalDist } : {}),
+                              ...(finalStr ? { 'الشارع': finalStr, 'Street': finalStr } : {})
+                            }
                           };
-                          if (geoData.street && geoData.street !== "غير متوفر") {
+
+                          const parts = [
+                            finalGov && finalGov !== 'غير متوفر' ? `المحافظة: ${finalGov}` : null,
+                            finalCity && finalCity !== 'غير متوفر' ? `المدينة: ${finalCity}` : null,
+                            finalDist && finalDist !== 'غير متوفر' ? `الحي: ${finalDist}` : null,
+                            finalStr && finalStr !== 'غير متوفر' ? `الشارع: ${finalStr}` : null
+                          ].filter(Boolean);
+
+                          if (parts.length > 0) {
                             successCount++;
-                            lastResolvedDetail = `${geoData.street}${geoData.district && geoData.district !== 'غير متوفر' ? ` (${geoData.district})` : ''}`;
+                            lastResolvedDetail = parts.join(' ◂ ');
                           }
                         }
                     } catch (err) {}
                 } else {
-                    lastResolvedDetail = `${pt.street}${pt.district ? ` (${pt.district})` : ''}`;
+                    const parts = [
+                      pt.governorate && pt.governorate !== 'غير متوفر' ? `المحافظة: ${pt.governorate}` : null,
+                      pt.city && pt.city !== 'غير متوفر' ? `المدينة: ${pt.city}` : null,
+                      pt.district && pt.district !== 'غير متوفر' ? `الحي: ${pt.district}` : null,
+                      pt.street && pt.street !== 'غير متوفر' ? `الشارع: ${pt.street}` : null
+                    ].filter(Boolean);
+                    if (parts.length > 0) {
+                      lastResolvedDetail = parts.join(' ◂ ');
+                    }
                 }
             }));
 
             const detailMsg = lastResolvedDetail 
-              ? (lang === 'ar' ? `\n📍 الشارع المكتشف: ${lastResolvedDetail}` : `\n📍 Resolved: ${lastResolvedDetail}`) 
+              ? (lang === 'ar' ? `\n📍 العنوان المكتشف: ${lastResolvedDetail}` : `\n📍 Resolved: ${lastResolvedDetail}`) 
               : '';
 
             setStatusMessage(lang === 'ar'
-              ? `جاري عنونة البيانات ومطابقة الشوارع (${processed} من ${total}) [${pct}%]${detailMsg}`
-              : `Geocoding data & matching streets (${processed} of ${total}) [${pct}%]${detailMsg}`
+              ? `جاري عنونة البيانات ومطابقة العناوين (${processed} من ${total}) [${pct}%]${detailMsg}`
+              : `Geocoding data & matching addresses (${processed} of ${total}) [${pct}%]${detailMsg}`
             );
 
             setGlobalPoints([...updated]);
@@ -4933,10 +4992,74 @@ const App: React.FC = () => {
             }
         }
 
+        // Synchronize activeFile headers & rows if activeFile is present
+        if (activeFile && activeFile.headers) {
+          const originalHeaders = [...activeFile.headers];
+          const govHeader = lang === 'ar' ? 'المحافظة' : 'Governorate';
+          const cityHeader = lang === 'ar' ? 'المدينة' : 'City';
+          const distHeader = lang === 'ar' ? 'الحي' : 'District';
+          const strHeader = lang === 'ar' ? 'الشارع' : 'Street';
+
+          const districtStreetNames = [
+            distHeader, strHeader, 'الحي', 'الشارع', 'اسم الحي', 'اسم الشارع', 'district', 'street'
+          ].map(s => s.toLowerCase());
+
+          const firstDistStreetIdx = originalHeaders.findIndex(h => 
+            districtStreetNames.includes(String(h).toLowerCase())
+          );
+
+          const colsToAdd: string[] = [];
+          if (includeGovernorate && !originalHeaders.includes(govHeader)) colsToAdd.push(govHeader);
+          if (includeCity && !originalHeaders.includes(cityHeader)) colsToAdd.push(cityHeader);
+          
+          const endColsToAdd: string[] = [];
+          if (includeDistrict && !originalHeaders.includes(distHeader)) endColsToAdd.push(distHeader);
+          if (includeStreet && !originalHeaders.includes(strHeader)) endColsToAdd.push(strHeader);
+
+          let newHeaders: string[] = [];
+          if (placeBeforeDistrictStreet && firstDistStreetIdx !== -1 && colsToAdd.length > 0) {
+            newHeaders = [
+              ...originalHeaders.slice(0, firstDistStreetIdx),
+              ...colsToAdd,
+              ...originalHeaders.slice(firstDistStreetIdx),
+              ...endColsToAdd
+            ];
+          } else {
+            newHeaders = [
+              ...originalHeaders,
+              ...colsToAdd,
+              ...endColsToAdd
+            ];
+          }
+
+          const newRows = (activeFile.data || []).map((row: any[], rowIdx: number) => {
+            const pt = updated[rowIdx];
+            const rowMap: Record<string, any> = {};
+            originalHeaders.forEach((h, idx) => {
+              rowMap[h] = row[idx] !== undefined ? row[idx] : '';
+            });
+            if (pt) {
+              if (includeGovernorate && pt.governorate) rowMap[govHeader] = pt.governorate;
+              if (includeCity && pt.city) rowMap[cityHeader] = pt.city;
+              if (includeDistrict && pt.district) rowMap[distHeader] = pt.district;
+              if (includeStreet && pt.street) rowMap[strHeader] = pt.street;
+            }
+            return newHeaders.map(h => rowMap[h] !== undefined ? rowMap[h] : '');
+          });
+
+          setActiveFile({
+            ...activeFile,
+            headers: newHeaders,
+            data: newRows
+          });
+
+          setSelectedHeaders(prev => Array.from(new Set([...prev, ...newHeaders])));
+        }
+
         setProgressPercent(100);
         setStatusMessage(lang === 'ar'
-          ? `تم جلب وتحديث الشوارع بنجاح! (${successCount} عنوان تم تحديده 🗺️)`
-          : `Fetched & updated streets successfully! (${successCount} addresses resolved 🗺️)`
+          ? `تم جلب وتحديث العناوين بنجاح! (${successCount} موقع تم إثرائه 🗺️)`
+          : `Fetched & updated addresses successfully! (${successCount} locations resolved 🗺️)`
         );
         await new Promise(r => setTimeout(r, 800));
     } catch (e: any) {
@@ -5125,7 +5248,7 @@ const App: React.FC = () => {
         });
       } else if (activeFile.type === 'dxf') {
         points = extractPointsFromDXF(activeFile.data);
-      } else if (activeFile.type === 'kmz') {
+      } else if (Array.isArray(activeFile.data)) {
         points = activeFile.data;
       }
 
@@ -5148,6 +5271,23 @@ const App: React.FC = () => {
     };
     processData();
   }, [activeFile, mapping, sourceEPSG, swapXY, refreshKey]);
+
+  // عند الانتقال إلى قسم تنسيق البيانات، استعادة الألوان الأصلية للخطوط كما في الملف المصدر وإلغاء أي تلوين تدقيقي مؤقت
+  useEffect(() => {
+    if (activeTab === 'attribute-formatter') {
+      setShowIssuesOnly(false);
+      setOverlapResults(null);
+      setGlobalPoints(prev => {
+        const needsRestore = prev.some(pt => pt.isIssue || ((pt as any).originalColor && pt.color !== (pt as any).originalColor));
+        if (!needsRestore) return prev;
+        return prev.map(pt => ({
+          ...pt,
+          color: (pt as any).originalColor || pt.color,
+          isIssue: false
+        }));
+      });
+    }
+  }, [activeTab]);
 
   const handleRefreshPreview = () => {
     setLoading(true);
@@ -5222,6 +5362,11 @@ const App: React.FC = () => {
       setStatusMessage(lang === 'ar' ? 'جاري تجهيز البيانات وعرضها على الخريطة...' : 'Preparing data and rendering on map...');
       await new Promise<void>(r => setTimeout(r, 80));
 
+      setOverlapResults(null);
+      setActiveIssueItems([]);
+      setShowIssuesOnly(false);
+      setCheckResultModal(null);
+      setAutoAlertInfo(null);
       setActiveFile(result);
       const newFileId = `${result.filename}-${Date.now()}`;
       setDataId(newFileId);
@@ -5362,6 +5507,11 @@ const App: React.FC = () => {
         }
       });
 
+      setOverlapResults(null);
+      setActiveIssueItems([]);
+      setShowIssuesOnly(false);
+      setCheckResultModal(null);
+      setAutoAlertInfo(null);
       setActiveFile(result);
       let parsedPoints: GeoPoint[] = result.data;
       setGlobalPoints(parsedPoints);
@@ -5478,7 +5628,7 @@ const App: React.FC = () => {
       if (exportStyle === 'single') {
         const safeDocName = docName.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         const allPoints = groups.flatMap(g => g.points);
-        const stylesXML = generateKMLStyles(allPoints);
+        const stylesXML = generateKMLStyles(allPoints, { mode: 'none', optimizeForMyMaps, keepOriginalDescription, removeImagesOnly });
         const kmlHeader = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${safeDocName}</name>\n${stylesXML}`;
         const kmlFooter = `</Document></kml>`;
         const chunks: string[] = [kmlHeader];
@@ -5853,8 +6003,8 @@ const App: React.FC = () => {
         else if (fName.endsWith('.dxf')) result = await parseDXF(selectedFile, onProg);
         else throw new Error(t.errors.unsupported);
         let pts: GeoPoint[] = [];
-        if (result.type === 'kmz') pts = result.data;
-        else if (result.type === 'dxf') pts = extractPointsFromDXF(result.data);
+        if (result.type === 'dxf') pts = extractPointsFromDXF(result.data);
+        else if (Array.isArray(result.data)) pts = result.data;
         const poly = pts.find(p => p.type === 'Polygon' || p.type === 'LineString');
         if (poly && poly.path) {
           if (activeTab === 'splitter' && splitMode === 'spatial') {
@@ -8329,15 +8479,16 @@ const App: React.FC = () => {
                               {lang === 'ar' ? 'سيتم تقسيم العناصر وتصنيفها في مجلدات منفصلة بناءً على اسم الشارع الجغرافي الخاص بها.' : 'Elements will be grouped into separate folders based on their geographic street name.'}
                             </p>
 
-                            <GeocodingModeSelector mode={geocodingMode} setMode={setGeocodingMode} lang={lang} />
-
-                            <button
-                              onClick={handleReverseGeocodeGlobal}
-                              className="w-full bg-[#0e3f53] border-2 border-accent/20 text-accent font-black py-4 rounded-2xl flex items-center justify-center gap-3 shadow-xl hover:bg-accent hover:text-primary transition-all text-xs group"
-                            >
-                               <Sparkles className="w-5 h-5 group-hover:animate-pulse" />
-                               {lang === 'ar' ? 'تحديث/جلب أسماء الشوارع للبيانات' : 'Fetch/Update Street Names'}
-                            </button>
+                            <GeocodingHierarchySelector
+                              options={geocodingOptions}
+                              onChangeOptions={setGeocodingOptions}
+                              geocodingMode={geocodingMode}
+                              setGeocodingMode={setGeocodingMode}
+                              onExecuteFetch={handleReverseGeocodeGlobal}
+                              isLoading={loading}
+                              itemCount={globalPoints.length}
+                              lang={lang}
+                            />
 
                             <p className="text-[10px] text-white/40 font-bold text-center">
                               {lang === 'ar' ? 'ملاحظة: إذا لم تكن البيانات تحتوي على أسماء شوارع مسبقاً، يرجى النقر على الزر أعلاه لجلبها.' : 'Note: If the data does not already have street names, please click the button above to fetch them.'}
