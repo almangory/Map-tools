@@ -45,6 +45,7 @@ import { PermitLengthChart } from './components/PermitLengthChart';
 import { FileComparator } from './components/FileComparator';
 import { LineDrawerTab } from './components/LineDrawerTab';
 import { MapClassifier } from './components/MapClassifier';
+import type { ClassifiedAsset } from './services/turfService';
 import { MapViewer } from './components/MapViewer';
 import { SegmentVaultManager } from './components/SegmentVaultManager';
 import { SbcValidator, performSbcAuditEngine } from './components/SbcValidator';
@@ -556,6 +557,9 @@ const App: React.FC = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [dataId, setDataId] = useState<string>('');
   const [classifierRefZones, setClassifierRefZones] = useState<GeoPoint[]>([]);
+  const [classifierTargetAssets, setClassifierTargetAssets] = useState<GeoPoint[]>([]);
+  const [classifierClassifiedAssets, setClassifierClassifiedAssets] = useState<ClassifiedAsset[]>([]);
+  const [classifierShowRefZonesOnMap, setClassifierShowRefZonesOnMap] = useState<boolean>(true);
   const [uploadSourceMode, setUploadSourceMode] = useState<'file' | 'link'>('file');
   const [segmentFilterQuery, setSegmentFilterQuery] = useState('');
   const [permitFilterQuery, setPermitFilterQuery] = useState('');
@@ -870,8 +874,10 @@ const App: React.FC = () => {
     }
 
     if (activeTab === 'classifier') {
-      // Render polygons (zones) first, then points (assets) on top
-      return [...classifierRefZones, ...globalPoints];
+      // قسم مصنف الخرائط معزول كلياً عن globalPoints وعن باقي الأقسام
+      const zonesToShow = classifierShowRefZonesOnMap ? classifierRefZones : [];
+      const assetsToShow = classifierClassifiedAssets.length > 0 ? classifierClassifiedAssets : classifierTargetAssets;
+      return [...zonesToShow, ...assetsToShow];
     }
     if (activeTab === 'polygon-converter' || (activeTab === 'splitter' && splitMode === 'spatial')) {
       return [...globalPoints, ...(boundaryPolygon ? [boundaryPolygon] : [])];
@@ -882,7 +888,7 @@ const App: React.FC = () => {
     }
 
     return globalPoints;
-  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones, lineDrawerDrawnLines]);
+  }, [activeTab, splitMode, plannedStreets, boundaryPolygon, globalPoints, splitPolygons, classifierRefZones, classifierTargetAssets, classifierClassifiedAssets, classifierShowRefZonesOnMap, lineDrawerDrawnLines]);
 
   useEffect(() => {
     if (!showFlowDirection || !displayPoints || displayPoints.length === 0) {
@@ -8666,9 +8672,21 @@ const App: React.FC = () => {
                 {activeTab === 'classifier' && (
                   <MapClassifier
                     lang={lang}
-                    targetAssets={globalPoints}
-                    setTargetAssets={setGlobalPoints}
+                    refZones={classifierRefZones}
                     setRefPolygons={setClassifierRefZones}
+                    targetAssets={classifierTargetAssets}
+                    setTargetAssets={setClassifierTargetAssets}
+                    classifiedResults={classifierClassifiedAssets}
+                    setClassifiedResults={setClassifierClassifiedAssets}
+                    showZonesOnMap={classifierShowRefZonesOnMap}
+                    setShowZonesOnMap={setClassifierShowRefZonesOnMap}
+                    onClearSection={() => {
+                      setClassifierRefZones([]);
+                      setClassifierTargetAssets([]);
+                      setClassifierClassifiedAssets([]);
+                      setClassifierShowRefZonesOnMap(true);
+                      setDataId(`classifier-reset-${Date.now()}`);
+                    }}
                     setDataId={setDataId}
                     runWithLoading={runWithLoading}
                     setGlobalLoading={setLoading}
