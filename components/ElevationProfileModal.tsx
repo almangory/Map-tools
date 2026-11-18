@@ -225,7 +225,7 @@ export const ElevationProfileModal: React.FC<ElevationProfileModalProps> = ({
           }
         });
       } catch (err) {
-        console.error('Error processing combined elevation profile:', err);
+        console.warn('Warning processing combined elevation profile:', err);
       } finally {
         setLoading(false);
       }

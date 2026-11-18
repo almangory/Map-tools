@@ -1,4 +1,7 @@
+import proj4 from 'proj4';
 import { GeoPoint } from '../types';
+import { COMMON_EPSG } from '../constants';
+import { identifyPotentialCRS } from './crs';
 
 export interface InterpolationResult {
   updatedFeature: GeoPoint;
@@ -12,9 +15,18 @@ export interface InterpolationResult {
 }
 
 /**
- * Calculates Haversine distance in meters between two coordinates (lon, lat)
+ * Calculates distance in meters between two coordinates.
+ * Handles both WGS84 degrees (using Haversine) and projected UTM meters (using Euclidean).
  */
 export const calculateDistance = (p1: { x: number; y: number }, p2: { x: number; y: number }): number => {
+  if (!p1 || !p2) return 0;
+  // If coordinates are in projected meters (e.g. UTM)
+  if (Math.abs(p1.x) > 180 || Math.abs(p1.y) > 90 || Math.abs(p2.x) > 180 || Math.abs(p2.y) > 90) {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    return Math.hypot(dx, dy);
+  }
+
   const R = 6371e3; // Earth radius in meters
   const lat1 = (p1.y * Math.PI) / 180;
   const lat2 = (p2.y * Math.PI) / 180;
@@ -24,8 +36,64 @@ export const calculateDistance = (p1: { x: number; y: number }, p2: { x: number;
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const clampedA = Math.min(1, Math.max(0, a));
+  const c = 2 * Math.atan2(Math.sqrt(clampedA), Math.sqrt(1 - clampedA));
   return R * c;
+};
+
+/**
+ * Safely converts any point (projected or geographic) to WGS84 degree { lat, lon }
+ */
+export const toWGS84Coord = (
+  p: { x: number; y: number },
+  preferredCrs?: string | null
+): { lat: number; lon: number } | null => {
+  if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || isNaN(p.x) || isNaN(p.y)) {
+    return null;
+  }
+
+  // Already in standard WGS84 degree range (x=lon, y=lat)
+  if (Math.abs(p.x) <= 180 && Math.abs(p.y) <= 90) {
+    // Check if inverted: x is latitude [10..40] and y is longitude [30..65] (Saudi/MENA region)
+    if (p.x >= 10 && p.x <= 40 && p.y >= 30 && p.y <= 65) {
+      return { lat: p.x, lon: p.y };
+    }
+    return { lat: p.y, lon: p.x };
+  }
+
+  // If inverted where x was lat (<= 90) and y was lon (> 90 && <= 180)
+  if (Math.abs(p.x) <= 90 && Math.abs(p.y) <= 180) {
+    return { lat: p.x, lon: p.y };
+  }
+
+  // If projected coordinates (like UTM or Ain el Abd)
+  const candidateCodes = preferredCrs ? [preferredCrs] : [
+    'EPSG:32638', // UTM 38N WGS84
+    'EPSG:32637', // UTM 37N WGS84
+    'EPSG:32639', // UTM 39N WGS84
+    'EPSG:20438', // Ain el Abd 38N
+    'EPSG:20437', // Ain el Abd 37N
+    'EPSG:20439'  // Ain el Abd 39N
+  ];
+
+  for (const code of candidateCodes) {
+    const epsg = COMMON_EPSG.find((e) => e.code === code);
+    if (!epsg) continue;
+    try {
+      const [lon, lat] = proj4(epsg.def, '+proj=longlat +datum=WGS84 +no_defs', [p.x, p.y]);
+      if (
+        typeof lat === 'number' && Number.isFinite(lat) &&
+        typeof lon === 'number' && Number.isFinite(lon) &&
+        lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180
+      ) {
+        return { lat, lon };
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  return null;
 };
 
 /**
@@ -101,50 +169,246 @@ export const extractKnownElevationsFromDataset = (
   return known;
 };
 
+// Regional terrain elevation fallback for Saudi Arabia / MENA
+export function getRegionalFallbackElevation(lat: number, lon: number): number {
+  if (typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) return 150;
+  // Coastal West (Jeddah / Yanbu / Jizan coastline)
+  if (lon >= 37 && lon <= 40 && lat >= 16 && lat <= 26) {
+    if (lon <= 39.2) return 12; // Coastal Red Sea plain
+    if (lat <= 22 && lon >= 40 && lon <= 43) return 1650; // Hijaz / Asir mountain range
+  }
+  // Asir / Abha / Khamis Mushait highlands
+  if (lat >= 17.5 && lat <= 19.5 && lon >= 41.5 && lon <= 43.5) {
+    return 2150;
+  }
+  // Taif highlands
+  if (lat >= 21.1 && lat <= 21.5 && lon >= 40.2 && lon <= 40.6) {
+    return 1750;
+  }
+  // Coastal East (Dammam / Khobar / Jubail / Gulf coastline)
+  if (lon >= 49.5 && lon <= 51 && lat >= 25.5 && lat <= 28) {
+    return 8; // Arabian Gulf coastal plain
+  }
+  // Riyadh & Central Najd Plateau
+  if (lat >= 24.0 && lat <= 25.5 && lon >= 46.0 && lon <= 47.5) {
+    return 612; // Riyadh average elevation
+  }
+  // Qassim Plateau
+  if (lat >= 25.8 && lat <= 26.8 && lon >= 43.0 && lon <= 44.8) {
+    return 640;
+  }
+  // Tabuk Basin
+  if (lat >= 28.0 && lat <= 29.0 && lon >= 36.0 && lon <= 37.5) {
+    return 760;
+  }
+  // General Arabian Peninsula inland plateau
+  if (lat >= 16 && lat <= 32 && lon >= 35 && lon <= 55) {
+    return 520;
+  }
+  // Global default
+  return 150;
+}
+
+// Memory cache to avoid duplicate network queries
+const elevationCache = new Map<string, number>();
+
 /**
- * Fetches topographic elevation data from Open-Meteo API for given path vertices
+ * Fetches topographic elevation data from Open-Meteo API with fallback and caching.
+ * Normalizes input coordinates from UTM or WGS84, and gracefully handles network/API errors.
  */
 export const fetchTopographicElevations = async (
-  path: { x: number; y: number }[]
+  path: { x: number; y: number }[],
+  sourceCrs?: string | null
 ): Promise<number[]> => {
   if (!path || path.length === 0) return [];
 
   try {
-    // Sample path up to 100 points to stay within URL limits
-    const samplePath =
-      path.length > 100
-        ? path.filter((_, i) => i % Math.ceil(path.length / 100) === 0)
-        : [...path];
-
-    if (samplePath[samplePath.length - 1] !== path[path.length - 1]) {
-      samplePath.push(path[path.length - 1]);
+    // 1. Detect CRS if projected
+    let detectedCrs = sourceCrs;
+    if (!detectedCrs) {
+      try {
+        const sampleGeo: GeoPoint[] = path.slice(0, 10).map((p, idx) => ({
+          id: `sample_${idx}`,
+          x: p.x,
+          y: p.y,
+          type: 'Point'
+        }));
+        detectedCrs = identifyPotentialCRS(sampleGeo);
+      } catch {
+        detectedCrs = null;
+      }
     }
 
-    const lats = samplePath.map((p) => p.y.toFixed(5)).join(',');
-    const lons = samplePath.map((p) => p.x.toFixed(5)).join(',');
-
-    const res = await fetch(
-      `https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`
+    // 2. Convert all vertices to WGS84
+    const wgs84Coords: ({ lat: number; lon: number } | null)[] = path.map((p) =>
+      toWGS84Coord(p, detectedCrs)
     );
 
-    if (!res.ok) throw new Error('Elevation API request failed');
-
-    const json = await res.json();
-    if (!json.elevation || !Array.isArray(json.elevation)) {
-      throw new Error('Invalid elevation response format');
+    // If coordinates cannot be placed on Earth, return empty array without error
+    if (wgs84Coords.every((c) => c === null)) {
+      return [];
     }
 
-    const sampledElevations: number[] = json.elevation;
+    // 3. Sample path up to 40 points to avoid URL length or rate limits
+    const validIndices = wgs84Coords
+      .map((c, i) => (c !== null ? i : -1))
+      .filter((i) => i !== -1);
 
-    // Calculate cumulative distances for sample path
+    if (validIndices.length === 0) return [];
+
+    const sampleStep = Math.max(1, Math.ceil(validIndices.length / 40));
+    const sampledIndices: number[] = [];
+    for (let i = 0; i < validIndices.length; i += sampleStep) {
+      sampledIndices.push(validIndices[i]);
+    }
+    const lastValidIdx = validIndices[validIndices.length - 1];
+    if (sampledIndices[sampledIndices.length - 1] !== lastValidIdx) {
+      sampledIndices.push(lastValidIdx);
+    }
+
+    const sampleCoords = sampledIndices.map((idx) => wgs84Coords[idx]!);
+
+    // Check how many sample points are in cache
+    const uncachedIndices: number[] = [];
+    const sampleElevations: (number | null)[] = sampleCoords.map((c, i) => {
+      const key = `${c.lat.toFixed(5)},${c.lon.toFixed(5)}`;
+      if (elevationCache.has(key)) {
+        return elevationCache.get(key)!;
+      }
+      uncachedIndices.push(i);
+      return null;
+    });
+
+    // 4. Query uncached points if any
+    if (uncachedIndices.length > 0) {
+      const uncachedCoords = uncachedIndices.map((i) => sampleCoords[i]);
+      let fetchedElevations: number[] | null = null;
+
+      // Tier 1: Local Backend /api/elevation (bypasses browser CORS & provides server cache)
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch('/api/elevation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            points: uncachedCoords.map((c) => ({ lat: c.lat, lon: c.lon }))
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        if (res.ok) {
+          const json = await res.json();
+          if (json && Array.isArray(json.elevations) && json.elevations.length === uncachedCoords.length) {
+            fetchedElevations = json.elevations;
+          }
+        }
+      } catch {
+        // Backend endpoint not ready or skipped, proceed to client tier
+      }
+
+      // Tier 2: Primary direct client provider: Open-Meteo
+      if (!fetchedElevations) {
+        try {
+          const lats = uncachedCoords.map((p) => p.lat.toFixed(5)).join(',');
+          const lons = uncachedCoords.map((p) => p.lon.toFixed(5)).join(',');
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+          const res = await fetch(
+            `https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`,
+            { signal: controller.signal }
+          );
+          clearTimeout(timeoutId);
+
+          if (res.ok) {
+            const json = await res.json();
+            if (json && Array.isArray(json.elevation) && json.elevation.length === uncachedCoords.length) {
+              fetchedElevations = json.elevation;
+            }
+          }
+        } catch {
+          // Open-Meteo direct fetch failed
+        }
+      }
+
+      // Tier 3: Secondary fallback provider: Open-Elevation
+      if (!fetchedElevations) {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+          const locations = uncachedCoords.map((c) => ({
+            latitude: Number(c.lat.toFixed(5)),
+            longitude: Number(c.lon.toFixed(5))
+          }));
+
+          const res = await fetch('https://api.open-elevation.com/api/v1/lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locations }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+
+          if (res.ok) {
+            const json = await res.json();
+            if (json && Array.isArray(json.results) && json.results.length === locations.length) {
+              fetchedElevations = json.results.map((r: any) => Number(r.elevation) || 0);
+            }
+          }
+        } catch {
+          // Open-Elevation direct fetch failed
+        }
+      }
+
+      // Tier 4: Regional Geographic DEM Terrain Fallback
+      if (!fetchedElevations) {
+        fetchedElevations = uncachedCoords.map((c) => getRegionalFallbackElevation(c.lat, c.lon));
+      }
+
+      if (fetchedElevations) {
+        fetchedElevations.forEach((elev, idx) => {
+          const sampleIdx = uncachedIndices[idx];
+          if (sampleIdx !== undefined) {
+            sampleElevations[sampleIdx] = elev;
+            const c = uncachedCoords[idx];
+            elevationCache.set(`${c.lat.toFixed(5)},${c.lon.toFixed(5)}`, elev);
+          }
+        });
+      }
+    }
+
+    // Fill any remaining nulls in sampleElevations with fallback linear interpolation
+    const knownSampleIndices = sampleElevations
+      .map((e, i) => (e !== null ? i : -1))
+      .filter((i) => i !== -1);
+
+    if (knownSampleIndices.length === 0) {
+      return [];
+    }
+
+    const resolvedSampleElevations: number[] = sampleElevations.map((e, i) => {
+      if (e !== null) return e;
+      const prevIdx = [...knownSampleIndices].reverse().find((idx) => idx < i);
+      const nextIdx = knownSampleIndices.find((idx) => idx > i);
+      if (prevIdx !== undefined && nextIdx !== undefined) {
+        return (sampleElevations[prevIdx]! + sampleElevations[nextIdx]!) / 2;
+      }
+      if (prevIdx !== undefined) return sampleElevations[prevIdx]!;
+      if (nextIdx !== undefined) return sampleElevations[nextIdx]!;
+      return 0;
+    });
+
+    // 5. Calculate cumulative distances for sample path
     const sampleDists: number[] = [0];
     let cumDist = 0;
-    for (let i = 1; i < samplePath.length; i++) {
-      cumDist += calculateDistance(samplePath[i - 1], samplePath[i]);
+    for (let i = 1; i < sampledIndices.length; i++) {
+      cumDist += calculateDistance(path[sampledIndices[i - 1]], path[sampledIndices[i]]);
       sampleDists.push(cumDist);
     }
 
-    // Calculate cumulative distances for full path and linearly interpolate
+    // 6. Calculate cumulative distances for full path and linearly interpolate
     const fullDists: number[] = [0];
     let fullCumDist = 0;
     for (let i = 1; i < path.length; i++) {
@@ -152,30 +416,30 @@ export const fetchTopographicElevations = async (
       fullDists.push(fullCumDist);
     }
 
-    // Linearly interpolate topographic elevations for every point in full path
+    // 7. Linearly interpolate topographic elevations for every point in full path
     const interpolatedElevations: number[] = fullDists.map((d) => {
-      // Find bounding interval in sampleDists
-      if (d <= sampleDists[0]) return sampledElevations[0];
-      if (d >= sampleDists[sampleDists.length - 1])
-        return sampledElevations[sampledElevations.length - 1];
+      if (d <= sampleDists[0]) return resolvedSampleElevations[0];
+      if (d >= sampleDists[sampleDists.length - 1]) {
+        return resolvedSampleElevations[resolvedSampleElevations.length - 1];
+      }
 
       for (let j = 0; j < sampleDists.length - 1; j++) {
         if (d >= sampleDists[j] && d <= sampleDists[j + 1]) {
           return linearInterpolate(
             d,
             sampleDists[j],
-            sampledElevations[j],
+            resolvedSampleElevations[j],
             sampleDists[j + 1],
-            sampledElevations[j + 1]
+            resolvedSampleElevations[j + 1]
           );
         }
       }
-      return sampledElevations[0];
+      return resolvedSampleElevations[0];
     });
 
     return interpolatedElevations;
   } catch (err) {
-    console.error('Error fetching topographic elevations:', err);
+    console.warn('Topographic elevation estimation warning:', err);
     return [];
   }
 };
@@ -284,11 +548,24 @@ export const estimateMissingElevations = async (
       // Case D: Fetch topographic DEM elevations for area, then apply linear interpolation
       methodUsed = 'topographic_linear';
       const topoElevations = await fetchTopographicElevations(path);
-      if (topoElevations.length === path.length) {
+      if (topoElevations && topoElevations.length === path.length) {
         elevations = topoElevations;
+      } else if (knownDatasetElevations.length > 0) {
+        // Fallback: Interpolate from any known points in the dataset
+        methodUsed = 'known_points_idw';
+        elevations = path.map((p) => idwInterpolate(p, knownDatasetElevations));
+      } else if (startGround !== undefined && !isNaN(startGround) && endGround !== undefined && !isNaN(endGround)) {
+        // Fallback: Linear interpolation between start and end attributes
+        methodUsed = 'attribute_linear';
+        elevations = dists.map((d) => linearInterpolate(d, 0, startGround!, totalDist, endGround!));
       } else {
-        // Fallback: Default flat 0 if offline/error
-        elevations = new Array(path.length).fill(0);
+        // Fallback: Base elevation from single defined ground attribute or zero
+        const baseZ = (startGround !== undefined && !isNaN(startGround))
+          ? startGround
+          : (endGround !== undefined && !isNaN(endGround))
+          ? endGround
+          : 0;
+        elevations = new Array(path.length).fill(baseZ);
       }
     }
   }

@@ -109,12 +109,40 @@ const formatCellValue = (key: string, val: any): string => {
     return str;
 };
 
-// --- HELPER: Key Priority for Inspection / Municipal Data ---
+// --- HELPER: Key Priority for Inspection / Municipal / GIS Data ---
 const getKeyPriority = (rawKey: string): number => {
-    const k = rawKey.toLowerCase();
-    if (/^(\.?sr|رقم تسلسلي|الرقم التسلسلي|م$)/i.test(k)) return 10;
-    if (/line/i.test(k) || /خط/i.test(k)) return 20;
-    if (/section/i.test(k) || /مقطع/i.test(k)) return 30;
+    const k = rawKey.trim().toLowerCase();
+    const cleanK = k.replace(/[\s_#-]/g, '');
+
+    // Exact GIS / NWC My Maps Ordering:
+    // 1. INNERDIAMETER
+    if (cleanK === 'innerdiameter' || cleanK === 'diameter') return 1;
+    // 2. segment id
+    if (cleanK === 'segmentid' || cleanK === 'segmentno' || cleanK === 'segment') return 2;
+    // 3. Permit No
+    if (cleanK === 'permitno' || cleanK === 'permit' || cleanK === 'permitnumber') return 3;
+    // 4. ZONE
+    if (cleanK === 'zone' || cleanK === 'zonenu' || cleanK === 'zoneno') return 4;
+    // 5. Drilling type
+    if (cleanK === 'drillingtype' || cleanK === 'drilling') return 5;
+    // 6. Stage
+    if (cleanK === 'stage') return 6;
+    // 7. CONTRACTOR
+    if (cleanK === 'contractor' || cleanK === 'contractorname') return 7;
+    // 8. PROJECTNAME
+    if (cleanK === 'projectname') return 8;
+    // 9. PROJECTID
+    if (cleanK === 'projectid') return 9;
+    // 10. SHAPE_Length
+    if (cleanK === 'shapelength' || cleanK === 'actuallength') return 10;
+    // 11. STREETNAME
+    if (cleanK === 'streetname' || cleanK === 'street') return 11;
+    // 12. DISTRICT
+    if (cleanK === 'district' || cleanK === 'districtname') return 12;
+
+    if (/^(\.?sr|رقم تسلسلي|الرقم التسلسلي|م$)/i.test(k)) return 25;
+    if (/line/i.test(k) || /خط/i.test(k)) return 30;
+    if (/section/i.test(k) || /مقطع/i.test(k)) return 35;
     if (/date/i.test(k) || /تاريخ/i.test(k)) return 40;
     if (/defect/i.test(k) || /عيب/i.test(k)) return 50;
     if (/contributing/i.test(k) || /عامل/i.test(k) || /مسبب/i.test(k)) return 60;
@@ -143,28 +171,62 @@ const kmlKeyComparator = (keyA: string, keyB: string): number => {
 
 const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: string[], options?: KmlExportOptions) => {
     let descriptionHTML = '';
+    const refCoord = (pt.x && pt.y)
+        ? { x: pt.x, y: pt.y }
+        : (pt.path && pt.path.length > 0 ? pt.path[Math.floor(pt.path.length / 2)] : { x: pt.x || 0, y: pt.y || 0 });
+    const lon = refCoord.x.toFixed(7);
+    const lat = refCoord.y.toFixed(7);
+
+    // Check if description or attributes contain a custom Google Maps link or generate standard one
+    let googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
+    if (pt.description && /https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i.test(pt.description)) {
+        const match = pt.description.match(/https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i);
+        if (match) {
+            googleMapsLink = match[0];
+        }
+    }
+
+    const allAttrs: Record<string, any> = { ...(pt.attributes || {}) };
+    if (pt.originalRow && headers) {
+        headers.forEach((h, idx) => {
+            if (pt.originalRow && pt.originalRow[idx] !== undefined && allAttrs[h] === undefined) {
+                allAttrs[h] = pt.originalRow[idx];
+            }
+        });
+    }
+
+    let districtVal = pt.district && pt.district !== 'غير متوفر' && pt.district !== 'Unknown' ? String(pt.district).trim() : '';
+    let streetVal = pt.street && pt.street !== 'غير متوفر' && pt.street !== 'Unknown' ? String(pt.street).trim() : '';
+
+    Object.keys(allAttrs).forEach(k => {
+        const val = String(allAttrs[k] ?? '').trim();
+        if (!val || val === '-' || val === 'غير متوفر' || val === 'Unknown') return;
+        const cleanK = k.toLowerCase().replace(/[\s_#-]/g, '');
+        if (!districtVal && (cleanK === 'district' || cleanK === 'districtname' || cleanK === 'الحي' || cleanK === 'الحى' || cleanK === 'اسمالحي' || cleanK === 'اسمالحى' || cleanK === 'حي' || cleanK === 'حى' || cleanK.includes('الحي') || cleanK.includes('district'))) {
+            districtVal = val;
+        }
+        if (!streetVal && (cleanK === 'streetname' || cleanK === 'street' || cleanK === 'الشارع' || cleanK === 'اسمالشارع' || cleanK === 'شارع' || cleanK.includes('الشارع') || cleanK.includes('street'))) {
+            streetVal = val;
+        }
+        if (/https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i.test(val)) {
+            const match = val.match(/https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i);
+            if (match) googleMapsLink = match[0];
+        }
+    });
+
+    if (!streetVal && pt.id && /^(شارع|طريق)\s+/i.test(String(pt.id).trim())) {
+        streetVal = String(pt.id).trim();
+    }
     
     // Check if description already contains complete HTML markup
     const isDescriptionPureHtmlCard = pt.description && (pt.description.includes('<table') || pt.description.includes('<div style='));
     
     if (options?.keepOriginalDescription && pt.description && isDescriptionPureHtmlCard) {
-        descriptionHTML = pt.description;
+        descriptionHTML = pt.description.replace(/<div[^>]*>\s*(?:موقع العيب رقم|Defect Location|📍)[^<]*<\/div>/gi, '');
         if (options?.removeImagesOnly) {
             descriptionHTML = descriptionHTML.replace(/<img[^>]*>/gi, '');
         }
     } else {
-        const lon = pt.x.toFixed(7);
-        const lat = pt.y.toFixed(7);
-        
-        // Check if description contains a custom Google Maps link or generate standard one
-        let googleMapsLink = `https://www.google.com/maps?q=${lat},${lon}`;
-        if (pt.description && /https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i.test(pt.description)) {
-            const match = pt.description.match(/https?:\/\/(maps\.app\.goo\.gl|www\.google\.com\/maps|maps\.google\.com)[^\s<]*/i);
-            if (match) {
-                googleMapsLink = match[0];
-            }
-        }
-        
         // Detect if RTL / Arabic is needed
         const fullContentStr = String(pt.id || '') + ' ' + String(pt.description || '') + ' ' + JSON.stringify(pt.attributes || {}) + ' ' + (headers || []).join(' ');
         const isArabic = /[\u0600-\u06FF]/.test(fullContentStr);
@@ -173,48 +235,19 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
         const textAlign = useGoldenRtl ? 'right' : 'left';
 
         // Extract key domain fields
-        let srVal = '';
-        let lineNoVal = '';
-        let sectionVal = '';
-        let defectVal = '';
         let deptVal = '';
         let cctvPicUrl = '';
-
-        const allAttrs = pt.attributes || {};
-        if (pt.originalRow && headers) {
-            headers.forEach((h, idx) => {
-                if (pt.originalRow && pt.originalRow[idx] !== undefined) {
-                    allAttrs[h] = pt.originalRow[idx];
-                }
-            });
-        }
 
         Object.keys(allAttrs).forEach(k => {
             const val = String(allAttrs[k] || '').trim();
             if (!val) return;
-            if (/^(\.?sr|رقم تسلسلي|الرقم التسلسلي|م)$/i.test(k)) srVal = val;
-            if (/line/i.test(k) || /خط/i.test(k)) lineNoVal = val;
-            if (/section/i.test(k) || /مقطع/i.test(k)) sectionVal = val;
-            if (/defect/i.test(k) || /نوع العيب|عيب/i.test(k)) defectVal = val;
             if (/الجهة|department|dept|المسؤولة/i.test(k) && !deptVal) deptVal = val;
             if (/cctv|pic|photo|image|صورة/i.test(k) && /^(https?:\/\/|data:image\/)/i.test(val)) cctvPicUrl = val;
         });
 
-        if (!srVal) {
-            const numMatch = String(pt.id || '').match(/\d+/);
-            if (numMatch) srVal = numMatch[0];
-        }
-
-        // 1. Determine Card Title & Subtitle Badge
-        let cardTitle = '';
-        if (lineNoVal) {
-            cardTitle = isArabic ? `موقع العيب رقم [${srVal || pt.id}] - ${lineNoVal}` : `Defect Location [${srVal || pt.id}] - ${lineNoVal}`;
-        } else {
-            cardTitle = `📍 ${escapeXML(pt.id)}`;
-        }
-
+        // 1. Determine Subtitle Badge (without any top title line)
         let badgeText = '';
-        let badgeColor = '#16a34a'; // Green badge as in image 2
+        let badgeColor = '#16a34a';
         if (deptVal) {
             badgeText = deptVal.startsWith('الجهة') ? deptVal : `الجهة: ${deptVal}`;
         } else if (options?.badgeColumn && allAttrs[options.badgeColumn]) {
@@ -229,7 +262,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
             badgeColor = pt.color;
         }
 
-        const badgeHtml = badgeText ? `<div style="display:inline-block; padding:4px 14px; font-size:12px; font-weight:bold; color:#ffffff; background-color:${badgeColor}; border-radius:14px; box-shadow:0 1px 3px rgba(0,0,0,0.1); margin-top:4px;">${escapeXML(badgeText)}</div>` : '';
+        const badgeHtml = badgeText ? `<div style="border-bottom:1px solid #f1f5f9; padding-bottom:10px; margin-bottom:10px; text-align:center;"><div style="display:inline-block; padding:4px 14px; font-size:12px; font-weight:bold; color:#ffffff; background-color:${badgeColor}; border-radius:14px; box-shadow:0 1px 3px rgba(0,0,0,0.1);">${escapeXML(badgeText)}</div></div>` : '';
 
         // 2. Extract and format images
         let imgTagsHtml = '';
@@ -319,11 +352,7 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
         descriptionHTML = `
 <div style="font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif; font-size:12.5px; color:#1e293b; margin:0; padding:4px; background-color:#ffffff; direction:${dir}; text-align:${textAlign}; line-height:1.5; min-width:380px; max-width:540px; box-sizing:border-box;">
   <div style="border:1px solid #e2e8f0; border-radius:10px; padding:14px; box-shadow:0 4px 10px rgba(0,0,0,0.06); background-color:#ffffff;">
-    <div style="border-bottom:1px solid #f1f5f9; padding-bottom:10px; margin-bottom:10px; text-align:center;">
-      <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:4px;">${escapeXML(cardTitle)}</div>
-      ${badgeHtml}
-    </div>
-    
+    ${badgeHtml}
     <table style="width:100%; border-collapse:collapse; margin-top:6px; font-size:12.5px; direction:${dir}; text-align:${textAlign};">
       <tbody>
         ${rowsHtml}
@@ -429,10 +458,20 @@ const createPlacemarkXML = (pt: GeoPoint, headers?: string[], selectedHeaders?: 
         }
     }
 
+    const myMapsDescription = [
+        `الإحداثيات: ${lat}, ${lon}`,
+        `الشارع: ${escapeXML(streetVal || '-')}`,
+        `الحي: ${escapeXML(districtVal || '-')}`,
+        `<a href="${escapeXML(googleMapsLink)}">📍 فتح في خرائط Google</a>`
+    ].join('<br/>\n');
+
+    const descXML = options?.optimizeForMyMaps
+        ? `\n      <description><![CDATA[${myMapsDescription}]]></description>`
+        : `\n      <description><![CDATA[${descriptionHTML}]]></description>`;
+
     return `
     <Placemark>
-      <name>${escapeXML(placemarkDisplayName || pt.id)}</name>
-      <description><![CDATA[${descriptionHTML}]]></description>
+      <name>${escapeXML(placemarkDisplayName || pt.id)}</name>${descXML}
       <styleUrl>#${styleId}</styleUrl>${extendedDataXML}
       ${geometryXML}
     </Placemark>`;
@@ -458,15 +497,18 @@ export const getKMLColorParts = (colorHex: string | undefined) => {
 export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions): string => {
     const uniqueStyles = new Set<string>();
     let stylesXML = '';
-    
-    // Default fallback style
-    stylesXML += `    <Style id="myMapsBalloonStyle">
+    const balloonBlock = options?.optimizeForMyMaps ? '' : `
       <BalloonStyle>
         <bgColor>ffffffff</bgColor>
         <textColor>ff000000</textColor>
         <text><![CDATA[$[description]]]></text>
-      </BalloonStyle>
+      </BalloonStyle>`;
+    
+    // Default fallback style
+    if (!options?.optimizeForMyMaps) {
+        stylesXML += `    <Style id="myMapsBalloonStyle">${balloonBlock}
     </Style>\n`;
+    }
 
     points.forEach(pt => {
         const colorHex = getEffectiveColor(pt, options);
@@ -481,7 +523,6 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
         if (!uniqueStyles.has(styleId)) {
             uniqueStyles.add(styleId);
             const kmlColorStr = hasColor ? `\n        <color>ff${b}${g}${r}</color>` : '';
-            const kmlColor = `ff${b}${g}${r}`.toLowerCase();
             const polyOpacity = options?.polygonStyle?.opacityHex || '80';
             const polyColor = `${polyOpacity}${b}${g}${r}`.toLowerCase();
             const polyOutline = options?.polygonStyle?.outline !== undefined ? options.polygonStyle.outline : 1;
@@ -501,12 +542,7 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
       </PolyStyle>
       <LabelStyle>
         <scale>${labelScale}</scale>
-      </LabelStyle>
-      <BalloonStyle>
-        <bgColor>ffffffff</bgColor>
-        <textColor>ff000000</textColor>
-        <text><![CDATA[$[description]]]></text>
-      </BalloonStyle>
+      </LabelStyle>${balloonBlock}
     </Style>\n`;
             } else if (isLine) {
                 stylesXML += `    <Style id="${styleId}">
@@ -515,12 +551,7 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
       </LineStyle>
       <LabelStyle>
         <scale>${labelScale}</scale>
-      </LabelStyle>
-      <BalloonStyle>
-        <bgColor>ffffffff</bgColor>
-        <textColor>ff000000</textColor>
-        <text><![CDATA[$[description]]]></text>
-      </BalloonStyle>
+      </LabelStyle>${balloonBlock}
     </Style>\n`;
             } else {
                 stylesXML += `    <Style id="${styleId}">
@@ -532,12 +563,7 @@ export const generateKMLStyles = (points: GeoPoint[], options?: KmlExportOptions
       </IconStyle>
       <LabelStyle>
         <scale>${labelScale}</scale>
-      </LabelStyle>
-      <BalloonStyle>
-        <bgColor>ffffffff</bgColor>
-        <textColor>ff000000</textColor>
-        <text><![CDATA[$[description]]]></text>
-      </BalloonStyle>
+      </LabelStyle>${balloonBlock}
     </Style>\n`;
             }
         }

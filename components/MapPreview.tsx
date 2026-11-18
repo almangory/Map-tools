@@ -2008,7 +2008,7 @@ const MapPreview: React.FC<MapPreviewProps> = ({
                 ? '#dc2626' 
                 : (isOverlap 
                   ? '#000000' 
-                  : (activeColorMode !== 'default' ? flowLineColor : (isFlowActive ? '#00E676' : featColor))));
+                  : (activeColorMode !== 'default' ? flowLineColor : featColor)));
 
             marker = L.polyline(latLngs, { 
               color: polylineColor, 

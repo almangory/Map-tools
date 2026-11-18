@@ -1,7 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import dns from "dns";
-import { createServer as createViteServer } from "vite";
 import { decodePlusCode } from "./services/plusCodeService";
 
 const MAX_PROXY_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit
@@ -129,7 +128,12 @@ function createRateLimiter(maxRequests: number, windowMs: number) {
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Healthcheck endpoint for instant readiness verification
+  app.get("/api/health", (_req: Request, res: Response) => {
+    res.json({ status: "ok" });
+  });
 
   // Security Hardening: Disable information disclosure header
   app.disable("x-powered-by");
@@ -222,6 +226,158 @@ async function startServer() {
     } catch (error: any) {
       console.error("Proxy error:", error.message);
       res.status(500).json({ error: error.message || "Failed to fetch from url" });
+    }
+  });
+
+  // Regional terrain elevation fallback for Saudi Arabia / MENA
+  function getRegionalFallbackElevation(lat: number, lon: number): number {
+    // Coastal West (Jeddah / Yanbu / Jizan coastline)
+    if (lon >= 37 && lon <= 40 && lat >= 16 && lat <= 26) {
+      if (lon <= 39.2) return 12; // Coastal Red Sea plain
+      if (lat <= 22 && lon >= 40 && lon <= 43) return 1650; // Hijaz / Asir mountain range
+    }
+    // Asir / Abha / Khamis Mushait highlands
+    if (lat >= 17.5 && lat <= 19.5 && lon >= 41.5 && lon <= 43.5) {
+      return 2150;
+    }
+    // Taif highlands
+    if (lat >= 21.1 && lat <= 21.5 && lon >= 40.2 && lon <= 40.6) {
+      return 1750;
+    }
+    // Coastal East (Dammam / Khobar / Jubail / Gulf coastline)
+    if (lon >= 49.5 && lon <= 51 && lat >= 25.5 && lat <= 28) {
+      return 8; // Arabian Gulf coastal plain
+    }
+    // Riyadh & Central Najd Plateau
+    if (lat >= 24.0 && lat <= 25.5 && lon >= 46.0 && lon <= 47.5) {
+      return 612; // Riyadh average elevation
+    }
+    // Qassim Plateau
+    if (lat >= 25.8 && lat <= 26.8 && lon >= 43.0 && lon <= 44.8) {
+      return 640;
+    }
+    // Tabuk Basin
+    if (lat >= 28.0 && lat <= 29.0 && lon >= 36.0 && lon <= 37.5) {
+      return 760;
+    }
+    // General Arabian Peninsula inland plateau
+    if (lat >= 16 && lat <= 32 && lon >= 35 && lon <= 55) {
+      return 520;
+    }
+    // Global default
+    return 150;
+  }
+
+  // In-memory cache for elevation points
+  const elevationMemoryCache = new Map<string, number>();
+
+  // Resilient Elevation API endpoint with timeout, multiple providers, and regional fallback
+  app.post("/api/elevation", proxyLimiter, async (req: Request, res: Response) => {
+    try {
+      const { points } = req.body || {};
+      if (!points || !Array.isArray(points) || points.length === 0) {
+        res.status(400).json({ error: "Missing or invalid 'points' array." });
+        return;
+      }
+
+      // Limit to 200 points per call and clean coordinates
+      const cleanPoints: { lat: number; lon: number }[] = points
+        .slice(0, 200)
+        .filter((p: any) => p && typeof p.lat === "number" && typeof p.lon === "number" && !isNaN(p.lat) && !isNaN(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180)
+        .map((p: any) => ({ lat: parseFloat(p.lat.toFixed(5)), lon: parseFloat(p.lon.toFixed(5)) }));
+
+      if (cleanPoints.length === 0) {
+        res.json({ elevations: [] });
+        return;
+      }
+
+      const results: (number | null)[] = new Array(cleanPoints.length).fill(null);
+      const uncachedIndices: number[] = [];
+
+      cleanPoints.forEach((pt, idx) => {
+        const key = `${pt.lat},${pt.lon}`;
+        if (elevationMemoryCache.has(key)) {
+          results[idx] = elevationMemoryCache.get(key)!;
+        } else {
+          uncachedIndices.push(idx);
+        }
+      });
+
+      if (uncachedIndices.length > 0) {
+        const uncached = uncachedIndices.map((i) => cleanPoints[i]);
+        const lats = uncached.map((p) => p.lat).join(",");
+        const lons = uncached.map((p) => p.lon).join(",");
+
+        let fetched: number[] | null = null;
+
+        // Provider 1: Open-Meteo
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 6000);
+          const response = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lons}`, {
+            headers: { "User-Agent": "GeoGISPro/1.0" },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          if (response.ok) {
+            const data: any = await response.json();
+            if (data && Array.isArray(data.elevation) && data.elevation.length === uncached.length) {
+              fetched = data.elevation.map((e: any) => typeof e === "number" && !isNaN(e) ? Number(e.toFixed(2)) : 0);
+            }
+          }
+        } catch {
+          // Open-Meteo failed, try secondary
+        }
+
+        // Provider 2: Open-Elevation
+        if (!fetched) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const response = await fetch("https://api.open-elevation.com/api/v1/lookup", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "User-Agent": "GeoGISPro/1.0" },
+              body: JSON.stringify({
+                locations: uncached.map((p) => ({ latitude: p.lat, longitude: p.lon })),
+              }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (response.ok) {
+              const data: any = await response.json();
+              if (data && Array.isArray(data.results) && data.results.length === uncached.length) {
+                fetched = data.results.map((r: any) => Number(Number(r.elevation || 0).toFixed(2)));
+              }
+            }
+          } catch {
+            // Open-Elevation failed
+          }
+        }
+
+        // Cache successful responses
+        if (fetched) {
+          fetched.forEach((elev, fIdx) => {
+            const originalIdx = uncachedIndices[fIdx];
+            results[originalIdx] = elev;
+            const pt = cleanPoints[originalIdx];
+            elevationMemoryCache.set(`${pt.lat},${pt.lon}`, elev);
+          });
+        }
+      }
+
+      // Fill any remaining nulls using regional approximate DEM
+      const finalElevations = results.map((val, idx) => {
+        if (val !== null && typeof val === "number") return val;
+        const pt = cleanPoints[idx];
+        const fallback = getRegionalFallbackElevation(pt.lat, pt.lon);
+        elevationMemoryCache.set(`${pt.lat},${pt.lon}`, fallback);
+        return fallback;
+      });
+
+      res.json({ elevations: finalElevations });
+    } catch (error: any) {
+      console.warn("Elevation endpoint error:", error?.message || error);
+      res.json({ elevations: [] });
     }
   });
 
@@ -532,13 +688,28 @@ async function startServer() {
     }
   });
 
-  // Vite middleware for development
+  // Vite middleware for development (lazy-loaded & non-blocking so port 3000 binds immediately)
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
+    const vitePromise = import("vite")
+      .then(({ createServer: createViteServer }) =>
+        createViteServer({
+          server: { middlewareMode: true, hmr: false },
+          appType: "spa",
+        })
+      )
+      .catch((err) => {
+        console.error("Failed to initialize Vite middleware:", err);
+        throw err;
+      });
+
+    app.use(async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const vite = await vitePromise;
+        vite.middlewares(req, res, next);
+      } catch (err) {
+        next(err);
+      }
     });
-    app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
@@ -552,5 +723,8 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Fatal server startup error:", err);
+  process.exit(1);
+});
 

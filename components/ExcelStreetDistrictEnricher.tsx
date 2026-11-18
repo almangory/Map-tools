@@ -109,6 +109,7 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
 
   const [addCoordinates, setAddCoordinates] = useState<boolean>(true);
   const [addMapLink, setAddMapLink] = useState<boolean>(true);
+  const [placeBeforeDistrictStreet, setPlaceBeforeDistrictStreet] = useState<boolean>(true);
 
   // Execution state
   const [isFetching, setIsFetching] = useState<boolean>(false);
@@ -150,27 +151,49 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
   };
 
   // Quick Preset Handlers
-  const applyPreset = (mode: 'all' | 'city-district-street' | 'gov-district-street' | 'district-street') => {
-    if (mode === 'all') {
+  const applyPreset = (mode: 'all' | 'gov-city-before-district-street' | 'gov-city-only' | 'city-district-street' | 'gov-district-street' | 'district-street' | 'city-only' | 'gov-only') => {
+    if (mode === 'all' || mode === 'gov-city-before-district-street') {
       setIncludeGovernorate(true);
       setIncludeCity(true);
       setIncludeDistrict(true);
       setIncludeStreet(true);
+      setPlaceBeforeDistrictStreet(true);
+    } else if (mode === 'gov-city-only') {
+      setIncludeGovernorate(true);
+      setIncludeCity(true);
+      setIncludeDistrict(false);
+      setIncludeStreet(false);
+      setPlaceBeforeDistrictStreet(true);
     } else if (mode === 'city-district-street') {
       setIncludeGovernorate(false);
       setIncludeCity(true);
       setIncludeDistrict(true);
       setIncludeStreet(true);
+      setPlaceBeforeDistrictStreet(true);
     } else if (mode === 'gov-district-street') {
       setIncludeGovernorate(true);
       setIncludeCity(false);
       setIncludeDistrict(true);
       setIncludeStreet(true);
+      setPlaceBeforeDistrictStreet(true);
     } else if (mode === 'district-street') {
       setIncludeGovernorate(false);
       setIncludeCity(false);
       setIncludeDistrict(true);
       setIncludeStreet(true);
+      setPlaceBeforeDistrictStreet(false);
+    } else if (mode === 'gov-only') {
+      setIncludeGovernorate(true);
+      setIncludeCity(false);
+      setIncludeDistrict(false);
+      setIncludeStreet(false);
+      setPlaceBeforeDistrictStreet(true);
+    } else if (mode === 'city-only') {
+      setIncludeGovernorate(false);
+      setIncludeCity(true);
+      setIncludeDistrict(false);
+      setIncludeStreet(false);
+      setPlaceBeforeDistrictStreet(true);
     }
   };
 
@@ -301,132 +324,144 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
     // 1. Prepare new headers list with strict hierarchy order:
     // [المحافظة] -> [المدينة] -> [الحي] -> [الشارع] -> [الإحداثيات] -> [الرابط]
     const originalHeaders = activeFile.headers ? [...activeFile.headers] : [];
-    const headersToAdd: string[] = [];
 
-    // 1. Governorate column
+    // Identify existing district and street columns in originalHeaders
+    const districtStreetMatches = [
+      districtMappingCol,
+      streetMappingCol,
+      finalDistrictCol,
+      finalStreetCol,
+      'الحي', 'حي', 'اسم الحي', 'اسم_الحي', 'district', 'suburb', 'neighbourhood',
+      'الشارع', 'شارع', 'اسم الشارع', 'اسم_الشارع', 'street', 'road', 'streetname'
+    ].filter(Boolean).map(s => String(s).toLowerCase().trim());
+
+    const firstDistrictStreetIndex = originalHeaders.findIndex(h => 
+      districtStreetMatches.includes(String(h).toLowerCase().trim())
+    );
+
+    // Columns for Governorate and City to add
+    const govCityColsToAdd: string[] = [];
     if (includeGovernorate) {
       if (activeGovMap && originalHeaders.includes(activeGovMap)) {
-        // mapped to existing column
+        // already mapped
       } else if (!originalHeaders.includes(finalGovCol)) {
-        headersToAdd.push(finalGovCol);
+        govCityColsToAdd.push(finalGovCol);
       }
     }
-
-    // 2. City column
     if (includeCity) {
       if (activeCityMap && originalHeaders.includes(activeCityMap)) {
-        // mapped to existing column
+        // already mapped
       } else if (!originalHeaders.includes(finalCityCol)) {
-        headersToAdd.push(finalCityCol);
+        govCityColsToAdd.push(finalCityCol);
       }
     }
 
-    // 3. District column
+    // Columns for District and Street to add
+    const distStreetColsToAdd: string[] = [];
     if (includeDistrict) {
       if (districtMappingCol && originalHeaders.includes(districtMappingCol)) {
-        // mapped to existing column
+        // mapped
       } else if (!originalHeaders.includes(finalDistrictCol)) {
-        headersToAdd.push(finalDistrictCol);
+        distStreetColsToAdd.push(finalDistrictCol);
       }
     }
-
-    // 4. Street column
     if (includeStreet) {
       if (streetMappingCol && originalHeaders.includes(streetMappingCol)) {
-        // mapped to existing column
+        // mapped
       } else if (!originalHeaders.includes(finalStreetCol)) {
-        headersToAdd.push(finalStreetCol);
+        distStreetColsToAdd.push(finalStreetCol);
       }
     }
 
     // Additional columns (Lat, Lon, Link)
+    const extraColsToAdd: string[] = [];
     if (addCoordinates) {
-      if (!originalHeaders.includes(latCol)) headersToAdd.push(latCol);
-      if (!originalHeaders.includes(lonCol)) headersToAdd.push(lonCol);
+      if (!originalHeaders.includes(latCol)) extraColsToAdd.push(latCol);
+      if (!originalHeaders.includes(lonCol)) extraColsToAdd.push(lonCol);
     }
     if (addMapLink) {
-      if (!originalHeaders.includes(linkCol)) headersToAdd.push(linkCol);
+      if (!originalHeaders.includes(linkCol)) extraColsToAdd.push(linkCol);
     }
 
-    const newHeaders = [...originalHeaders, ...headersToAdd];
+    let newHeaders: string[] = [];
+    if (placeBeforeDistrictStreet && firstDistrictStreetIndex !== -1 && govCityColsToAdd.length > 0) {
+      // Insert Governorate & City immediately BEFORE the first District/Street column!
+      newHeaders = [
+        ...originalHeaders.slice(0, firstDistrictStreetIndex),
+        ...govCityColsToAdd,
+        ...originalHeaders.slice(firstDistrictStreetIndex),
+        ...distStreetColsToAdd,
+        ...extraColsToAdd
+      ];
+    } else {
+      // Standard append in hierarchy order
+      newHeaders = [
+        ...originalHeaders,
+        ...govCityColsToAdd,
+        ...distStreetColsToAdd,
+        ...extraColsToAdd
+      ];
+    }
 
-    // 2. Prepare new rows in activeFile.data
+    // 2. Prepare new rows in activeFile.data mapped to the exact new headers
     const newRows = activeFile.data.map((row: any[], rowIdx: number) => {
       const pt = updatedPoints[rowIdx];
-      const newRow = Array.isArray(row) ? [...row] : [];
+      const origRow = Array.isArray(row) ? row : [];
 
-      // Ensure length matches original headers
-      while (newRow.length < originalHeaders.length) {
-        newRow.push('');
-      }
+      // Map existing values by header name
+      const rowDataMap: Record<string, any> = {};
+      originalHeaders.forEach((h, idx) => {
+        rowDataMap[h] = origRow[idx] !== undefined ? origRow[idx] : '';
+      });
 
-      // Handle Governorate
+      // Populate enriched values
       if (includeGovernorate) {
         const govVal = pt ? pt.governorate || '' : '';
         if (activeGovMap && originalHeaders.includes(activeGovMap)) {
-          const idx = originalHeaders.indexOf(activeGovMap);
-          if (idx !== -1) newRow[idx] = govVal;
-        } else {
-          const gIdx = newHeaders.indexOf(finalGovCol);
-          if (gIdx !== -1) newRow[gIdx] = govVal;
+          rowDataMap[activeGovMap] = govVal;
         }
+        rowDataMap[finalGovCol] = govVal;
       }
 
-      // Handle City
       if (includeCity) {
         const cityVal = pt ? pt.city || '' : '';
         if (activeCityMap && originalHeaders.includes(activeCityMap)) {
-          const idx = originalHeaders.indexOf(activeCityMap);
-          if (idx !== -1) newRow[idx] = cityVal;
-        } else {
-          const cIdx = newHeaders.indexOf(finalCityCol);
-          if (cIdx !== -1) newRow[cIdx] = cityVal;
+          rowDataMap[activeCityMap] = cityVal;
         }
+        rowDataMap[finalCityCol] = cityVal;
       }
 
-      // Handle District
       if (includeDistrict) {
         const distVal = pt ? pt.district || '' : '';
         if (districtMappingCol && originalHeaders.includes(districtMappingCol)) {
-          const idx = originalHeaders.indexOf(districtMappingCol);
-          if (idx !== -1) newRow[idx] = distVal;
-        } else {
-          const distIdx = newHeaders.indexOf(finalDistrictCol);
-          if (distIdx !== -1) newRow[distIdx] = distVal;
+          rowDataMap[districtMappingCol] = distVal;
         }
+        rowDataMap[finalDistrictCol] = distVal;
       }
 
-      // Handle Street
       if (includeStreet) {
         const stVal = pt ? pt.street || '' : '';
         if (streetMappingCol && originalHeaders.includes(streetMappingCol)) {
-          const idx = originalHeaders.indexOf(streetMappingCol);
-          if (idx !== -1) newRow[idx] = stVal;
-        } else {
-          const stIdx = newHeaders.indexOf(finalStreetCol);
-          if (stIdx !== -1) newRow[stIdx] = stVal;
+          rowDataMap[streetMappingCol] = stVal;
         }
+        rowDataMap[finalStreetCol] = stVal;
       }
 
-      // Handle Lat / Lon
       if (addCoordinates) {
-        const latIdx = newHeaders.indexOf(latCol);
-        const lonIdx = newHeaders.indexOf(lonCol);
-        if (latIdx !== -1) newRow[latIdx] = pt ? pt.y : '';
-        if (lonIdx !== -1) newRow[lonIdx] = pt ? pt.x : '';
+        rowDataMap[latCol] = pt ? pt.y : '';
+        rowDataMap[lonCol] = pt ? pt.x : '';
       }
 
-      // Handle Link
       if (addMapLink) {
-        const lIdx = newHeaders.indexOf(linkCol);
-        if (lIdx !== -1 && pt) newRow[lIdx] = `https://www.google.com/maps?q=${pt.y},${pt.x}`;
+        rowDataMap[linkCol] = pt ? `https://www.google.com/maps?q=${pt.y},${pt.x}` : '';
       }
 
+      // Reconstruct row strictly matching newHeaders order
+      const finalRow = newHeaders.map(h => rowDataMap[h] !== undefined ? rowDataMap[h] : '');
       if (pt) {
-        pt.originalRow = newRow;
+        pt.originalRow = finalRow;
       }
-
-      return newRow;
+      return finalRow;
     });
 
     // 3. Update activeFile
@@ -578,52 +613,82 @@ export const ExcelStreetDistrictEnricher: React.FC<ExcelStreetDistrictEnricherPr
         </span>
         <button
           type="button"
-          onClick={() => applyPreset('all')}
+          onClick={() => applyPreset('gov-city-before-district-street')}
           className={cn(
-            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
-            includeGovernorate && includeCity && includeDistrict && includeStreet
-              ? "bg-accent text-primary shadow-sm"
-              : "bg-white/5 text-white/70 hover:bg-white/10"
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all border",
+            includeGovernorate && includeCity && includeDistrict && includeStreet && placeBeforeDistrictStreet
+              ? "bg-accent text-primary border-accent shadow-sm"
+              : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
           )}
         >
-          {lang === 'ar' ? '✨ شامل (المحافظة + المدينة + الحي + الشارع)' : '✨ Full (Gov + City + District + Street)'}
+          {lang === 'ar' ? '🏛️ المحافظة والمدينة قبل الحي والشارع' : '🏛️ Gov & City before Dist & Street'}
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('gov-city-only')}
+          className={cn(
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all border",
+            includeGovernorate && includeCity && !includeDistrict && !includeStreet
+              ? "bg-accent text-primary border-accent shadow-sm"
+              : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
+          )}
+        >
+          {lang === 'ar' ? '📍 المحافظة والمدينة فقط' : '📍 Governorate & City only'}
+        </button>
+        <button
+          type="button"
+          onClick={() => applyPreset('all')}
+          className={cn(
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all border",
+            includeGovernorate && includeCity && includeDistrict && includeStreet && !placeBeforeDistrictStreet
+              ? "bg-accent text-primary border-accent shadow-sm"
+              : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
+          )}
+        >
+          {lang === 'ar' ? '✨ شامل (الكل)' : '✨ Full'}
         </button>
         <button
           type="button"
           onClick={() => applyPreset('city-district-street')}
           className={cn(
-            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all border",
             !includeGovernorate && includeCity && includeDistrict && includeStreet
-              ? "bg-accent text-primary shadow-sm"
-              : "bg-white/5 text-white/70 hover:bg-white/10"
+              ? "bg-accent text-primary border-accent shadow-sm"
+              : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
           )}
         >
-          {lang === 'ar' ? 'المدينة + الحي + الشارع' : 'City + District + Street'}
-        </button>
-        <button
-          type="button"
-          onClick={() => applyPreset('gov-district-street')}
-          className={cn(
-            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
-            includeGovernorate && !includeCity && includeDistrict && includeStreet
-              ? "bg-accent text-primary shadow-sm"
-              : "bg-white/5 text-white/70 hover:bg-white/10"
-          )}
-        >
-          {lang === 'ar' ? 'المحافظة + الحي + الشارع' : 'Gov + District + Street'}
+          {lang === 'ar' ? '🏙️ المدينة + الحي + الشارع' : '🏙️ City + District + Street'}
         </button>
         <button
           type="button"
           onClick={() => applyPreset('district-street')}
           className={cn(
-            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all",
+            "px-3 py-1.5 rounded-xl text-[10px] font-black transition-all border",
             !includeGovernorate && !includeCity && includeDistrict && includeStreet
-              ? "bg-accent text-primary shadow-sm"
-              : "bg-white/5 text-white/70 hover:bg-white/10"
+              ? "bg-accent text-primary border-accent shadow-sm"
+              : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
           )}
         >
-          {lang === 'ar' ? 'الحي والشارع فقط' : 'District & Street only'}
+          {lang === 'ar' ? '🗺️ الحي والشارع فقط' : '🗺️ District & Street only'}
         </button>
+      </div>
+
+      {/* Column Positioning Indicator & Toggle */}
+      <div className="flex items-center justify-between px-3 py-2 bg-black/20 rounded-xl border border-white/5">
+        <label className="flex items-center gap-2 cursor-pointer select-none text-[10.5px] font-bold text-white/90">
+          <input
+            type="checkbox"
+            checked={placeBeforeDistrictStreet}
+            onChange={(e) => setPlaceBeforeDistrictStreet(e.target.checked)}
+            className="w-3.5 h-3.5 accent-accent rounded"
+          />
+          <span>{lang === 'ar' ? 'وضع أعمدة (المحافظة والمدينة) قبل أعمدة (الحي والشارع) في ترتيب الملف' : 'Place Governorate & City columns before District & Street in file'}</span>
+        </label>
+        <span className="text-[9.5px] text-accent font-black hidden sm:inline">
+          {placeBeforeDistrictStreet 
+            ? (lang === 'ar' ? 'المحافظة ◂ المدينة ◂ الحي ◂ الشارع' : 'Gov ◂ City ◂ District ◂ Street')
+            : (lang === 'ar' ? 'ترتيب إلحاقي عادي' : 'Standard Append')}
+        </span>
       </div>
 
       {/* Main Options: 4 Columns in Exact Order (Governorate -> City -> District -> Street) */}

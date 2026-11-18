@@ -70,15 +70,15 @@ function getClosestStandardColor(hex?: string) {
 const TEMPLATES = {
   all: {
     name: 'الكل - جميع الطبقات والعناصر (All Layers & Geometries)',
-    fields: ["OBJECTID", "ASSETID", "DISTRICT", "STREETNAME", "ASSETSTATUS", "FEATURETYPE", "INNERDIAMETER", "ACTUALLENGTH", "SHAPE_Length", "segment id", "Permit No", "ZONE", "CONTRACTOR", "PROJECTNAME"]
+    fields: ["INNERDIAMETER", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID", "SHAPE_Length", "STREETNAME", "DISTRICT", "OBJECTID", "ASSETID", "ASSETSTATUS", "FEATURETYPE", "ACTUALLENGTH"]
   },
   pipes: {
     name: 'أنابيب / خطوط (Pipes/Lines)',
-    fields: ["OBJECTID", "ANCILLARYROLE", "ENABLED", "SERIALNUMBER", "DISTRICT", "STREETNAME", "ASSETSTATUS", "ASSETCONDITION", "STARTXCOORDINATE", "STARTYCOORDINATE", "ENDXCOORDINATE", "ENDYCOORDINATE", "STARTPIPEGROUNDELEVATION", "STARTPIPEELEVATION", "ENDPIPEGROUNDELEVATION", "ENDPIPEELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "SURVEYDATE", "FEATURETYPE", "INNERDIAMETER", "OUTERDIAMETER", "MATERIAL", "CONSULTANT", "ACTUALLENGTH", "MANUFACTURE", "REMARKS", "SHAPE_Length", "MaintRoute", "RouteSequence", "LINENO", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID"]
+    fields: ["INNERDIAMETER", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID", "SHAPE_Length", "STREETNAME", "DISTRICT", "OBJECTID", "ANCILLARYROLE", "ENABLED", "SERIALNUMBER", "ASSETSTATUS", "ASSETCONDITION", "STARTXCOORDINATE", "STARTYCOORDINATE", "ENDXCOORDINATE", "ENDYCOORDINATE", "STARTPIPEGROUNDELEVATION", "STARTPIPEELEVATION", "ENDPIPEGROUNDELEVATION", "ENDPIPEELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "SURVEYDATE", "FEATURETYPE", "OUTERDIAMETER", "MATERIAL", "CONSULTANT", "ACTUALLENGTH", "MANUFACTURE", "REMARKS", "MaintRoute", "RouteSequence", "LINENO"]
   },
   points: {
     name: 'غرف / ملحقات (Chambers/Fittings)',
-    fields: ["OBJECTID", "ANCILLARYROLE", "ENABLED", "ASSETID", "ASSETNAME", "SERIALNUMBER", "DISTRICT", "STREETNAME", "ASSETSTATUS", "ASSETCONDITION", "XCOORDINATE", "YCOORDINATE", "GROUNDELEVATION", "ELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "FEATURETYPE", "CHAMBERSHAPE", "DIAMETER", "LENGTH", "WIDTH", "DEPTH", "REMARKS", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID"]
+    fields: ["DIAMETER", "segment id", "Permit No", "ZONE", "Drilling type", "Stage", "CONTRACTOR", "PROJECTNAME", "PROJECTID", "LENGTH", "STREETNAME", "DISTRICT", "OBJECTID", "ANCILLARYROLE", "ENABLED", "ASSETID", "ASSETNAME", "SERIALNUMBER", "ASSETSTATUS", "ASSETCONDITION", "XCOORDINATE", "YCOORDINATE", "GROUNDELEVATION", "ELEVATION", "PROXIMITYTONETWORK", "COMMISSIONDATE", "INSTALLDATE", "FEATURETYPE", "CHAMBERSHAPE", "WIDTH", "DEPTH", "REMARKS"]
   },
   stations: {
     name: 'محطات الرفع والخزانات (Lift Stations & Tanks)',
@@ -890,14 +890,18 @@ export const DataFormatter = ({ points, headers, lang, fetchStreets, overlapResu
          }
       }
 
-      let finalColor = p.color;
+      const baseSourceColor = (p as any).originalColor || p.color;
+      let finalColor = baseSourceColor;
       if (standardizeColors) {
-         finalColor = matchStatusByColor(p.color || '#3b82f6').color;
+         finalColor = matchStatusByColor(baseSourceColor || '#3b82f6').color;
       } else if (standardizePolygonColors && (p.type === 'Polygon' || targetTemplate === 'polygons' || targetTemplate === 'boundaries')) {
          finalColor = '#0288d1';
       }
 
-      return { ...p, id: newId, color: finalColor, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
+      const resolvedStreet = p.street || newAttrs['STREETNAME'] || newAttrs['الشارع'] || newAttrs['اسم الشارع'] || (p.attributes && (p.attributes['STREETNAME'] || p.attributes['الشارع'] || p.attributes['اسم الشارع'] || p.attributes['اسم_الشارع'] || p.attributes['Street'] || p.attributes['street']));
+      const resolvedDistrict = p.district || newAttrs['DISTRICT'] || newAttrs['الحي'] || newAttrs['اسم الحي'] || (p.attributes && (p.attributes['DISTRICT'] || p.attributes['الحي'] || p.attributes['اسم الحي'] || p.attributes['اسم_الحي'] || p.attributes['District'] || p.attributes['district']));
+
+      return { ...p, id: newId, color: finalColor, originalColor: baseSourceColor, street: resolvedStreet, district: resolvedDistrict, attributes: newAttrs, description: undefined, layer: keepFolders ? p.layer : undefined };
     });
 
     if (overlapResults) {

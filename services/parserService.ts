@@ -289,6 +289,114 @@ export const getDXFColorToHex = (entityColor?: number, colorIndex?: number, laye
   return '#00c8b3';
 };
 
+/**
+ * Universal Color Value Parser:
+ * Supports AutoCAD Color Index (ACI 1..255), TrueColor 24-bit integers,
+ * standard Hex (#RRGGBB, RRGGBB), RGB formats, and Arabic/English color names.
+ */
+export const parseColorValue = (val: any): string | null => {
+  if (val === null || val === undefined) return null;
+  const s = String(val).trim();
+  if (!s) return null;
+
+  // 1. Direct Hex with Hash (#FF0000, #ff0, #10b981)
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)) {
+    return s.length === 9 ? s.substring(0, 7) : s;
+  }
+
+  // 2. Hex without hash (e.g. FF0000, 10b981, eab308)
+  if (/^([0-9a-f]{6})$/i.test(s)) {
+    return `#${s}`;
+  }
+
+  // 3. Arabic color names
+  const arabicColors: Record<string, string> = {
+    'احمر': '#ef4444',
+    'أحمر': '#ef4444',
+    'حمراء': '#ef4444',
+    'اخضر': '#10b981',
+    'أخضر': '#10b981',
+    'خضراء': '#10b981',
+    'اصفر': '#eab308',
+    'أصفر': '#eab308',
+    'صفراء': '#eab308',
+    'ازرق': '#3b82f6',
+    'أزرق': '#3b82f6',
+    'زرقاء': '#3b82f6',
+    'سماوي': '#06b6d4',
+    'فيروزي': '#06b6d4',
+    'برتقالي': '#f97316',
+    'بنفسجي': '#8b5cf6',
+    'ارجواني': '#8b5cf6',
+    'أرجواني': '#8b5cf6',
+    'وردي': '#ec4899',
+    'زهري': '#ec4899',
+    'بني': '#8b4513',
+    'رمادي': '#6b7280',
+    'رصاصي': '#6b7280',
+    'اسود': '#000000',
+    'أسود': '#000000',
+    'ابيض': '#ffffff',
+    'أبيض': '#ffffff'
+  };
+  const cleanAr = s.toLowerCase().replace(/[^\u0621-\u064A]/g, '');
+  if (cleanAr && arabicColors[cleanAr]) return arabicColors[cleanAr];
+
+  // 4. Standard English CSS color names
+  const englishColors: Record<string, string> = {
+    'red': '#ef4444',
+    'yellow': '#eab308',
+    'green': '#10b981',
+    'cyan': '#06b6d4',
+    'blue': '#3b82f6',
+    'magenta': '#d946ef',
+    'purple': '#8b5cf6',
+    'orange': '#f97316',
+    'pink': '#ec4899',
+    'white': '#ffffff',
+    'black': '#000000',
+    'gray': '#6b7280',
+    'grey': '#6b7280',
+    'brown': '#8b4513',
+    'lime': '#84cc16',
+    'teal': '#14b8a6',
+    'indigo': '#6366f1',
+    'violet': '#7c3aed',
+    'amber': '#f59e0b',
+    'emerald': '#10b981'
+  };
+  if (englishColors[s.toLowerCase()]) return englishColors[s.toLowerCase()];
+
+  // 5. RGB string: rgb(r, g, b) or r, g, b
+  const rgbMatch = s.match(/^(?:rgb\s*\()?\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*[, ]\s*(\d{1,3})\s*\)?$/i);
+  if (rgbMatch) {
+    const r = Math.min(255, parseInt(rgbMatch[1], 10)).toString(16).padStart(2, '0');
+    const g = Math.min(255, parseInt(rgbMatch[2], 10)).toString(16).padStart(2, '0');
+    const b = Math.min(255, parseInt(rgbMatch[3], 10)).toString(16).padStart(2, '0');
+    return `#${r}${g}${b}`;
+  }
+
+  // 6. Numeric color values
+  const num = typeof val === 'number' ? val : (Number.isFinite(Number(s)) ? Number(s) : NaN);
+  if (!isNaN(num) && Number.isFinite(num)) {
+    // 6a. AutoCAD Color Index (ACI 1..255)
+    if (num >= 1 && num <= 255 && Number.isInteger(num)) {
+      if (ACI_PALETTE[num]) return ACI_PALETTE[num];
+    }
+    // 6b. 24-bit TrueColor integer (0x000000 to 0xFFFFFF = 0 to 16777215)
+    if (num > 255 && num <= 16777215) {
+      return '#' + Math.round(num).toString(16).padStart(6, '0');
+    }
+    // 6c. Signed 32-bit integer
+    if (num < 0) {
+      const u = (num >>> 0) & 0xFFFFFF;
+      return '#' + u.toString(16).padStart(6, '0');
+    }
+  }
+
+  return null;
+};
+
 export const parseDXF = async (file: File, onProgress?: (percent: number) => void): Promise<ParsedFile> => {
   if (onProgress) onProgress(10);
   await yieldToMain();
@@ -814,6 +922,48 @@ const getActiveFolderPathRegex = (kml: string, charIndex: number): { folderPath:
 
 const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
     const points: GeoPoint[] = [];
+    const stylesMap: Record<string, string> = {};
+
+    const styleRegex = /<Style[^>]*id=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/Style>/gi;
+    let sMatch;
+    while ((sMatch = styleRegex.exec(kml)) !== null) {
+        const sId = sMatch[1].trim();
+        const sBody = sMatch[2];
+        const lineColorMatch = sBody.match(/<LineStyle[^>]*>[\s\S]*?<color[^>]*>([\s\S]*?)<\/color>[\s\S]*?<\/LineStyle>/i);
+        const polyColorMatch = sBody.match(/<PolyStyle[^>]*>[\s\S]*?<color[^>]*>([\s\S]*?)<\/color>[\s\S]*?<\/PolyStyle>/i);
+        const iconColorMatch = sBody.match(/<IconStyle[^>]*>[\s\S]*?<color[^>]*>([\s\S]*?)<\/color>[\s\S]*?<\/IconStyle>/i);
+        const rawColor = (lineColorMatch?.[1] || polyColorMatch?.[1] || iconColorMatch?.[1] || '').trim();
+        if (rawColor) {
+            const hex = kmlColorToHex(rawColor);
+            stylesMap[`#${sId}`] = hex;
+            stylesMap[sId] = hex;
+        }
+    }
+
+    const styleMapRegex = /<StyleMap[^>]*id=['"]([^'"]+)['"][^>]*>([\s\S]*?)<\/StyleMap>/gi;
+    let smMatch;
+    while ((smMatch = styleMapRegex.exec(kml)) !== null) {
+        const smId = smMatch[1].trim();
+        const smBody = smMatch[2];
+        const pairRegex = /<Pair[^>]*>([\s\S]*?)<\/Pair>/gi;
+        let pMatch;
+        while ((pMatch = pairRegex.exec(smBody)) !== null) {
+            const pBody = pMatch[1];
+            const keyMatch = pBody.match(/<key[^>]*>([\s\S]*?)<\/key>/i);
+            const urlMatch = pBody.match(/<styleUrl[^>]*>([\s\S]*?)<\/styleUrl>/i);
+            const keyVal = keyMatch ? keyMatch[1].trim() : '';
+            const urlVal = urlMatch ? urlMatch[1].trim() : '';
+            if ((keyVal === 'normal' || !stylesMap[`#${smId}`]) && urlVal) {
+                const cleanRef = urlVal.includes('#') ? `#${urlVal.split('#').pop()!.trim()}` : urlVal;
+                const resolved = stylesMap[urlVal] || stylesMap[cleanRef] || stylesMap[cleanRef.replace(/^#/, '')];
+                if (resolved) {
+                    stylesMap[`#${smId}`] = resolved;
+                    stylesMap[smId] = resolved;
+                }
+            }
+        }
+    }
+
     const placemarkRegex = /<Placemark[^>]*>([\s\S]*?)<\/Placemark>/g;
     let match;
     let index = 1;
@@ -823,6 +973,21 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
         
         const { folderPath, layerName } = getActiveFolderPathRegex(kml, match.index);
         
+        let pmColor: string | undefined = undefined;
+        const styleUrlMatch = content.match(/<styleUrl[^>]*>([\s\S]*?)<\/styleUrl>/i);
+        if (styleUrlMatch) {
+            const rawUrl = styleUrlMatch[1].trim();
+            const hashPart = rawUrl.includes('#') ? `#${rawUrl.split('#').pop()!.trim()}` : `#${rawUrl}`;
+            pmColor = stylesMap[rawUrl] || stylesMap[hashPart] || stylesMap[hashPart.replace(/^#/, '')];
+        }
+        if (!pmColor) {
+            const inlineLineColor = content.match(/<LineStyle[^>]*>[\s\S]*?<color[^>]*>([\s\S]*?)<\/color>[\s\S]*?<\/LineStyle>/i)?.[1]?.trim();
+            const inlinePolyColor = content.match(/<PolyStyle[^>]*>[\s\S]*?<color[^>]*>([\s\S]*?)<\/color>[\s\S]*?<\/PolyStyle>/i)?.[1]?.trim();
+            const inlineIconColor = content.match(/<IconStyle[^>]*>[\s\S]*?<color[^>]*>([\s\S]*?)<\/color>[\s\S]*?<\/IconStyle>/i)?.[1]?.trim();
+            const rawInline = inlineLineColor || inlinePolyColor || inlineIconColor;
+            if (rawInline) pmColor = kmlColorToHex(rawInline);
+        }
+
         // Extract name
         const nameMatch = content.match(/<name[^>]*>([\s\S]*?)<\/name>/i);
         let name = nameMatch ? nameMatch[1].trim() : `Element ${index++}`;
@@ -892,6 +1057,7 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                 });
                 if (path.length > 0) {
                     const uniqueId = name ? `${name}_${points.length + 1}` : `KML_Feature_${points.length + 1}`;
+                    const resolvedColor = pmColor || "#3b82f6";
                     points.push({
                         id: uniqueId,
                         x: path[0].x,
@@ -902,14 +1068,16 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         folderPath: folderPath,
                         type: isPoly ? 'Polygon' : 'LineString',
                         path: path,
-                        color: "#3b82f6",
+                        color: resolvedColor,
+                        originalColor: resolvedColor,
                         attributes
-                    });
+                    } as GeoPoint);
                 }
             } else {
                 const parts = tuples[0].split(',');
                 if (parts.length >= 2) {
                     const uniqueId = name ? `${name}_${points.length + 1}` : `KML_Point_${points.length + 1}`;
+                    const resolvedColor = pmColor || "#3b82f6";
                     points.push({
                         id: uniqueId,
                         x: parseFloat(parts[0]),
@@ -919,9 +1087,10 @@ const fallbackRegexParseKML = (kml: string): GeoPoint[] => {
                         layer: layerName,
                         folderPath: folderPath,
                         type: 'Point',
-                        color: "#3b82f6",
+                        color: resolvedColor,
+                        originalColor: resolvedColor,
                         attributes
-                    });
+                    } as GeoPoint);
                 }
             }
         }
@@ -956,32 +1125,66 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
         const iconUrlMap: Record<string, string> = {};
         const styles = xmlDoc.getElementsByTagName("Style");
         for (let i = 0; i < styles.length; i++) {
-            const id = styles[i].getAttribute("id");
+            const rawId = styles[i].getAttribute("id") || styles[i].getAttribute("xml:id");
+            const id = rawId?.trim();
             if (id) {
                 const lineStyle = styles[i].getElementsByTagName("LineStyle")[0];
-                const lineColor = lineStyle?.getElementsByTagName("color")[0]?.textContent;
+                const lineColor = lineStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
                 const iconStyle = styles[i].getElementsByTagName("IconStyle")[0];
-                const iconColor = iconStyle?.getElementsByTagName("color")[0]?.textContent;
+                const iconColor = iconStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
                 const polyStyle = styles[i].getElementsByTagName("PolyStyle")[0];
-                const polyColor = polyStyle?.getElementsByTagName("color")[0]?.textContent;
-                const finalColor = lineColor || iconColor || polyColor;
-                const iconHref = iconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
-                if (iconHref) iconUrlMap[`#${id}`] = iconHref;
-                if (finalColor) stylesMap[`#${id}`] = kmlColorToHex(finalColor);
+                const polyColor = polyStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
+                const finalColor = lineColor || polyColor || iconColor;
+                const iconHref = iconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent?.trim();
+                if (iconHref) {
+                    iconUrlMap[`#${id}`] = iconHref;
+                    iconUrlMap[id] = iconHref;
+                }
+                if (finalColor) {
+                    const hex = kmlColorToHex(finalColor);
+                    stylesMap[`#${id}`] = hex;
+                    stylesMap[id] = hex;
+                }
             }
         }
 
         const styleMaps = xmlDoc.getElementsByTagName("StyleMap");
         for (let i = 0; i < styleMaps.length; i++) {
-            const mapId = styleMaps[i].getAttribute("id");
+            const rawMapId = styleMaps[i].getAttribute("id") || styleMaps[i].getAttribute("xml:id");
+            const mapId = rawMapId?.trim();
             if (mapId) {
                 const pairs = styleMaps[i].getElementsByTagName("Pair");
                 for (let j = 0; j < pairs.length; j++) {
-                    const key = pairs[j].getElementsByTagName("key")[0]?.textContent;
-                    const styleUrl = pairs[j].getElementsByTagName("styleUrl")[0]?.textContent;
-                    if (key === 'normal' && styleUrl) {
-                        if (stylesMap[styleUrl]) stylesMap[`#${mapId}`] = stylesMap[styleUrl];
-                        if (iconUrlMap[styleUrl]) iconUrlMap[`#${mapId}`] = iconUrlMap[styleUrl];
+                    const key = pairs[j].getElementsByTagName("key")[0]?.textContent?.trim();
+                    const styleUrl = pairs[j].getElementsByTagName("styleUrl")[0]?.textContent?.trim();
+                    if (key === 'normal' || !stylesMap[`#${mapId}`]) {
+                        if (styleUrl) {
+                            const hashRef = styleUrl.includes('#') ? `#${styleUrl.split('#').pop()!.trim()}` : `#${styleUrl}`;
+                            const cleanRef = hashRef.replace(/^#/, '');
+                            const resolvedColor = stylesMap[styleUrl] || stylesMap[hashRef] || stylesMap[cleanRef];
+                            const resolvedIcon = iconUrlMap[styleUrl] || iconUrlMap[hashRef] || iconUrlMap[cleanRef];
+                            if (resolvedColor) {
+                                stylesMap[`#${mapId}`] = resolvedColor;
+                                stylesMap[mapId] = resolvedColor;
+                            }
+                            if (resolvedIcon) {
+                                iconUrlMap[`#${mapId}`] = resolvedIcon;
+                                iconUrlMap[mapId] = resolvedIcon;
+                            }
+                        } else {
+                            const pairStyle = pairs[j].getElementsByTagName("Style")[0];
+                            if (pairStyle) {
+                                const ls = pairStyle.getElementsByTagName("LineStyle")[0]?.getElementsByTagName("color")[0]?.textContent?.trim();
+                                const ps = pairStyle.getElementsByTagName("PolyStyle")[0]?.getElementsByTagName("color")[0]?.textContent?.trim();
+                                const is = pairStyle.getElementsByTagName("IconStyle")[0]?.getElementsByTagName("color")[0]?.textContent?.trim();
+                                const rawCol = ls || ps || is;
+                                if (rawCol) {
+                                    const hex = kmlColorToHex(rawCol);
+                                    stylesMap[`#${mapId}`] = hex;
+                                    stylesMap[mapId] = hex;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -996,21 +1199,23 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
            
            let color = undefined; 
            let iconUrl = undefined;
-           const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent;
+           const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent?.trim();
            if (styleUrl) {
-               if (stylesMap[styleUrl]) color = stylesMap[styleUrl];
-               if (iconUrlMap[styleUrl]) iconUrl = iconUrlMap[styleUrl];
+               const hashRef = styleUrl.includes('#') ? `#${styleUrl.split('#').pop()!.trim()}` : `#${styleUrl}`;
+               const cleanRef = hashRef.replace(/^#/, '');
+               color = stylesMap[styleUrl] || stylesMap[hashRef] || stylesMap[cleanRef];
+               iconUrl = iconUrlMap[styleUrl] || iconUrlMap[hashRef] || iconUrlMap[cleanRef];
            }
-           if (!styleUrl || !stylesMap[styleUrl]) {
+           if (!color) {
                const inlineLineStyle = pm.getElementsByTagName("LineStyle")[0];
-               const inlineIconStyle = pm.getElementsByTagName("IconStyle")[0];
                const inlinePolyStyle = pm.getElementsByTagName("PolyStyle")[0];
-               const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent || 
-                                   inlineIconStyle?.getElementsByTagName("color")[0]?.textContent || 
-                                   inlinePolyStyle?.getElementsByTagName("color")[0]?.textContent;
+               const inlineIconStyle = pm.getElementsByTagName("IconStyle")[0];
+               const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent?.trim() || 
+                                   inlinePolyStyle?.getElementsByTagName("color")[0]?.textContent?.trim() || 
+                                   inlineIconStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
                if (inlineColor) color = kmlColorToHex(inlineColor);
                
-               const inlineIconHref = inlineIconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
+               const inlineIconHref = inlineIconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent?.trim();
                if (inlineIconHref) iconUrl = inlineIconHref;
            }
 
@@ -1106,13 +1311,13 @@ export const parseKMLContent = (kmlContent: string): GeoPoint[] => {
 
                         const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
                         const uniqueId = name ? `${name}_${points.length + 1}` : `Feature_${points.length + 1}`;
-                        points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, folderPath, type: featureType, path: path, color, attributes, iconUrl });
+                        points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, folderPath, type: featureType, path: path, color, originalColor: color, attributes, iconUrl } as GeoPoint);
                     }
                 } else {
                     const parts = tuples[0].split(',');
                     if (parts.length >= 2) {
                         const uniqueId = name ? `${name}_${points.length + 1}` : `Point_${points.length + 1}`;
-                        points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, folderPath, type: 'Point', color, attributes, iconUrl });
+                        points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, folderPath, type: 'Point', color, originalColor: color, attributes, iconUrl } as GeoPoint);
                     }
                 }
            });
@@ -1156,32 +1361,66 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
         const iconUrlMap: Record<string, string> = {};
         const styles = xmlDoc.getElementsByTagName("Style");
         for (let i = 0; i < styles.length; i++) {
-            const id = styles[i].getAttribute("id");
+            const rawId = styles[i].getAttribute("id") || styles[i].getAttribute("xml:id");
+            const id = rawId?.trim();
             if (id) {
                 const lineStyle = styles[i].getElementsByTagName("LineStyle")[0];
-                const lineColor = lineStyle?.getElementsByTagName("color")[0]?.textContent;
+                const lineColor = lineStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
                 const iconStyle = styles[i].getElementsByTagName("IconStyle")[0];
-                const iconColor = iconStyle?.getElementsByTagName("color")[0]?.textContent;
+                const iconColor = iconStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
                 const polyStyle = styles[i].getElementsByTagName("PolyStyle")[0];
-                const polyColor = polyStyle?.getElementsByTagName("color")[0]?.textContent;
-                const finalColor = lineColor || iconColor || polyColor;
-                const iconHref = iconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
-                if (iconHref) iconUrlMap[`#${id}`] = iconHref;
-                if (finalColor) stylesMap[`#${id}`] = kmlColorToHex(finalColor);
+                const polyColor = polyStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
+                const finalColor = lineColor || polyColor || iconColor;
+                const iconHref = iconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent?.trim();
+                if (iconHref) {
+                    iconUrlMap[`#${id}`] = iconHref;
+                    iconUrlMap[id] = iconHref;
+                }
+                if (finalColor) {
+                    const hex = kmlColorToHex(finalColor);
+                    stylesMap[`#${id}`] = hex;
+                    stylesMap[id] = hex;
+                }
             }
         }
 
         const styleMaps = xmlDoc.getElementsByTagName("StyleMap");
         for (let i = 0; i < styleMaps.length; i++) {
-            const mapId = styleMaps[i].getAttribute("id");
+            const rawMapId = styleMaps[i].getAttribute("id") || styleMaps[i].getAttribute("xml:id");
+            const mapId = rawMapId?.trim();
             if (mapId) {
                 const pairs = styleMaps[i].getElementsByTagName("Pair");
                 for (let j = 0; j < pairs.length; j++) {
-                    const key = pairs[j].getElementsByTagName("key")[0]?.textContent;
-                    const styleUrl = pairs[j].getElementsByTagName("styleUrl")[0]?.textContent;
-                    if (key === 'normal' && styleUrl) {
-                        if (stylesMap[styleUrl]) stylesMap[`#${mapId}`] = stylesMap[styleUrl];
-                        if (iconUrlMap[styleUrl]) iconUrlMap[`#${mapId}`] = iconUrlMap[styleUrl];
+                    const key = pairs[j].getElementsByTagName("key")[0]?.textContent?.trim();
+                    const styleUrl = pairs[j].getElementsByTagName("styleUrl")[0]?.textContent?.trim();
+                    if (key === 'normal' || !stylesMap[`#${mapId}`]) {
+                        if (styleUrl) {
+                            const hashRef = styleUrl.includes('#') ? `#${styleUrl.split('#').pop()!.trim()}` : `#${styleUrl}`;
+                            const cleanRef = hashRef.replace(/^#/, '');
+                            const resolvedColor = stylesMap[styleUrl] || stylesMap[hashRef] || stylesMap[cleanRef];
+                            const resolvedIcon = iconUrlMap[styleUrl] || iconUrlMap[hashRef] || iconUrlMap[cleanRef];
+                            if (resolvedColor) {
+                                stylesMap[`#${mapId}`] = resolvedColor;
+                                stylesMap[mapId] = resolvedColor;
+                            }
+                            if (resolvedIcon) {
+                                iconUrlMap[`#${mapId}`] = resolvedIcon;
+                                iconUrlMap[mapId] = resolvedIcon;
+                            }
+                        } else {
+                            const pairStyle = pairs[j].getElementsByTagName("Style")[0];
+                            if (pairStyle) {
+                                const ls = pairStyle.getElementsByTagName("LineStyle")[0]?.getElementsByTagName("color")[0]?.textContent?.trim();
+                                const ps = pairStyle.getElementsByTagName("PolyStyle")[0]?.getElementsByTagName("color")[0]?.textContent?.trim();
+                                const is = pairStyle.getElementsByTagName("IconStyle")[0]?.getElementsByTagName("color")[0]?.textContent?.trim();
+                                const rawCol = ls || ps || is;
+                                if (rawCol) {
+                                    const hex = kmlColorToHex(rawCol);
+                                    stylesMap[`#${mapId}`] = hex;
+                                    stylesMap[mapId] = hex;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1204,21 +1443,23 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
             
             let color = undefined; 
             let iconUrl = undefined;
-            const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent;
+            const styleUrl = pm.getElementsByTagName("styleUrl")[0]?.textContent?.trim();
             if (styleUrl) {
-                if (stylesMap[styleUrl]) color = stylesMap[styleUrl];
-                if (iconUrlMap[styleUrl]) iconUrl = iconUrlMap[styleUrl];
+                const hashRef = styleUrl.includes('#') ? `#${styleUrl.split('#').pop()!.trim()}` : `#${styleUrl}`;
+                const cleanRef = hashRef.replace(/^#/, '');
+                color = stylesMap[styleUrl] || stylesMap[hashRef] || stylesMap[cleanRef];
+                iconUrl = iconUrlMap[styleUrl] || iconUrlMap[hashRef] || iconUrlMap[cleanRef];
             }
-            if (!styleUrl || !stylesMap[styleUrl]) {
+            if (!color) {
                 const inlineLineStyle = pm.getElementsByTagName("LineStyle")[0];
-                const inlineIconStyle = pm.getElementsByTagName("IconStyle")[0];
                 const inlinePolyStyle = pm.getElementsByTagName("PolyStyle")[0];
-                const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent || 
-                                    inlineIconStyle?.getElementsByTagName("color")[0]?.textContent || 
-                                    inlinePolyStyle?.getElementsByTagName("color")[0]?.textContent;
+                const inlineIconStyle = pm.getElementsByTagName("IconStyle")[0];
+                const inlineColor = inlineLineStyle?.getElementsByTagName("color")[0]?.textContent?.trim() || 
+                                    inlinePolyStyle?.getElementsByTagName("color")[0]?.textContent?.trim() || 
+                                    inlineIconStyle?.getElementsByTagName("color")[0]?.textContent?.trim();
                 if (inlineColor) color = kmlColorToHex(inlineColor);
                 
-                const inlineIconHref = inlineIconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent;
+                const inlineIconHref = inlineIconStyle?.getElementsByTagName("Icon")[0]?.getElementsByTagName("href")[0]?.textContent?.trim();
                 if (inlineIconHref) iconUrl = inlineIconHref;
             }
 
@@ -1314,13 +1555,13 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
 
                          const featureType: 'Polygon' | 'LineString' = isPolygon ? 'Polygon' : 'LineString';
                          const uniqueId = name ? `${name}_${points.length + 1}` : `Feature_${points.length + 1}`;
-                         points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, folderPath, type: featureType, path: path, color, attributes, iconUrl });
+                         points.push({ id: uniqueId, x: path[0].x, y: path[0].y, z: path[0].z, description: desc, layer: layerName, folderPath, type: featureType, path: path, color, originalColor: color, attributes, iconUrl } as GeoPoint);
                      }
                  } else {
                      const parts = tuples[0].split(',');
                      if (parts.length >= 2) {
                          const uniqueId = name ? `${name}_${points.length + 1}` : `Point_${points.length + 1}`;
-                         points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, folderPath, type: 'Point', color, attributes, iconUrl });
+                         points.push({ id: uniqueId, x: parseFloat(parts[0]), y: parseFloat(parts[1]), z: parts.length > 2 ? parseFloat(parts[2]) : 0, description: desc, layer: layerName, folderPath, type: 'Point', color, originalColor: color, attributes, iconUrl } as GeoPoint);
                      }
                  }
             });
@@ -1448,15 +1689,100 @@ export const parseKMLContentAsync = async (kmlContent: string, onProgress?: (per
 };
 
 
+export const parseWKT = (wkt: string): { type: 'Point' | 'LineString' | 'Polygon'; points: { x: number; y: number; z?: number }[]; paths?: { x: number; y: number; z?: number }[][] } | null => {
+  if (!wkt || typeof wkt !== 'string') return null;
+  const trimmed = wkt.trim();
+  const upper = trimmed.toUpperCase();
+  
+  try {
+    if (upper.startsWith('POINT')) {
+      const match = trimmed.match(/POINT\s*(?:Z|M|ZM)?\s*\(\s*([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?\s*\)/i);
+      if (match) {
+        return {
+          type: 'Point',
+          points: [{ x: parseFloat(match[1]), y: parseFloat(match[2]), z: match[3] ? parseFloat(match[3]) : 0 }]
+        };
+      }
+    } else if (upper.startsWith('LINESTRING')) {
+      const startIdx = trimmed.indexOf('(');
+      const endIdx = trimmed.lastIndexOf(')');
+      if (startIdx === -1 || endIdx === -1) return null;
+      const inner = trimmed.slice(startIdx + 1, endIdx);
+      const pairs = inner.split(',').map(p => p.trim()).filter(Boolean);
+      const pts = pairs.map(pair => {
+        const parts = pair.trim().split(/\s+/).map(Number);
+        return { x: parts[0], y: parts[1], z: parts[2] || 0 };
+      }).filter(p => !isNaN(p.x) && !isNaN(p.y));
+      if (pts.length >= 2) {
+        return { type: 'LineString', points: pts };
+      }
+    } else if (upper.startsWith('MULTILINESTRING')) {
+      const startIdx = trimmed.indexOf('(');
+      const endIdx = trimmed.lastIndexOf(')');
+      if (startIdx === -1 || endIdx === -1) return null;
+      const inner = trimmed.slice(startIdx + 1, endIdx);
+      const lineMatches = inner.match(/\(([^)]+)\)/g);
+      if (lineMatches) {
+        const paths = lineMatches.map(lm => {
+          const cStr = lm.replace(/[()]/g, '');
+          return cStr.split(',').map(pair => {
+            const parts = pair.trim().split(/\s+/).map(Number);
+            return { x: parts[0], y: parts[1], z: parts[2] || 0 };
+          }).filter(p => !isNaN(p.x) && !isNaN(p.y));
+        }).filter(p => p.length >= 2);
+        if (paths.length > 0) {
+          return { type: 'LineString', points: paths[0], paths };
+        }
+      }
+    } else if (upper.startsWith('POLYGON') || upper.startsWith('MULTIPOLYGON')) {
+      const startIdx = trimmed.indexOf('(');
+      const endIdx = trimmed.lastIndexOf(')');
+      if (startIdx === -1 || endIdx === -1) return null;
+      const inner = trimmed.slice(startIdx + 1, endIdx);
+      const ringMatches = inner.match(/\(([^)]+)\)/g);
+      if (ringMatches) {
+        const ringStr = ringMatches[0].replace(/[()]/g, '');
+        const pts = ringStr.split(',').map(pair => {
+          const parts = pair.trim().split(/\s+/).map(Number);
+          return { x: parts[0], y: parts[1], z: parts[2] || 0 };
+        }).filter(p => !isNaN(p.x) && !isNaN(p.y));
+        if (pts.length >= 3) {
+          return { type: 'Polygon', points: pts };
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("WKT parsing failed:", err);
+  }
+  return null;
+};
+
 export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[] => {
     const points: GeoPoint[] = [];
     if (!geoJson) return points;
 
-    const features = geoJson.features || (geoJson.type === 'Feature' ? [geoJson] : []);
+    let features: any[] = [];
+    if (Array.isArray(geoJson)) {
+        features = geoJson.map((item, idx) => {
+            if (item && item.type === 'Feature') return item;
+            if (item && (item.type || item.coordinates)) return { type: 'Feature', geometry: item.geometry || item, properties: item.properties || { id: idx + 1 } };
+            return null;
+        }).filter(Boolean);
+    } else if (geoJson.type === 'FeatureCollection' && Array.isArray(geoJson.features)) {
+        features = geoJson.features;
+    } else if (geoJson.type === 'Feature') {
+        features = [geoJson];
+    } else if (geoJson.type === 'GeometryCollection' && Array.isArray(geoJson.geometries)) {
+        features = geoJson.geometries.map((g: any, i: number) => ({ type: 'Feature', geometry: g, properties: { id: `${sourceName}_geom_${i + 1}` } }));
+    } else if (geoJson.type && (geoJson.coordinates || geoJson.geometries)) {
+        features = [{ type: 'Feature', geometry: geoJson, properties: {} }];
+    }
     
     let counter = 1;
     for (const feature of features) {
-        if (!feature.geometry) continue;
+        if (!feature) continue;
+        const geom = feature.geometry || (feature.type && feature.coordinates ? feature : null);
+        if (!geom) continue;
         
         const props = { ...(feature.properties || {}) };
         const id = props.id || props.ID || props.OBJECTID || props.FID || props.name || props.Name || `${sourceName}_${counter++}`;
@@ -1470,13 +1796,24 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
         }
         const description = descParts.join(' | ');
         
-        const geomType = feature.geometry.type;
-        const coords = feature.geometry.coordinates;
+        const geomType = geom.type;
+        const coords = geom.coordinates;
 
         // Common extraction for properties to attr1 and attr2
         const keys = Object.keys(props);
         let attr1 = keys.length > 0 ? `${keys[0]}: ${props[keys[0]]}` : '';
         let attr2 = keys.length > 1 ? `${keys[1]}: ${props[keys[1]]}` : '';
+        
+        let featureColor: string | undefined = undefined;
+        for (const k of keys) {
+            if (/^(color|colour|stroke|hex_?color|line_?color|fill|style_?color|لون)$/i.test(k.trim()) && props[k]) {
+                const parsedCol = parseColorValue(props[k]);
+                if (parsedCol) {
+                    featureColor = parsedCol;
+                    break;
+                }
+            }
+        }
         
         if (geomType === 'Point') {
             points.push({
@@ -1486,10 +1823,12 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
                 type: 'Point',
                 layer: sourceName,
                 description,
+                color: featureColor,
+                originalColor: featureColor,
                 attributes: props,
                 attr1,
                 attr2
-            });
+            } as GeoPoint);
         } else if (geomType === 'LineString') {
             if (!Array.isArray(coords) || coords.length === 0) continue;
             points.push({
@@ -1499,11 +1838,13 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
                 type: 'LineString',
                 layer: sourceName,
                 description,
+                color: featureColor,
+                originalColor: featureColor,
                 attributes: props,
                 attr1,
                 attr2,
                 path: coords.map((c: any) => ({ x: c[0], y: c[1] }))
-            });
+            } as GeoPoint);
         } else if (geomType === 'MultiLineString') {
             for (let i = 0; i < coords.length; i++) {
                 const line = coords[i];
@@ -1515,11 +1856,13 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
                     type: 'LineString',
                     layer: sourceName,
                     description,
+                    color: featureColor,
+                    originalColor: featureColor,
                     attributes: props,
                     attr1,
                     attr2,
                     path: line.map((c: any) => ({ x: c[0], y: c[1] }))
-                });
+                } as GeoPoint);
             }
         } else if (geomType === 'Polygon') {
             if (!Array.isArray(coords) || coords.length === 0) continue;
@@ -1532,11 +1875,13 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
                 type: 'Polygon',
                 layer: sourceName,
                 description,
+                color: featureColor,
+                originalColor: featureColor,
                 attributes: props,
                 attr1,
                 attr2,
                 path: ring.map((c: any) => ({ x: c[0], y: c[1] }))
-            });
+            } as GeoPoint);
         } else if (geomType === 'MultiPolygon') {
             for (let i = 0; i < coords.length; i++) {
                 const poly = coords[i];
@@ -1550,11 +1895,13 @@ export const geoJsonToGeoPoints = (geoJson: any, sourceName: string): GeoPoint[]
                     type: 'Polygon',
                     layer: sourceName,
                     description,
+                    color: featureColor,
+                    originalColor: featureColor,
                     attributes: props,
                     attr1,
                     attr2,
                     path: ring.map((c: any) => ({ x: c[0], y: c[1] }))
-                });
+                } as GeoPoint);
             }
         }
     }
@@ -1678,7 +2025,38 @@ export const parseKMZ = async (file: File, onProgress?: (percent: number) => voi
             return { filename: file.name, type: 'kmz', data: points, headers: extractHeadersFromPoints(points), preview: [] };
         }
         
-        throw new Error("Invalid ZIP file: No recognizable GDB, Shapefile, or KML content found.");
+        // 4. Check for DXF inside ZIP
+        const dxfFilename = filesList.find(name => String(name || '').toLowerCase().endsWith('.dxf'));
+        if (dxfFilename) {
+          const dxfText = await zip.file(dxfFilename)?.async("string") || "";
+          const parser = new DxfParser();
+          const dxf = parser.parseSync(dxfText);
+          const points = extractPointsFromDXF(dxf);
+          if (onProgress) onProgress(100);
+          return { filename: file.name, type: 'dxf', data: points, headers: extractHeadersFromPoints(points), preview: [] };
+        }
+
+        // 5. Check for GeoJSON / JSON inside ZIP
+        const geojsonFilename = filesList.find(name => String(name || '').toLowerCase().endsWith('.geojson') || String(name || '').toLowerCase().endsWith('.json'));
+        if (geojsonFilename) {
+          const jsonText = await zip.file(geojsonFilename)?.async("string") || "";
+          const parsedJson = JSON.parse(jsonText);
+          const points = geoJsonToGeoPoints(parsedJson, file.name);
+          if (onProgress) onProgress(100);
+          return { filename: file.name, type: 'geojson', data: points, headers: extractHeadersFromPoints(points), preview: [] };
+        }
+
+        // 6. Check for Excel / CSV inside ZIP
+        const tableFilename = filesList.find(name => /\.(xlsx|xls|csv)$/i.test(name));
+        if (tableFilename) {
+          const fileData = await zip.file(tableFilename)?.async("uint8array");
+          if (fileData) {
+            const innerFile = new File([fileData], tableFilename);
+            return await parseExcel(innerFile, onProgress);
+          }
+        }
+
+        throw new Error("لم يتم العثور على طبقات هندسية مدعومة داخل ملف الـ ZIP (مثل KML, Shapefile, DXF, GeoJSON).");
     }
 
     throw new Error("Unsupported file format.");
@@ -1695,8 +2073,20 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
     return dxfInput as GeoPoint[];
   }
 
-  const entities: any[] = Array.isArray(dxfInput) ? dxfInput : (dxfInput.entities || []);
+  let entities: any[] = Array.isArray(dxfInput) ? [...dxfInput] : (dxfInput.entities ? [...dxfInput.entities] : []);
   const rawLayers: Record<string, any> = (!Array.isArray(dxfInput) && dxfInput.tables?.layer?.layers) ? dxfInput.tables.layer.layers : {};
+
+  // Inspect blocks if entities array is empty or sparse (common in CAD drawings where geometry is inside block records)
+  if (dxfInput && dxfInput.blocks) {
+    const blockList = Object.values(dxfInput.blocks);
+    for (const b of blockList as any[]) {
+      if (b && Array.isArray(b.entities) && b.entities.length > 0) {
+        if (entities.length === 0 || b.name === '*Model_Space' || (typeof b.name === 'string' && !b.name.startsWith('*Paper_Space'))) {
+          entities = entities.concat(b.entities);
+        }
+      }
+    }
+  }
 
   const points: GeoPoint[] = [];
   let counter = 1;
@@ -1716,6 +2106,8 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
   };
 
   entities.forEach(entity => {
+    if (!entity) return;
+    const uType = String(entity.type || '').toUpperCase();
     const layer = String(entity.layer || 'Default').trim();
     const layerObj = rawLayers[layer];
     const colorHex = getDXFColorToHex(entity.color, entity.colorIndex, layerObj);
@@ -1724,8 +2116,8 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
     const extras = getExtras(entity);
 
     // 1. POINT & INSERT (Blocks)
-    if ((entity.type === 'POINT' || entity.type === 'INSERT') && (entity.position || entity.insertionPoint)) {
-      const pos = entity.position || entity.insertionPoint;
+    if ((uType === 'POINT' || uType === 'INSERT') && (entity.position || entity.insertionPoint || entity.start || entity.center || (entity.vertices && entity.vertices[0]))) {
+      const pos = entity.position || entity.insertionPoint || entity.start || entity.center || entity.vertices[0];
       const id = String(entity.name || entity.handle || `CAD_${counter++}`);
       const textVal = entity.name || '';
       const startX = pos.x || 0;
@@ -1734,7 +2126,7 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
       
       const attrs: Record<string, string> = {
         'Layer': layer,
-        'Type': entity.type,
+        'Type': entity.type || uType,
         'Handle': String(entity.handle || id),
         'Color': colorHex,
         'LineType': lineType,
@@ -1753,21 +2145,21 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
         layer,
         folderPath,
         color: colorHex,
-        description: entity.type === 'INSERT' ? `Block: ${entity.name || id}` : `CAD Point (${id})`,
+        description: uType === 'INSERT' ? `Block: ${entity.name || id}` : `CAD Point (${id})`,
         attr1: extras,
         type: 'Point',
         attributes: attrs,
-        originalRow: [id, layer, entity.type, colorHex, lineType, '', textVal, zVal.toString(), startX.toFixed(3), startY.toFixed(3)]
+        originalRow: [id, layer, entity.type || uType, colorHex, lineType, '', textVal, zVal.toString(), startX.toFixed(3), startY.toFixed(3)]
       });
     }
     // 2. CIRCLE
-    else if (entity.type === 'CIRCLE' && entity.center) {
-      const { center, radius = 0 } = entity;
+    else if (uType === 'CIRCLE' && (entity.center || entity.position || (entity.vertices && entity.vertices[0]))) {
+      const center = entity.center || entity.position || entity.vertices[0];
+      const radius = entity.radius || 0;
       const id = String(entity.handle || `CAD_${counter++}`);
       const circumference = 2 * Math.PI * radius;
       const zVal = center.z || 0;
       
-      // Approximate circle path with 32 segments for accurate geographic representation
       const numSegments = 32;
       const path: { x: number; y: number; z?: number }[] = [];
       for (let i = 0; i <= numSegments; i++) {
@@ -1812,8 +2204,11 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
       });
     }
     // 3. ARC
-    else if (entity.type === 'ARC' && entity.center) {
-      const { center, radius = 0, startAngle = 0, endAngle = 0 } = entity;
+    else if (uType === 'ARC' && (entity.center || entity.position || (entity.vertices && entity.vertices[0]))) {
+      const center = entity.center || entity.position || entity.vertices[0];
+      const radius = entity.radius || 0;
+      const startAngle = entity.startAngle || 0;
+      const endAngle = entity.endAngle || 0;
       const id = String(entity.handle || `CAD_${counter++}`);
       let sAngle = startAngle;
       let eAngle = endAngle;
@@ -1844,14 +2239,14 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
         'Radius': radius.toFixed(2),
         'Text': '',
         'Elevation': zVal.toString(),
-        'X': path[0].x.toFixed(3),
-        'Y': path[0].y.toFixed(3)
+        'X': path[0]?.x ? path[0].x.toFixed(3) : center.x.toFixed(3),
+        'Y': path[0]?.y ? path[0].y.toFixed(3) : center.y.toFixed(3)
       };
 
       points.push({
         id,
-        x: path[0].x,
-        y: path[0].y,
+        x: path[0]?.x || center.x,
+        y: path[0]?.y || center.y,
         z: zVal,
         layer,
         folderPath,
@@ -1863,13 +2258,18 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
         type: 'LineString',
         path,
         attributes: attrs,
-        originalRow: [id, layer, 'Arc', colorHex, lineType, arcLength.toFixed(2), '', zVal.toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+        originalRow: [id, layer, 'Arc', colorHex, lineType, arcLength.toFixed(2), '', zVal.toString(), (path[0]?.x || center.x).toFixed(3), (path[0]?.y || center.y).toFixed(3)]
       });
     }
     // 4. LWPOLYLINE & POLYLINE
-    else if ((entity.type === 'LWPOLYLINE' || entity.type === 'POLYLINE') && entity.vertices && entity.vertices.length > 0) {
+    else if ((uType === 'LWPOLYLINE' || uType === 'POLYLINE') && (
+      (entity.vertices && entity.vertices.length > 0) ||
+      (entity.points && entity.points.length > 0) ||
+      (entity.coordinates && entity.coordinates.length > 0)
+    )) {
+      const rawVerts = entity.vertices || entity.points || entity.coordinates || [];
       const id = String(entity.handle || `CAD_${counter++}`);
-      const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
+      const path = rawVerts.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
       const isClosed = Boolean(entity.shape || entity.closed);
       if (isClosed && path.length > 2) {
         path.push({ ...path[0] });
@@ -1883,7 +2283,7 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
       const geomType = isClosed ? 'Polygon' : 'LineString';
       const attrs: Record<string, string> = {
         'Layer': layer,
-        'Type': entity.type,
+        'Type': entity.type || uType,
         'Handle': String(entity.handle || id),
         'Color': colorHex,
         'LineType': lineType,
@@ -1909,14 +2309,19 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
         type: geomType,
         path,
         attributes: attrs,
-        originalRow: [id, layer, entity.type, colorHex, lineType, totalLen.toFixed(2), '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+        originalRow: [id, layer, entity.type || uType, colorHex, lineType, totalLen.toFixed(2), '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
       });
     }
     // 5. LINE
-    else if (entity.type === 'LINE' && entity.vertices && entity.vertices.length >= 2) {
+    else if (uType === 'LINE' && (
+      (entity.vertices && entity.vertices.length >= 2) ||
+      (entity.startPoint && entity.endPoint) ||
+      (entity.start && entity.end) ||
+      (entity.p1 && entity.p2)
+    )) {
       const id = String(entity.handle || `CAD_${counter++}`);
-      const p1 = entity.vertices[0];
-      const p2 = entity.vertices[1];
+      const p1 = entity.vertices?.[0] || entity.startPoint || entity.start || entity.p1;
+      const p2 = entity.vertices?.[1] || entity.endPoint || entity.end || entity.p2;
       const path = [
         { x: p1.x, y: p1.y, z: p1.z || 0 },
         { x: p2.x, y: p2.y, z: p2.z || 0 }
@@ -1955,9 +2360,9 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
       });
     }
     // 6. SPLINE
-    else if (entity.type === 'SPLINE' && (entity.controlPoints || entity.fitPoints || entity.vertices)) {
+    else if (uType === 'SPLINE' && (entity.controlPoints || entity.fitPoints || entity.vertices || entity.points)) {
       const id = String(entity.handle || `CAD_${counter++}`);
-      const rawPts = entity.controlPoints || entity.fitPoints || entity.vertices || [];
+      const rawPts = entity.controlPoints || entity.fitPoints || entity.vertices || entity.points || [];
       const path = rawPts.map((p: any) => ({ x: p.x, y: p.y, z: p.z || 0 }));
       let totalLen = 0;
       for (let i = 0; i < path.length - 1; i++) {
@@ -1998,14 +2403,18 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
       }
     }
     // 7. 3DFACE / SOLID / HATCH
-    else if ((entity.type === '3DFACE' || entity.type === 'SOLID' || entity.type === 'HATCH') && entity.vertices && entity.vertices.length >= 3) {
+    else if ((uType === '3DFACE' || uType === 'SOLID' || uType === 'HATCH') && (
+      (entity.vertices && entity.vertices.length >= 3) ||
+      (entity.points && entity.points.length >= 3)
+    )) {
+      const rawVerts = entity.vertices || entity.points || [];
       const id = String(entity.handle || `CAD_${counter++}`);
-      const path = entity.vertices.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
+      const path = rawVerts.map((v: any) => ({ x: v.x, y: v.y, z: v.z || 0 }));
       path.push({ ...path[0] });
 
       const attrs: Record<string, string> = {
         'Layer': layer,
-        'Type': entity.type,
+        'Type': entity.type || uType,
         'Handle': String(entity.handle || id),
         'Color': colorHex,
         'LineType': lineType,
@@ -2024,17 +2433,17 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
         layer,
         folderPath,
         color: colorHex,
-        description: `CAD ${entity.type}`,
+        description: `CAD ${entity.type || uType}`,
         attr1: extras,
         type: 'Polygon',
         path,
         attributes: attrs,
-        originalRow: [id, layer, entity.type, colorHex, lineType, '', '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
+        originalRow: [id, layer, entity.type || uType, colorHex, lineType, '', '', (path[0]?.z || 0).toString(), path[0].x.toFixed(3), path[0].y.toFixed(3)]
       });
     }
     // 8. TEXT & MTEXT
-    else if (entity.type === 'TEXT' || entity.type === 'MTEXT') {
-      const pos = entity.position || entity.insertionPoint;
+    else if (uType === 'TEXT' || uType === 'MTEXT') {
+      const pos = entity.position || entity.insertionPoint || entity.start || (entity.vertices && entity.vertices[0]);
       if (pos) {
         const id = String(entity.handle || `CAD_${counter++}`);
         const textContent = String(entity.text || entity.string || '').trim();
@@ -2044,7 +2453,7 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
 
         const attrs: Record<string, string> = {
           'Layer': layer,
-          'Type': entity.type,
+          'Type': entity.type || uType,
           'Handle': String(entity.handle || id),
           'Color': colorHex,
           'LineType': lineType,
@@ -2067,7 +2476,7 @@ export const extractPointsFromDXF = (dxfInput: any): GeoPoint[] => {
           attr1: extras,
           type: 'Point',
           attributes: attrs,
-          originalRow: [id, layer, entity.type, colorHex, lineType, '', textContent, zVal.toString(), startX.toFixed(3), startY.toFixed(3)]
+          originalRow: [id, layer, entity.type || uType, colorHex, lineType, '', textContent, zVal.toString(), startX.toFixed(3), startY.toFixed(3)]
         });
       }
     }
